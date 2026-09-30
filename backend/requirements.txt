@@ -1,0 +1,6 @@
+# pip install -r requirements.txt --break-system-packages
+lighter-sdk
+fastapi
+uvicorn
+websockets
+# sqlite3 — стандартная библиотека Python, отдельно ставить не нужно

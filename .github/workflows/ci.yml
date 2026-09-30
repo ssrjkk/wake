@@ -1,0 +1,37 @@
+name: tests
+
+on: [push, pull_request]
+
+jobs:
+  backend-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Тесты, не требующие внешних сервисов
+        working-directory: backend
+        run: |
+          python -m unittest discover -v
+          python test_db.py
+          python test_predict_db.py
+          python test_predict_integration.py
+      - name: Smoke-тест импорта приложения (fastapi + роутеры)
+        working-directory: backend
+        run: |
+          pip install fastapi pydantic
+          python -c "import app; assert len([r for r in app.app.routes if hasattr(r, 'methods')]) >= 28"
+      # websockets/network-зависимый код (signing_service.py, leader_listener.py)
+      # не тестируется здесь автотестами — эти пути честно untested и в CI тоже,
+      # реальная проверка происходит через Этап 2-3 TASKS.md (тестнет вручную).
+
+  frontend-typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: npm install
+      - run: npx tsc --noEmit

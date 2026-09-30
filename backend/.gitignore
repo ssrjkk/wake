@@ -1,0 +1,6 @@
+.env
+*.enc
+dev_keystore*.json
+wake.db
+__pycache__/
+*.pyc

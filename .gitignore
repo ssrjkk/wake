@@ -1,0 +1,17 @@
+# Node / frontend
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Backend / Python
+__pycache__/
+*.pyc
+backend/.env
+backend/wake.db
+backend/audit.db
+backend/*.enc
+backend/dev_keystore*.json
+
+# OS
+.DS_Store
+Thumbs.db
