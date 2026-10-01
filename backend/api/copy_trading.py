@@ -110,7 +110,8 @@ def register_leader(req: RegisterLeader):
             return {"leader_id": existing["id"]}
         leader_id = str(uuid.uuid4())
         db.upsert_leader(conn, leader_id, req.lighter_account_index, req.handle, req.fee_bps)
-        al.log_action(conn, al.AuditEntry(
+    with al.connect(AUDIT_DB_PATH) as audit_conn:
+        al.log_action(audit_conn, al.AuditEntry(
             actor=f"leader:{leader_id}",
             action="leader_registered",
             resource=f"leader:{leader_id}",

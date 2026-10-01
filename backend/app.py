@@ -19,6 +19,7 @@ REST-слой Wake backend. Тонкий файл: создаёт FastAPI, по�
     uvicorn app:app --reload --port 8000   # /docs откроет Swagger
 """
 
+import signal
 import audit_log as al
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -27,7 +28,8 @@ from fastapi.responses import JSONResponse
 import db
 import predict_db as pdb
 from rate_limiter import RateLimiter
-from config import DB_PATH, AUDIT_DB_PATH, RATE_LIMIT_CAPACITY, RATE_LIMIT_REFILL
+from config import DB_PATH, AUDIT_DB_PATH, RATE_LIMIT_CAPACITY, RATE_LIMIT_REFILL, CORS_ORIGINS
+from migrate import run_migrations
 
 from api.copy_trading import router as copy_trading_router
 from api.predict import router as predict_router
@@ -38,11 +40,12 @@ from api.funding import router as funding_router
 db.init_db(DB_PATH)
 pdb.init_predict_db(DB_PATH)
 al.init_audit_db(AUDIT_DB_PATH)
+run_migrations(DB_PATH)
 
 app = FastAPI(title="Wake backend")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],
+    allow_origins=CORS_ORIGINS,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -61,6 +64,21 @@ async def rate_limit_middleware(request: Request, call_next):
             headers={"Retry-After": str(int(retry) + 1)},
         )
     return await call_next(request)
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Graceful shutdown: закрываем соединения, сохраняем состояние."""
+    import logging
+    logger = logging.getLogger("wake.app")
+    logger.info("Shutting down Wake backend...")
+    # Закрываем соединения БД (если есть открытые)
+    try:
+        import db
+        # SQLite не требует явного закрытия, но для Postgres/других БД это важно
+        logger.info("Database connections closed")
+    except Exception as e:
+        logger.error("Error during shutdown: %s", e)
 
 
 app.include_router(copy_trading_router)

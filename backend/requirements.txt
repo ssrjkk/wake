@@ -1,6 +1,22 @@
 # pip install -r requirements.txt --break-system-packages
+
+# Core
 lighter-sdk
 fastapi
+pydantic
 uvicorn
 websockets
+
+# HTTP client (telegram_bot.py)
+httpx
+
+# Encryption (encrypted_key_store.py)
+cryptography
+
+# Telegram bot (telegram_bot.py) — optional, code works without it
+aiogram
+
+# Billing (stripe_billing.py) — optional, code works without it
+stripe
+
 # sqlite3 — стандартная библиотека Python, отдельно ставить не нужно

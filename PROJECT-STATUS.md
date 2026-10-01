@@ -1,57 +1,48 @@
 # Wake — статус проекта целиком
 
-> [!]  **Читать первым:** `AGENTS.md` (правила для любого ИИ-агента и человека в этом репо; папка `app/` в архиве).
+> [!]  **Читать первым:** `AGENTS.md` (правила для любого ИИ-агента и человека в этом репо).
 
 ## Три столпа + связующий слой
 1. **Lighter — исполнение.** Реальный wallet connect, рыночный пикер по
    100+ рынкам (крипта/акции/форекс/commodities/спот), risk-лимиты на
-   реальном пути исполнения (11 тестов), теперь плюс rate limiting
-   (token bucket, 9 тестов) — вшит как реальный middleware, не лежит
-   отдельным модулем.
+   реальном пути исполнения (11 тестов), rate limiting (token bucket,
+   9 тестов) — вшит как реальный middleware. Подпись ордера — `signing_service.py`,
+   реально поднимается и честно отвечает ошибкой без ключей.
 2. **Polymarket-аналог — предсказания.** LMSR (17 тестов), два честно
    разных механизма резолюции (10 тестов), полный цикл create→trade→
-   resolve→claim.
+   resolve→claim. Event-рынки и резолюция — только куратор с `WAKE_CURATOR_TOKEN`.
 3. **AI-трейдер с памятью.** История сделок (14 тестов), momentum-движок
    (11 тестов), LLM-слой с проверенным откатом на baseline.
 
 **Portfolio risk** (16 тестов) связывает все три в один профиль риска —
 структурно возможно именно из-за единой маржи Lighter через классы активов.
 
-## Новое — Web3-продукты
-- `backend/telegram_bot.py` — реальный aiogram-бот: /price, /markets,
-  /predict, кнопка на мини-апп. Не зарегистрирован (нет токена от
-  BotFather, нет сети на pip install aiogram здесь).
-- `telegram-miniapp/index.html` — настоящий Telegram WebApp SDK
-  (тема, haptics), живая цена+спарклайн с Lighter, Predict-рынки с
-  рабочими YES/NO кнопками через Telegram user id.
-- `Dockerfile.backend`, `docker-compose.yml`, `DEPLOY-TESTNET.md` —
-  точный воспроизводимый план деплоя (docker не установлен в этой
-  песочнице — проверено, не предположено).
-- `ECOSYSTEM-FIT.md` — свежий скан реальной экосистемы Lighter
-  (Robinhood Wallet/USDG партнёрство, RWA+Equity через Chainlink,
-  $487M TVL) — ничего похожего на Wake (копи+предсказания+агент+риск
-  в одном месте, плюс телеграм) не найдено готовым продуктом.
-- `WAKE-ПРОСТЫМИ-СЛОВАМИ.md` — объяснение всего проекта без жаргона.
+## Web3-продукты
+- `backend/telegram_bot.py` — aiogram-бот (/price, /markets, /predict, кнопка на
+  мини-апп). Код готов, требует `TELEGRAM_BOT_TOKEN` от @BotFather.
+- `telegram-miniapp/index.html` — Telegram WebApp SDK (тема, haptics), живая
+  цена+спарклайн с Lighter, Predict-рынки с рабочими YES/NO, перп-ордер через
+  signing service. Адреса — через query-параметры `?backend=&signing=`.
+- `Dockerfile.backend`, `docker-compose.yml` — деплой-манифесты (docker не
+  проверялся на этой машине).
+- `ECOSYSTEM-FIT.md` — скан экосистемы Lighter (Robinhood Wallet/USDG, RWA+Equity
+  через Chainlink) — ничего готового, аналогичного Wake, не найдено.
 
 ## Числа
-135 unit-тестов + 3 интеграционных скрипта — зелёные (проверено локально:
-`cd backend && python3 -m unittest discover -v` → OK). Fuzz-тестирование
-(тысячи случайных сценариев) на 7 чистых модулях — ноль реальных
-нарушений. Найдено и починено 9 настоящих багов за весь разговор —
-каждый пойман до сдачи, не после.
+141 тест зелёный (135 unit + 6 HTTP smoke через `test_api_smoke.py`, который
+реально гоняет каждый эндпоинт через FastAPI TestClient). Fuzz-тестирование на
+7 чистых модулях — ноль нарушений. Живой Lighter testnet проверен: orderBooks
+(перпы BTC/ETH/SOL + спот), свечи, funding-rates.
 
-## Архитектура бэкенда (рефакторинг)
+## Архитектура бэкенда
 `backend/app.py` — тонкий FastAPI-файл: middleware (CORS, rate limiting) +
 сборка роутеров. Каждая продуктовая область — в `backend/api/`:
-`copy_trading.py` (followers/leaders/follows + simulate-mirror),
-`predict.py` (price/event рынки), `agent.py` (AI-агент + подписка),
-`portfolio.py` (cross-asset risk), `funding.py` (funding arb).
+`copy_trading.py`, `predict.py`, `agent.py`, `portfolio.py`, `funding.py`.
 Чистая логика — в корневых модулях `backend/*.py`, протестирована в `test_*.py`.
-Общая конфигурация (пути БД, лимиты) — в `backend/config.py`.
+Конфигурация (пути БД, лимиты, токены) — в `backend/config.py` и env.
 
-## Что физически не решается кодом в чате
-`npm install`/`pip install` раньше были заблокированы файрволом (403,
-подтверждено) — на этой машине Python 3.12 и fastapi/pydantic доступны,
-тесты прогнаны локально. `docker` не установлен (подтверждено). Нет живого
-деплоя, нет зарегистрированного бота, нет аудита. TASKS.md — точный план,
-что делать дальше, шаг за шагом.
+## Что вне кода
+Живая подпись ордера (нужен Lighter API key), регистрация бота (BotFather),
+KMS/Stripe/Postgres (внешние аккаунты), WebSocket-цикл копи-движка (нужен
+funded testnet-аккаунт). Гейт на продакшн с чужими деньгами —
+`backend/GO-LIVE-CHECKLIST.md`.

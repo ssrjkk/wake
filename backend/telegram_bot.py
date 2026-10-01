@@ -24,7 +24,7 @@ except ImportError:
 import httpx
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-WAKE_MINIAPP_URL = os.environ.get("WAKE_MINIAPP_URL", "https://example.com/miniapp")  # заменить на реальный домен мини-аппа
+WAKE_MINIAPP_URL = os.environ.get("WAKE_MINIAPP_URL", "http://localhost:5173/telegram-miniapp/")  # при деплое — реальный домен мини-аппа
 LIGHTER_API = "https://testnet.zklighter.elliot.ai/api/v1"  # testnet по умолчанию — тот же принцип, что и весь бэкенд
 WAKE_BACKEND = os.environ.get("WAKE_BACKEND_URL", "http://localhost:8000")
 

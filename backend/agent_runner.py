@@ -13,6 +13,7 @@ import os
 import time
 import uuid
 import dataclasses
+import logging
 import urllib.request
 import urllib.error
 import json
@@ -20,6 +21,8 @@ import json
 from agent_memory import AgentMemoryStore
 from llm_agent import llm_decision
 from risk_limits import RiskLimits, UserRiskState, check_order, record_executed
+
+logger = logging.getLogger("wake.agent")
 
 DRY_RUN = os.environ.get("WAKE_DRY_RUN", "true").lower() != "false"
 SIGNING_SERVICE_URL = os.environ.get("WAKE_SIGNING_SERVICE_URL", "http://localhost:8787")
@@ -57,7 +60,7 @@ def run_agent_step(memory: AgentMemoryStore, market_id: int, recent_prices: list
     decision = llm_decision(memory, market_id, recent_prices, base_size_usd)
     price = recent_prices[-1]
 
-    print(f"[agent] {decision.action} confidence={decision.confidence:.2f} size=${decision.size_usd:.0f} — {decision.reasoning}")
+    logger.info(f"{decision.action} confidence={decision.confidence:.2f} size=${decision.size_usd:.0f} — {decision.reasoning}")
 
     if decision.action == "hold":
         return decision, None
@@ -65,14 +68,14 @@ def run_agent_step(memory: AgentMemoryStore, market_id: int, recent_prices: list
     is_reduce = decision.action == "close"
     risk_check = check_order(risk_limits, risk_state, market_id, decision.size_usd or base_size_usd, is_reduce_only=is_reduce)
     if not risk_check.allowed:
-        print(f"[agent] ЗАБЛОКИРОВАНО лимитом риска: {risk_check.reason}")
+        logger.warning("ЗАБЛОКИРОВАНО лимитом риска: %s", risk_check.reason)
         return decision, {"status": "blocked_by_risk_limit", "reason": risk_check.reason}
     if risk_check.capped_size_usd != decision.size_usd:
-        print(f"[agent] размер урезан лимитом: ${decision.size_usd:.0f} -> ${risk_check.capped_size_usd:.0f}")
+        logger.info("размер урезан лимитом: $%.0f -> $%.0f", decision.size_usd, risk_check.capped_size_usd)
         decision = dataclasses.replace(decision, size_usd=risk_check.capped_size_usd)
 
     if DRY_RUN:
-        print("[agent] DRY_RUN=true — не исполняю реально")
+        logger.info("DRY_RUN=true — не исполняю реально")
         if decision.action in ("long", "short"):
             memory.record_open(str(uuid.uuid4()), market_id, decision.action, price,
                                 decision.size_usd / price, context_note=decision.reasoning)
@@ -89,5 +92,5 @@ def run_agent_step(memory: AgentMemoryStore, market_id: int, recent_prices: list
                                 decision.size_usd / price, context_note=decision.reasoning)
         return decision, {"status": "sent", **result}
     except (urllib.error.URLError, Exception) as e:
-        print(f"[agent] исполнение не удалось: {e}")
+        logger.error("исполнение не удалось: %s", e)
         return decision, {"status": "failed", "error": str(e)}

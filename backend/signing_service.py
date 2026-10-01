@@ -1,7 +1,7 @@
 """
 Тонкий сервис подписи для Фазы 1 (соло-трейдинг СВОИМИ деньгами). Это НЕ
 мультитенантное хранилище чужих ключей — та задача гораздо серьёзнее и живёт
-в Фазе 2 (см. IMPLEMENTATION-PLAN.md). Здесь — обёртка вокруг одного, твоего
+в Фазе 2. Здесь — обёртка вокруг одного, твоего
 собственного ключа, чтобы браузер мог реально разместить ордер.
 
 Почему сервис, а не подпись прямо в браузере: у Lighter нет официального
@@ -29,6 +29,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import lighter
 
+from config import CORS_ORIGINS
+
 app = FastAPI(title="Wake signing service — Phase 1, solo only")
 
 # Идемпотентность: client_order_index -> (tx_hash, timestamp). Если ордер с таким
@@ -40,7 +42,7 @@ _IDEMPOTENCY_TTL = 3600  # 1 час — дольше ордер не живёт,
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173"],  # Vite dev server. Сузить прежде чем идти дальше localhost.
+    allow_origins=CORS_ORIGINS,
     allow_methods=["POST"],
     allow_headers=["*"],
 )
@@ -79,22 +81,28 @@ async def place_order(req: OrderRequest):
     if cached and (now - cached[1]) < _IDEMPOTENCY_TTL:
         return {"tx_hash": cached[0], "idempotent_replay": True}
 
-    client = _get_client()
-    tx, tx_hash, err = await client.create_order(
-        market_index=req.market_index,
-        client_order_index=req.client_order_index,
-        base_amount=req.base_amount,
-        price=req.price,
-        is_ask=req.is_ask,
-        order_type=client.ORDER_TYPE_MARKET,
-        time_in_force=client.ORDER_TIME_IN_FORCE_IMMEDIATE_OR_CANCEL,
-        reduce_only=req.reduce_only,
-        order_expiry=client.DEFAULT_IOC_EXPIRY,
-    )
-    await client.close()
+    try:
+        client = _get_client()
+    except (RuntimeError, KeyError, ValueError) as e:
+        raise HTTPException(status_code=400, detail=f"Настройка сервиса неполная: {e}")
+
+    try:
+        tx, tx_hash, err = await client.create_order(
+            market_index=req.market_index,
+            client_order_index=req.client_order_index,
+            base_amount=req.base_amount,
+            price=req.price,
+            is_ask=req.is_ask,
+            order_type=client.ORDER_TYPE_MARKET,
+            time_in_force=client.ORDER_TIME_IN_FORCE_IMMEDIATE_OR_CANCEL,
+            reduce_only=req.reduce_only,
+            order_expiry=client.DEFAULT_IOC_EXPIRY,
+        )
+    finally:
+        await client.close()
 
     if err:
-        raise HTTPException(status_code=400, detail=str(err))
+        raise HTTPException(status_code=400, detail=f"Lighter отклонил ордер: {err}")
 
     _idempotency_cache[req.client_order_index] = (tx_hash, now)
     return {"tx_hash": tx_hash, "idempotent_replay": False}

@@ -71,7 +71,12 @@ if (tg) {
 }
 
 const LIGHTER_API = "https://testnet.zklighter.elliot.ai/api/v1"; // testnet по умолчанию, тот же принцип, что весь проект
-const WAKE_BACKEND = "http://localhost:8000"; // заменить на реальный домен при деплое
+// Адреса можно переопределить query-параметрами при открытии мини-аппа:
+// ?backend=https://api.example.com&signing=https://sign.example.com
+// По умолчанию — локальная разработка.
+const params = new URLSearchParams(window.location.search);
+const WAKE_BACKEND = params.get("backend") || "http://localhost:8000";
+const WAKE_SIGNING = params.get("signing") || "http://localhost:8787";
 
 let currentTab = "terminal";
 const content = document.getElementById("content");
@@ -83,31 +88,32 @@ function skeleton(h) {
 async function renderTerminal() {
   content.innerHTML = skeleton(80) + skeleton(200);
   try {
-    const [booksRes, candlesRes] = await Promise.all([
-      fetch(`${LIGHTER_API}/orderBooks?filter=perp`),
-      fetch(`${LIGHTER_API}/candles?market_id=1&resolution=1h&start_timestamp=0&end_timestamp=${Date.now()}&count_back=24&set_timestamp_to_end=true`),
-    ]);
+    const booksRes = await fetch(`${LIGHTER_API}/orderBooks?filter=perp`);
     if (!booksRes.ok) throw new Error(booksRes.status);
     const books = await booksRes.json();
     const markets = (books.order_books || []).slice(0, 30);
+    const btc = markets.find(m => m.symbol === "BTC") || markets[0];
 
     let sparkline = "";
-    if (candlesRes.ok) {
-      const candles = (await candlesRes.json()).c || [];
-      if (candles.length > 1) {
-        const closes = candles.map(c => c.c);
-        const min = Math.min(...closes), max = Math.max(...closes);
-        const range = max - min || 1;
-        const points = closes.map((c, i) => `${(i / (closes.length - 1)) * 300},${60 - ((c - min) / range) * 55}`).join(" ");
-        const up = closes[closes.length - 1] >= closes[0];
-        sparkline = `
-          <div class="row" style="margin-bottom:4px">
-            <span class="price">$${closes[closes.length - 1].toLocaleString()}</span>
-            <span class="${up ? "change-up" : "change-down"}">${up ? "▲" : "▼"} BTC-PERP · 24ч</span>
-          </div>
-          <svg viewBox="0 0 300 60" style="width:100%;height:60px">
-            <polyline points="${points}" fill="none" stroke="${up ? "#34d399" : "#f87171"}" stroke-width="2" />
-          </svg>`;
+    if (btc) {
+      const candlesRes = await fetch(`${LIGHTER_API}/candles?market_id=${btc.market_id}&resolution=1h&start_timestamp=0&end_timestamp=${Date.now()}&count_back=24&set_timestamp_to_end=true`);
+      if (candlesRes.ok) {
+        const candles = (await candlesRes.json()).c || [];
+        if (candles.length > 1) {
+          const closes = candles.map(c => c.c);
+          const min = Math.min(...closes), max = Math.max(...closes);
+          const range = max - min || 1;
+          const points = closes.map((c, i) => `${(i / (closes.length - 1)) * 300},${60 - ((c - min) / range) * 55}`).join(" ");
+          const up = closes[closes.length - 1] >= closes[0];
+          sparkline = `
+            <div class="row" style="margin-bottom:4px">
+              <span class="price">$${closes[closes.length - 1].toLocaleString()}</span>
+              <span class="${up ? "change-up" : "change-down"}">${up ? "▲" : "▼"} ${btc.symbol}-PERP · 24ч</span>
+            </div>
+            <svg viewBox="0 0 300 60" style="width:100%;height:60px">
+              <polyline points="${points}" fill="none" stroke="${up ? "#34d399" : "#f87171"}" stroke-width="2" />
+            </svg>`;
+        }
       }
     }
 
@@ -190,7 +196,7 @@ async function renderPredict() {
       </div>
     `).join("");
   } catch (e) {
-    content.innerHTML = `<div class="empty">Wake backend не отвечает на localhost:8000.<br/><span class="muted">Это ожидаемо, если backend/app.py не запущен локально.</span></div>`;
+    content.innerHTML = `<div class="empty">Wake backend не отвечает.<br/><span class="muted">Это ожидаемо, если backend/app.py не запущен локально.</span></div>`;
   }
 }
 
@@ -241,7 +247,7 @@ async function renderPerp() {
         <button class="btn" id="perp-submit" onclick="submitPerpOrder()">Отправить ордер</button>
         <div id="perp-status" class="muted" style="margin-top:8px"></div>
       </div>
-      <div class="muted" style="text-align:center;margin-top:8px">Требует signing_service на localhost:8787 (см. README)</div>
+      <div class="muted" style="text-align:center;margin-top:8px">Требует signing_service (см. README)</div>
     `;
   } catch (e) {
     content.innerHTML = `<div class="empty">Lighter API недоступен.<br/><span class="muted">${e}</span></div>`;
@@ -282,7 +288,7 @@ async function submitPerpOrder() {
     const baseAmount = Math.floor(baseAmountFloat * 10 ** decimals);
     const priceInt = Math.round(price * 10 ** priceDecimals);
     if (baseAmount <= 0) throw new Error("Размер после округления равен нулю");
-    const res = await fetch("http://localhost:8787/place-order", {
+    const res = await fetch(`${WAKE_SIGNING}/place-order`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({

@@ -9,6 +9,8 @@
 
 // mainnet.zklighter.elliot.ai и testnet.zklighter.elliot.ai — оба подтверждены официальными
 // источниками Lighter (apidocs.lighter.xyz, GitHub elliottech/lighter-agent-kit).
+import { BACKEND_URL, SIGNING_SERVICE_URL as SIGNING_SERVICE_BASE_URL, LIGHTER_NETWORK } from "./config";
+
 const NETWORKS = {
   mainnet: "https://mainnet.zklighter.elliot.ai/api/v1",
   testnet: "https://testnet.zklighter.elliot.ai/api/v1",
@@ -16,8 +18,8 @@ const NETWORKS = {
 
 export type LighterNetwork = keyof typeof NETWORKS;
 
-// Тестнет по умолчанию, сознательно — это сейчас фаза проверки, не реальных денег.
-let currentNetwork: LighterNetwork = "testnet";
+// Сеть по умолчанию задаётся переменной окружения VITE_LIGHTER_NETWORK.
+let currentNetwork: LighterNetwork = LIGHTER_NETWORK;
 export function setNetwork(network: LighterNetwork) {
   currentNetwork = network;
 }
@@ -113,8 +115,8 @@ export async function getAccountByL1Address(address: string) {
 }
 
 // Wake's own backend (backend/app.py) — persistence for followers/leaders/follows.
-// Separate from Lighter's API above. Not running by default; fails loudly, not silently.
-const WAKE_BACKEND_URL = "http://localhost:8000";
+// Адрес — из VITE_BACKEND_URL (см. config.ts), по умолчанию локальный dev.
+const WAKE_BACKEND_URL = BACKEND_URL;
 
 export async function registerFollower(l1Address: string): Promise<string> {
   const res = await fetch(`${WAKE_BACKEND_URL}/followers`, {
@@ -178,8 +180,8 @@ export async function getLeaderStats(leaderId: string): Promise<LeaderStats> {
 
 // Calls the local signing service from backend/signing_service.py — Phase 1, solo trading
 // only. Not running by default; this is what makes that honest by failing loudly, not
-// pretending to succeed, when the service isn't up.
-const SIGNING_SERVICE_URL = "http://localhost:8787";
+// pretending to succeed, when the service isn't up. Адрес — из VITE_SIGNING_SERVICE_URL.
+const SIGNING_SERVICE_URL = SIGNING_SERVICE_BASE_URL;
 
 export async function placeOrderViaSigningService(
   market: OrderBook,

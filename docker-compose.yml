@@ -10,10 +10,12 @@ services:
     environment:
       - WAKE_DRY_RUN=true  # осознанно менять на false — не значение по умолчанию нигде
       - LIGHTER_BASE_URL=https://testnet.zklighter.elliot.ai
+      - WAKE_DB_PATH=/app/data/wake.db
+      - WAKE_AUDIT_DB_PATH=/app/data/audit.db
     env_file:
       - backend/.env  # секреты — не в этом файле, не в git (см. backend/.gitignore)
     volumes:
-      - wake-data:/app/data  # wake.db, keystore.enc персистятся между рестартами контейнера
+      - wake-data:/app/data  # wake.db, audit.db персистятся между рестартами контейнера
 
   signing:
     build:

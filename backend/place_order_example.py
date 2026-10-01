@@ -23,16 +23,24 @@ Lighter API key (API_KEY_INDEX + приватный ключ) создаётся
 """
 
 import asyncio
+import os
 import lighter
 
-BASE_URL = "https://mainnet.zklighter.elliot.ai"
+# Всё берётся из переменных окружения — см. .env.example, без правки кода.
+# По умолчанию тестнет: реальный ордер на тестнете, ноль реальных денег.
+BASE_URL = os.environ.get("LIGHTER_BASE_URL", "https://testnet.zklighter.elliot.ai")
 
-ACCOUNT_INDEX = 0            # получить через account?by=l1_address — см. src/lib/lighter.ts
-API_KEY_INDEX = 0            # индекс API-ключа, созданного на app.lighter.xyz (не кошелёк!)
-API_KEY_PRIVATE_KEY = "..."  # приватный ключ ИМЕННО этого API-ключа
+ACCOUNT_INDEX = int(os.environ.get("LIGHTER_ACCOUNT_INDEX", "0"))
+API_KEY_INDEX = int(os.environ.get("LIGHTER_API_KEY_INDEX", "0"))
+API_KEY_PRIVATE_KEY = os.environ.get("LIGHTER_API_KEY_PRIVATE_KEY", "")
 
 
 async def main():
+    if not API_KEY_PRIVATE_KEY:
+        raise RuntimeError(
+            "LIGHTER_API_KEY_PRIVATE_KEY не задан. Создай API key на app.lighter.xyz "
+            "(testnet-режим) и положи в backend/.env — см. .env.example."
+        )
     client = lighter.SignerClient(
         url=BASE_URL,
         api_private_keys={API_KEY_INDEX: API_KEY_PRIVATE_KEY},

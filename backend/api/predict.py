@@ -11,7 +11,7 @@ import hmac
 import os
 import time as _time
 import uuid
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 import predict_db as pdb
@@ -21,6 +21,19 @@ from predict_resolution import resolve_price_market, resolve_event_market, Compa
 from config import DB_PATH, AUDIT_DB_PATH
 
 router = APIRouter()
+
+
+def _require_curator(request: Request):
+    """Создание event-рынков и резолюция событий — только доверенные кураторы.
+    Простой секретный токен в заголовке X-Curator-Token, сравнение через
+    hmac.compare_digest (защита от timing-атак). В проде заменить на полноценный
+    auth-слой."""
+    curator_token = os.environ.get("WAKE_CURATOR_TOKEN", "")
+    if not curator_token:
+        raise HTTPException(status_code=500, detail="WAKE_CURATOR_TOKEN не настроен на сервере")
+    auth_header = request.headers.get("X-Curator-Token", "")
+    if not hmac.compare_digest(auth_header, curator_token):
+        raise HTTPException(status_code=403, detail="Недостаточно прав: требуется токен куратора")
 
 
 class CreatePriceMarket(BaseModel):
@@ -65,16 +78,8 @@ def create_price_market(req: CreatePriceMarket):
 
 
 @router.post("/predict/markets/event")
-def create_event_market(req: CreateEventMarket):
-    # [!]  В проде — только для доверенных кураторов. Авторизация: простой
-    # секретный токен в заголовке X-Curator-Token (сравнение через hmac.compare_digest
-    # для защиты от timing-атак). В проде заменить на полноценный auth-слой.
-    curator_token = os.environ.get("WAKE_CURATOR_TOKEN", "")
-    if not curator_token:
-        raise HTTPException(status_code=500, detail="WAKE_CURATOR_TOKEN не настроен на сервере")
-    auth_header = req.headers.get("X-Curator-Token", "")
-    if not hmac.compare_digest(auth_header, curator_token):
-        raise HTTPException(status_code=403, detail="Недостаточно прав для создания event-рынка")
+def create_event_market(req: CreateEventMarket, request: Request):
+    _require_curator(request)
     market_id = str(uuid.uuid4())
     with pdb.connect(DB_PATH) as conn:
         pdb.create_market(conn, market_id, "event", req.question, req.resolve_at, req.b)
@@ -138,7 +143,8 @@ def trade_predict_market(market_id: str, req: TradeRequest):
 
 
 @router.post("/predict/markets/{market_id}/resolve-event")
-def resolve_event(market_id: str, req: ResolveEventRequest):
+def resolve_event(market_id: str, req: ResolveEventRequest, request: Request):
+    _require_curator(request)
     try:
         resolution = resolve_event_market(req.outcome, req.resolved_by, _time.time(), req.evidence_url)
     except ValueError as e:

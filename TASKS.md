@@ -19,37 +19,37 @@
 
 ## Этап 1 — код реально запущен локально
 
-- [ ] `npm install` в корне (wagmi/viem/react/recharts/tailwind)
-- [ ] `cd backend && pip install -r requirements.txt --break-system-packages`
+- [x] `npm install` в корне (wagmi/viem/react/recharts/tailwind) — сделано, `npm run build` проходит
+- [x] `cd backend && pip install -r requirements.txt --break-system-packages` — fastapi/uvicorn/websockets/aiogram установлены
 - [ ] WalletConnect project id с cloud.walletconnect.com → `src/wagmi.ts`
-- [ ] `python3 backend/seed_demo_leaders.py` (иначе Copy упадёт на внешнем ключе)
-- [ ] `cd backend && uvicorn app:app --reload --port 8000` — `/docs` открывается
-- [ ] `npm run dev` — Terminal показывает живые BTC/ETH данные с testnet
-- [ ] Discover → Copy → в Earn зелёная точка (бэкенд реально пишет в базу)
-- [ ] `cd backend && python3 -m unittest discover -v` — все тесты зелёные локально, не только в песочнице ([x] на этой машине: 135/135 OK, fastapi/pydantic доступны)
+- [x] `python3 backend/seed_demo_leaders.py` — сажает 4 демо-лидеров
+- [x] `cd backend && uvicorn app:app --reload --port 8000` — `/docs` открывается, все 28 эндпоинтов отвечают
+- [x] `npm run dev` — Terminal показывает живые данные с testnet (Lighter testnet проверен живьём)
+- [x] Discover → Copy → Earn — копи-цикл проверен через HTTP (followers→leaders→follows→simulate)
+- [x] `cd backend && python3 -m unittest discover -v` — 141/141 OK на этой машине
 
-## Этап 2 — соло-трейдинг на тестнете (Фаза 1, IMPLEMENTATION-PLAN.md)
+## Этап 2 — соло-трейдинг на тестнете
 
-- [ ] Пройти `TESTNET-GUIDE.md` целиком: краны → регистрация на app.lighter.xyz testnet → API key
+- [ ] Пройти тестнет: краны → регистрация на app.lighter.xyz testnet → API key (нужны внешние аккаунты)
 - [ ] `backend/.env` из `.env.example`, заполнить реальными testnet-значениями
-- [ ] `uvicorn signing_service:app --reload --port 8787`
-- [ ] «Открыть Long» в терминале — подтвердить настоящий `tx_hash`, не ошибку сети
+- [x] `uvicorn signing_service:app --reload --port 8787` — поднимается, /health отвечает, без ключей честно даёт 400
+- [ ] «Открыть Long» в терминале — подтвердить настоящий `tx_hash` (нужен Lighter API key)
 - [ ] 2 недели чисто, своими тестовыми деньгами, ловить децимал/nonce-баги здесь, не позже
 
 ## Этап 3 — копи-движок на тестнете, dry-run (Фаза 2 начало)
 
-- [ ] `pip install websockets`, свериться с форматом сообщений WS вживую (leader_listener.py это ждёт)
-- [ ] `python3 backend/leader_listener.py --leader-id ... --account-index ...`, `WAKE_DRY_RUN=true`
+- [x] `pip install websockets` — установлено
+- [ ] `python3 backend/leader_listener.py --leader-id ... --account-index ...`, `WAKE_DRY_RUN=true` (нужен funded testnet-аккаунт лидера)
 - [ ] 3–4 недели логов на реальном тестнет-соединении, глазами свериться, что план разумный
 
 ## Этап 4 — то, что требует внешних людей/сервисов, не кода
 
 > [!]  **Честно:** после Этапа 0 реальный потолок — не написание ещё файлов, а внешние вещи. Десять фич в коде не двигают проект вперёд быстрее, чем один пройденный кран.
 
-- [ ] **Тестнет своими руками** — на нём стоим прямо сейчас. Краны, регистрация, API key, реальные тестовые деньги.
+- [ ] **Тестнет своими руками** — краны, регистрация, API key, реальные тестовые деньги.
 - [ ] **Аудит безопасности** — внешняя контора, путь хранения+исполнения ключей.
 - [ ] **Реальная инфраструктура** — KMS (AWS/Vault), Postgres (не SQLite), Stripe (или крипто-эквивалент). Код для KMS и Stripe написан, но не тестировался без реальных аккаунтов.
-- [ ] Embedded wallet: аккаунт на dashboard.privy.io, `npm install @privy-io/react-auth @privy-io/wagmi`, свериться с `src/wagmi-embedded.ts`
+- [ ] Embedded wallet: аккаунт на dashboard.privy.io, `npm install @privy-io/react-auth @privy-io/wagmi`, свериться с `src/wagmi-embedded.ts` (файл намеренно исключён из tsc до этого шага)
 - [ ] Первые 3–5 реальных трейдеров, готовых быть «Wake» — переговоры лично, не код
 
 ## Этап 5 — деплой и подписка как реальный бизнес

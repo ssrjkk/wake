@@ -8,7 +8,9 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY backend/*.py .
 COPY backend/api/ api/
 
+# Данные (wake.db, audit.db) персистятся через volume, смонтированный на /app/data
+RUN mkdir -p /app/data
+
 EXPOSE 8000
 
-# wake.db персистится через volume в docker-compose.yml — не в образе
 CMD ["uvicorn", "app:app", "--host", "0.0.0.0", "--port", "8000"]

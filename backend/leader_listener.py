@@ -34,13 +34,16 @@ import argparse
 import asyncio
 import os
 import uuid
+import logging
 
 import db
 import audit_log as al
 from encrypted_key_store import EncryptedKeyStore
 from mirror_engine import LeaderEvent, FollowerConfig, MarketConstraints, Side, compute_mirror_plan
+from config import DB_PATH, AUDIT_DB_PATH
 
-DB_PATH = "wake.db"
+logger = logging.getLogger("wake.leader_listener")
+
 DRY_RUN = os.environ.get("WAKE_DRY_RUN", "true").lower() != "false"
 LIGHTER_HTTP_URL = os.environ.get("LIGHTER_BASE_URL", "https://testnet.zklighter.elliot.ai")  # testnet по умолчанию
 
@@ -76,14 +79,14 @@ async def handle_leader_event(leader_id: str, raw_event: dict, constraints: Mark
         plan = compute_mirror_plan(event, followers, constraints)
 
         for skipped in plan.skipped:
-            print(f"[skip] follower={skipped.follower_id} reason={skipped.reason}")
+            logger.info("skip follower=%s reason=%s", skipped.follower_id, skipped.reason)
             db.log_mirror_result(conn, str(uuid.uuid4()), skipped.follower_id, event.market_id,
                                   event.side.value, 0, event.is_increase is False, "skipped", skipped.reason)
 
         for order in plan.orders:
             follow_row = next(r for r in rows if r["follower_id"] == order.follower_id)
             if DRY_RUN:
-                print(f"[dry_run] would place {order}")
+                logger.info("dry_run would place %s", order)
                 db.log_mirror_result(conn, str(uuid.uuid4()), follow_row["follow_id"], order.market_id,
                                       order.side.value, order.base_amount, order.reduce_only, "dry_run")
                 continue
@@ -91,10 +94,10 @@ async def handle_leader_event(leader_id: str, raw_event: dict, constraints: Mark
             key_store = EncryptedKeyStore()  # шифрование на диске — см. encrypted_key_store.py, всё ещё НЕ HSM-эквивалент
             key = key_store.get_key(order.follower_id)
             if not key:
-                print(f"[fail] no key on file for follower={order.follower_id} — skipping execution")
+                logger.error("no key on file for follower=%s — skipping execution", order.follower_id)
                 db.log_mirror_result(conn, str(uuid.uuid4()), follow_row["follow_id"], order.market_id,
                                       order.side.value, order.base_amount, order.reduce_only, "failed", "no_key")
-                with al.connect("audit.db") as audit_conn:
+                with al.connect(AUDIT_DB_PATH) as audit_conn:
                     al.log_action(audit_conn, al.AuditEntry(
                         actor=f"follower:{order.follower_id}",
                         action="key_access_denied",
@@ -136,14 +139,28 @@ async def handle_leader_event(leader_id: str, raw_event: dict, constraints: Mark
 
 async def main(leader_id: str, leader_account_index: int):
     import json
-    import websockets  # pip install websockets — не установлено в этой песочнице
+    import websockets  # pip install websockets
     from leader_position_tracker import LeaderPositionTracker
+    from lighter_rest import get_order_books
 
-    constraints = MarketConstraints(min_base_amount=0.001, size_decimals=3)  # TODO: тянуть реально из getOrderBooks() по рынку
+    # constraints тянуть реально из getOrderBooks() по рынку, не хардкодить
+    try:
+        books = get_order_books()
+        btc = next((m for m in books if m["symbol"] == "BTC"), None)
+        if btc:
+            constraints = MarketConstraints(
+                min_base_amount=float(btc.get("min_base_amount", 0.001)),
+                size_decimals=int(btc.get("supported_size_decimals", 3)),
+            )
+        else:
+            constraints = MarketConstraints(min_base_amount=0.001, size_decimals=3)
+    except Exception:
+        constraints = MarketConstraints(min_base_amount=0.001, size_decimals=3)
+
     tracker = LeaderPositionTracker()
 
-    print(f"DRY_RUN={DRY_RUN} — {'реальные ордера НЕ уходят' if DRY_RUN else '[!]  РЕАЛЬНОЕ ИСПОЛНЕНИЕ ВКЛЮЧЕНО'}")
-    print(f"Слушаю лидера account_index={leader_account_index} на {WS_URL}")
+    logger.info("DRY_RUN=%s — %s", DRY_RUN, "реальные ордера НЕ уходят" if DRY_RUN else "РЕАЛЬНОЕ ИСПОЛНЕНИЕ ВКЛЮЧЕНО")
+    logger.info("Слушаю лидера account_index=%s на %s", leader_account_index, WS_URL)
 
     async with websockets.connect(WS_URL) as ws:
         await ws.send(json.dumps({"type": "subscribe", "channel": f"account_all_positions/{leader_account_index}"}))

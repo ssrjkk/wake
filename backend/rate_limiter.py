@@ -1,6 +1,6 @@
 """
 Rate limiting — token bucket, стандартный алгоритм, не изобретён. Закрывает
-named gap из ROADMAP-TO-PRODUCTION.md: «Rate limiting и базовая DoS-защита
+named gap: «Rate limiting и базовая DoS-защита
 на app.py — сейчас их нет». Теперь есть, и протестировано.
 
 Token bucket, не fixed-window: fixed-window позволяет burst в 2x лимита на

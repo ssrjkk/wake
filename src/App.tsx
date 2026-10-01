@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { AreaChart, Area, ResponsiveContainer } from "recharts";
 import { getOrderBooks, getCandles, getRecentTrades, getAccountByL1Address, placeOrderViaSigningService, registerFollower, listFollowsForFollower, createFollow, setFollowPaused, registerLeader, getLeaderStats, type OrderBook, type Candle, type Trade } from "./lib/lighter";
+import { BACKEND_URL } from "./lib/config";
 
 type Trader = {
   id: string;
@@ -279,7 +280,7 @@ export default function App() {
         ...f,
         { ...copyModal, allocation, paused: false, pnlPct: (Math.random() * 20 - 4).toFixed(1), key: copyModal.id + Date.now() },
       ]);
-      setToast(`Ты оседлал волну ${copyModal.handle} (демо — локальный бэкенд не отвечает на localhost:8000)`);
+      setToast(`Ты оседлал волну ${copyModal.handle} (демо — локальный бэкенд не отвечает)`);
     }
     setCopyModal(null);
     setAllocation(250);
@@ -333,7 +334,7 @@ export default function App() {
 
   useEffect(() => {
     if (tab !== "predict") return;
-    fetch("http://localhost:8000/predict/markets")
+    fetch("${BACKEND_URL}/predict/markets")
       .then((r) => {
         if (!r.ok) throw new Error(String(r.status));
         return r.json();
@@ -353,7 +354,7 @@ export default function App() {
 
   useEffect(() => {
     if (!predictTrade) return;
-    fetch(`http://localhost:8000/predict/markets/${predictTrade.market.id}/preview?outcome=${predictTrade.outcome}&shares=${predictShares}`)
+    fetch(`${BACKEND_URL}/predict/markets/${predictTrade.market.id}/preview?outcome=${predictTrade.outcome}&shares=${predictShares}`)
       .then((r) => r.json())
       .then((data) => setPredictPreviewCost(data.cost_usd))
       .catch(() => setPredictPreviewCost(null));
@@ -366,7 +367,7 @@ export default function App() {
       return;
     }
     try {
-      const res = await fetch(`http://localhost:8000/predict/markets/${predictTrade.market.id}/trade`, {
+      const res = await fetch(`${BACKEND_URL}/predict/markets/${predictTrade.market.id}/trade`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ user_id: followerId, outcome: predictTrade.outcome, shares: predictShares }),
@@ -385,7 +386,7 @@ export default function App() {
 
   useEffect(() => {
     if (!followerId) return;
-    fetch(`http://localhost:8000/subscription/${followerId}`)
+    fetch(`${BACKEND_URL}/subscription/${followerId}`)
       .then((r) => r.json())
       .then(setSubscription)
       .catch(() => setSubscription(null));
@@ -397,8 +398,8 @@ export default function App() {
       return;
     }
     try {
-      await fetch(`http://localhost:8000/subscription/${followerId}/start-trial`, { method: "POST" });
-      const r = await fetch(`http://localhost:8000/subscription/${followerId}`);
+      await fetch(`${BACKEND_URL}/subscription/${followerId}/start-trial`, { method: "POST" });
+      const r = await fetch(`${BACKEND_URL}/subscription/${followerId}`);
       setSubscription(await r.json());
       setToast("Пробный период начат — 14 дней");
     } catch (e) {
@@ -413,7 +414,7 @@ export default function App() {
 
   useEffect(() => {
     if (tab !== "agent" || !followerId) return;
-    fetch(`http://localhost:8000/agent/memory/${followerId}`)
+    fetch(`${BACKEND_URL}/agent/memory/${followerId}`)
       .then((r) => r.json())
       .then(setAgentMemoryView)
       .catch(() => setAgentMemoryView(null));
@@ -426,7 +427,7 @@ export default function App() {
     }
     setAgentBusy(true);
     try {
-      const res = await fetch("http://localhost:8000/agent/step", {
+      const res = await fetch("${BACKEND_URL}/agent/step", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -485,7 +486,7 @@ export default function App() {
         returnsByMarket[String(pos.marketId)] = returns;
       }
 
-      const res = await fetch("http://localhost:8000/portfolio/risk", {
+      const res = await fetch("${BACKEND_URL}/portfolio/risk", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -519,7 +520,7 @@ export default function App() {
         returnsByMarket[String(m.market_id)] = closes.slice(1).map((c, i) => (c - closes[i]) / closes[i]);
         if (m.market_id !== target.marketId) candidates.push([m.market_id, m.symbol]);
       }
-      const res = await fetch("http://localhost:8000/portfolio/hedge", {
+      const res = await fetch("${BACKEND_URL}/portfolio/hedge", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -975,7 +976,7 @@ export default function App() {
               <p className="text-xs text-slate-600">
                 {isRealStats
                   ? "Подписчики и AUM — реальные строки из базы (backend/app.py). Заработок — ещё нет, для него нужна история исполненных зеркальных сделок."
-                  : "Демо-цифры — backend не отвечает на localhost:8000, либо seed_demo_leaders.py ещё не прогнан."}
+                  : "Демо-цифры — backend не отвечает, либо seed_demo_leaders.py ещё не прогнан."}
               </p>
             </div>
           ))}
@@ -992,7 +993,7 @@ export default function App() {
             {predictMarkets.length === 0 ? (
               <div className="bg-slate-900 border border-slate-800 rounded-2xl py-16 flex flex-col items-center text-center">
                 <p className="text-slate-400 text-sm mb-1">Рынков нет или бэкенд не отвечает</p>
-                <p className="text-slate-600 text-xs">POST /predict/markets/price или /predict/markets/event на localhost:8000</p>
+                <p className="text-slate-600 text-xs">Создать: POST /predict/markets/price или /predict/markets/event</p>
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

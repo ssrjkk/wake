@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS audit_log (
 );
 CREATE INDEX IF NOT EXISTS idx_audit_actor_time ON audit_log(actor, timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_audit_action_time ON audit_log(action, timestamp DESC);
+CREATE INDEX IF NOT EXISTS idx_audit_log_resource ON audit_log(resource);
 """
 
 
