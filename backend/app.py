@@ -19,6 +19,20 @@ REST-слой Wake backend. Тонкий файл: создаёт FastAPI, по�
     uvicorn app:app --reload --port 8000   # /docs откроет Swagger
 """
 
+import os
+import sentry_sdk
+from sentry_sdk.integrations.fastapi import FastApiIntegration
+from sentry_sdk.integrations.starlette import StarletteIntegration
+
+# Initialize Sentry for error monitoring (optional — only if SENTRY_DSN is set)
+if os.getenv("SENTRY_DSN"):
+    sentry_sdk.init(
+        dsn=os.getenv("SENTRY_DSN"),
+        integrations=[StarletteIntegration(), FastApiIntegration()],
+        traces_sample_rate=0.1,
+        environment=os.getenv("LIGHTER_NETWORK", "testnet"),
+    )
+
 import signal
 import logging
 from contextlib import asynccontextmanager

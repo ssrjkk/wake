@@ -19,4 +19,7 @@ aiogram
 # Billing (stripe_billing.py) — optional, code works without it
 stripe
 
+# Error monitoring (optional — only used if SENTRY_DSN is set)
+sentry-sdk
+
 # sqlite3 — стандартная библиотека Python, отдельно ставить не нужно
