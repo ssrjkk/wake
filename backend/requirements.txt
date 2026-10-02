@@ -16,9 +16,6 @@ cryptography
 # Telegram bot (telegram_bot.py) — optional, code works without it
 aiogram
 
-# Billing (stripe_billing.py) — optional, code works without it
-stripe
-
 # Error monitoring (optional — only used if SENTRY_DSN is set)
 sentry-sdk
 

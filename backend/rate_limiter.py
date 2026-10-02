@@ -51,6 +51,13 @@ class RateLimiter:
     не глобальный на весь сервис (иначе один активный юзер блокирует всех)."""
 
     def __init__(self, capacity: float, refill_rate: float):
+        # refill_rate=0 ловился только на втором запросе подряд: time_until_available
+        # делил на него и ронял middleware уже внутри обработчика. Невалидная
+        # конфигурация должна быть видна на старте процесса, а не в 500 у юзера.
+        if capacity <= 0:
+            raise ValueError(f"capacity должен быть > 0, получено {capacity}")
+        if refill_rate <= 0:
+            raise ValueError(f"refill_rate должен быть > 0, получено {refill_rate}")
         self.capacity = capacity
         self.refill_rate = refill_rate
         self._buckets: dict = {}

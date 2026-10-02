@@ -20,6 +20,7 @@ Oracle с dispute-периодом, как у настоящего Polymarket; �
 
 import time
 import audit_log as al
+from config import AUDIT_DB_PATH
 from dataclasses import dataclass
 from enum import Enum
 
@@ -85,7 +86,7 @@ def resolve_event_market(outcome: str, resolved_by: str, resolved_at: float, evi
     if not evidence_url:
         raise ValueError("evidence_url обязателен — резолюция без источника не создаётся")
     resolution = EventResolution(outcome=outcome, resolved_by=resolved_by, resolved_at=resolved_at, evidence_url=evidence_url)
-    with al.connect("audit.db") as audit_conn:
+    with al.connect(AUDIT_DB_PATH) as audit_conn:
         al.log_action(audit_conn, al.AuditEntry(
             actor=resolved_by,
             action="market_resolution",

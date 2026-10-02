@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS followers (
     id TEXT PRIMARY KEY,
     l1_address TEXT NOT NULL UNIQUE,
     lighter_account_index INTEGER,
+    telegram_id INTEGER UNIQUE,
     created_at REAL NOT NULL
 );
 
@@ -86,11 +87,16 @@ def upsert_leader(conn, id_: str, lighter_account_index: int, handle: str, fee_b
     )
 
 
-def upsert_follower(conn, id_: str, l1_address: str, lighter_account_index: int | None = None):
+def upsert_follower(conn, id_: str, l1_address: str, lighter_account_index: int | None = None,
+                    telegram_id: int | None = None):
+    # COALESCE, а не прямое присваивание: логин через кошелёк не должен стирать telegram_id
+    # предыдущего входа через Telegram, и наоборот.
     conn.execute(
-        "INSERT INTO followers (id, l1_address, lighter_account_index, created_at) VALUES (?,?,?,?) "
-        "ON CONFLICT(id) DO UPDATE SET lighter_account_index=excluded.lighter_account_index",
-        (id_, l1_address, lighter_account_index, time.time()),
+        "INSERT INTO followers (id, l1_address, lighter_account_index, telegram_id, created_at) VALUES (?,?,?,?,?) "
+        "ON CONFLICT(id) DO UPDATE SET "
+        "lighter_account_index = COALESCE(excluded.lighter_account_index, followers.lighter_account_index), "
+        "telegram_id = COALESCE(excluded.telegram_id, followers.telegram_id)",
+        (id_, l1_address, lighter_account_index, telegram_id, time.time()),
     )
 
 

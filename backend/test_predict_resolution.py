@@ -1,7 +1,19 @@
 """python3 -m unittest test_predict_resolution -v"""
 
+import os
+import tempfile
 import unittest
-from predict_resolution import resolve_price_market, resolve_event_market, Comparator
+
+# config читает env при импорте, поэтому временная audit-база задаётся до
+# импорта predict_resolution: иначе тест дописывает строки в dev audit.db.
+_tmp_dir = tempfile.mkdtemp(prefix="wake-resolution-audit-")
+os.environ.setdefault("WAKE_AUDIT_DB_PATH", os.path.join(_tmp_dir, "audit.db"))
+
+import audit_log as al  # noqa: E402
+from config import AUDIT_DB_PATH  # noqa: E402
+from predict_resolution import resolve_price_market, resolve_event_market, Comparator  # noqa: E402
+
+al.init_audit_db(AUDIT_DB_PATH)
 
 
 class TestPriceResolution(unittest.TestCase):

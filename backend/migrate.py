@@ -63,6 +63,23 @@ def add_predict_markets_indexes(conn):
     """)
 
 
+@migration
+def add_follower_telegram_id(conn):
+    """Столбец telegram_id для входа через Telegram (входы через кошелёк его не заполняют).
+
+    В SCHEMA db.py он уже есть для новых баз; сюда попадают только базы, созданные раньше.
+    SQLite не умеет ALTER TABLE ... ADD COLUMN с UNIQUE, поэтому уникальность — отдельным
+    частичным индексом (NULL пропускается, то есть один telegram_id на пользователя).
+    """
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(followers)").fetchall()}
+    if "telegram_id" not in columns:
+        conn.execute("ALTER TABLE followers ADD COLUMN telegram_id INTEGER")
+    conn.execute("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_followers_telegram
+        ON followers(telegram_id) WHERE telegram_id IS NOT NULL
+    """)
+
+
 def run_migrations(db_path: str = None):
     """Запускает все неприменённые миграции."""
     db_path = db_path or DB_PATH

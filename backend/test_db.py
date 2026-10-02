@@ -1,12 +1,13 @@
 """Реальный прогон db.py: python3 test_db.py — печатает результат, использует временный файл."""
 
 import os
+import tempfile
 import uuid
 import db
 
-TEST_DB = "/tmp/wake_test.db"
-if os.path.exists(TEST_DB):
-    os.remove(TEST_DB)
+# tempfile вместо зашитого /tmp — на Windows такой путь не создаётся, и тест
+# падал на открытии БД до первой проверки.
+TEST_DB = os.path.join(tempfile.mkdtemp(prefix="wake-db-"), "wake.db")
 
 db.init_db(TEST_DB)
 

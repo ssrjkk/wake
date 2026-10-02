@@ -1,13 +1,14 @@
 """python3 test_predict_db.py — прямой запуск с ассертами, тот же стиль, что test_db.py"""
 
 import os
+import tempfile
 import time
 import uuid
 import predict_db as pdb
 
-TEST_DB = "/tmp/wake_predict_test.db"
-if os.path.exists(TEST_DB):
-    os.remove(TEST_DB)
+# tempfile вместо /tmp: на Windows фикстура с абсолютным unix-путём не создаётся,
+# и тест падал бы на open() ещё до первой проверки.
+TEST_DB = os.path.join(tempfile.mkdtemp(prefix="wake-predict-"), "predict.db")
 
 pdb.init_predict_db(TEST_DB)
 

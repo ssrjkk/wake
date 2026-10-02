@@ -2,10 +2,18 @@
 node_modules/
 dist/
 *.tsbuildinfo
+test-results/
+playwright-report/
+blob-report/
+.wrangler/
 
 # Backend / Python
 __pycache__/
 *.pyc
+.pytest_cache/
+backend/.coverage
+.coverage
+htmlcov/
 backend/.env
 backend/wake.db
 backend/audit.db

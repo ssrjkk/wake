@@ -3,14 +3,14 @@
 python3 test_predict_integration.py"""
 
 import os
+import tempfile
 import time
 import uuid
 import predict_db as pdb
 from predict_resolution import resolve_price_market, Comparator
 
-TEST_DB = "/tmp/wake_predict_integration.db"
-if os.path.exists(TEST_DB):
-    os.remove(TEST_DB)
+# tempfile вместо зашитого /tmp — на Windows такой путь не создаётся.
+TEST_DB = os.path.join(tempfile.mkdtemp(prefix="wake-predict-int-"), "predict.db")
 pdb.init_predict_db(TEST_DB)
 
 with pdb.connect(TEST_DB) as conn:

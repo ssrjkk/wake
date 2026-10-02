@@ -6,7 +6,7 @@ Thank you for your interest in contributing to Wake. This document explains how 
 
 ### Prerequisites
 
-- Node.js 20+ and npm
+- Node.js 24 and npm
 - Python 3.12+
 - Git
 
@@ -24,11 +24,11 @@ Frontend runs on `http://localhost:5173`.
 ```bash
 cd backend
 pip install -r requirements.txt
-python seed_demo_leaders.py
+cp .env.example .env
 uvicorn app:app --reload --port 8000
 ```
 
-Backend runs on `http://localhost:8000` with Swagger docs at `/docs`.
+Backend runs on `http://localhost:8000` with Swagger docs at `/docs`. Run it from `backend/`: the SQLite paths are relative to the working directory. There is no demo-leader seed script — register a leader with `POST /leaders` (see the README).
 
 ## Running Tests
 
@@ -45,15 +45,22 @@ python test_predict_integration.py
 python test_audit_log.py
 ```
 
-Current test count: 141 tests covering all backend modules.
+Discovery runs 210 tests. The four scripts after it are standalone programs and are not collected by `discover`, so they have to be run by name — CI does exactly this.
 
 ### Frontend
 
-TypeScript check and build must pass:
+TypeScript check, unit tests and build must pass:
 
 ```bash
 npx tsc --noEmit
+npx vitest run      # 61 tests in 8 files
 npm run build
+```
+
+End-to-end tests start their own dev server (set `PW_PORT` if 5173 is taken):
+
+```bash
+PW_PORT=5178 npx playwright test   # 6 tests, chromium
 ```
 
 ## Code Style
@@ -148,7 +155,7 @@ Open an issue for questions about contributing.
 
 ### Требования
 
-- Node.js 20+ и npm
+- Node.js 24 и npm
 - Python 3.12+
 - Git
 
@@ -166,11 +173,11 @@ npm run dev
 ```bash
 cd backend
 pip install -r requirements.txt
-python seed_demo_leaders.py
+cp .env.example .env
 uvicorn app:app --reload --port 8000
 ```
 
-Бэкенд работает на `http://localhost:8000`, Swagger документация на `/docs`.
+Бэкенд работает на `http://localhost:8000`, Swagger документация на `/docs`. Запускать нужно из `backend/`: пути к SQLite считаются от рабочей директории. Скрипта с демо-лидерами нет — лидера регистрируют через `POST /leaders` (см. README).
 
 ## Запуск тестов
 
@@ -187,15 +194,22 @@ python test_predict_integration.py
 python test_audit_log.py
 ```
 
-Текущее количество тестов: 141 тест покрывает все модули бэкенда.
+Текущее количество: `discover` прогоняет 210 тестов. Четыре скрипта после него — отдельные программы, `discover` их не собирает, поэтому их запускают по имени; ровно так же делает это CI.
 
 ### Фронтенд
 
-TypeScript проверка и сборка должны проходить:
+TypeScript-проверка, юнит-тесты и сборка должны проходить:
 
 ```bash
 npx tsc --noEmit
+npx vitest run      # 61 тест в 8 файлах
 npm run build
+```
+
+End-to-end тесты поднимают свой dev-сервер (если 5173 занят — задайте `PW_PORT`):
+
+```bash
+PW_PORT=5178 npx playwright test   # 6 тестов, chromium
 ```
 
 ## Стиль кода

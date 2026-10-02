@@ -8,11 +8,13 @@ REST-слой Wake backend. Тонкий файл: создаёт FastAPI, по�
     api/agent.py         — AI-агент + подписка
     api/portfolio.py     — cross-asset portfolio risk
     api/funding.py       — funding rate арбитраж
+    api/markets.py       — GET /markets/overview (ранжирование по 24ч-обороту)
 
 Математика и логика каждой области протестированы отдельно (см. test_*.py);
-этот слой и роутеры — только HTTP-обвязка. Статус честный: сам FastAPI
-не запускался в песочнице без сети (нет возможности pip install), поэтому
-`uvicorn app:app` стоит прогнать локально перед тем, как полагаться на него.
+этот слой и роутеры — только HTTP-обвязка. Обвязка тоже прогнана:
+`test_api_smoke.py` поднимает это приложение через FastAPI TestClient и проходит
+каждый роут, включая отказные пути (токен куратора, подпись Telegram,
+нерезолвленные рынки), так что список выше — не обещание, а проверенное состояние.
 
 Запуск:
     pip install fastapi uvicorn
@@ -30,7 +32,7 @@ if os.getenv("SENTRY_DSN"):
         dsn=os.getenv("SENTRY_DSN"),
         integrations=[StarletteIntegration(), FastApiIntegration()],
         traces_sample_rate=0.1,
-        environment=os.getenv("LIGHTER_NETWORK", "testnet"),
+        environment=os.getenv("WAKE_ENV", "local"),
     )
 
 import signal
@@ -44,7 +46,7 @@ from fastapi.responses import JSONResponse
 import db
 import predict_db as pdb
 from rate_limiter import RateLimiter
-from config import DB_PATH, AUDIT_DB_PATH, RATE_LIMIT_CAPACITY, RATE_LIMIT_REFILL, CORS_ORIGINS
+from config import DB_PATH, AUDIT_DB_PATH, CORS_ORIGINS, DRY_RUN, LIGHTER_NETWORK, RATE_LIMIT_CAPACITY, RATE_LIMIT_REFILL
 from migrate import run_migrations
 
 from api.copy_trading import router as copy_trading_router
@@ -52,6 +54,8 @@ from api.predict import router as predict_router
 from api.agent import router as agent_router
 from api.portfolio import router as portfolio_router
 from api.funding import router as funding_router
+from api.markets import router as markets_router
+from api.auth import router as auth_router
 
 db.init_db(DB_PATH)
 pdb.init_predict_db(DB_PATH)
@@ -96,8 +100,22 @@ async def rate_limit_middleware(request: Request, call_next):
     return await call_next(request)
 
 
+@app.get("/health")
+def health():
+    """
+    Разведка для фронтенда и для деплоя: жив ли бэкенд и в каком он режиме.
+    Pages отдаёт на любой неизвестный путь index.html со статусом 200, поэтому
+    проверяется именно наличие JSON здесь, а не код ответа. dry_run показан
+    намеренно: это единственный параметр, по которому видно, что инстанс не
+    отправит ордера.
+    """
+    return {"status": "ok", "network": LIGHTER_NETWORK, "dry_run": DRY_RUN}
+
+
+app.include_router(auth_router)
 app.include_router(copy_trading_router)
 app.include_router(predict_router)
 app.include_router(agent_router)
 app.include_router(portfolio_router)
 app.include_router(funding_router)
+app.include_router(markets_router)

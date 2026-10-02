@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { setNetwork, getNetwork, getOrderBooks, getCandles, getRecentTrades, getAccountByL1Address, registerFollower, listFollowsForFollower } from './lighter'
+import { BACKEND_URL } from './config'
+import { setNetwork, getNetwork, getOrderBooks, getCandles, getRecentTrades, getAccountByL1Address, getMarketOverview, registerFollower, listFollowsForFollower } from './lighter'
 
 declare global {
   interface Window {
@@ -17,7 +18,7 @@ describe('lighter', () => {
   })
 
   describe('network management', () => {
-    it('defaults to testnet', () => {
+    it('keeps the last network it was switched to', () => {
       expect(getNetwork()).toBe('testnet')
     })
 
@@ -67,6 +68,51 @@ describe('lighter', () => {
       expect(fetch).toHaveBeenCalledWith(expect.stringContaining('market_id=1'))
       expect(fetch).toHaveBeenCalledWith(expect.stringContaining('resolution=1h'))
       expect(fetch).toHaveBeenCalledWith(expect.stringContaining('count_back=50'))
+    })
+
+    it('trims the window Lighter actually returned down to the requested count', async () => {
+      // Замерено на mainnet: /candles отдаёт окно, заданное start/end_timestamp,
+      // и в ответе оказывается на 2 свечи больше, чем count_back. Оставить их —
+      // значит считать «изменение за 24 часа» по 26 свечам и показать не то число,
+      // что считает бэкенд.
+      const candles = Array.from({ length: 26 }, (_, i) => ({
+        t: 1_700_000_000_000 + i * 3_600_000, o: i, h: i, l: i, c: i, v: 1, V: 1
+      }))
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ c: candles })
+      })
+
+      const result = await getCandles(1, '1h', 24)
+      expect(result).toHaveLength(24)
+      expect(result[0].t).toBe(candles[2].t)
+      expect(result[result.length - 1].t).toBe(candles[25].t)
+    })
+  })
+
+  describe('getMarketOverview', () => {
+    it('reads the Wake backend, not Lighter', async () => {
+      const mockOverview = {
+        network: 'mainnet', ranked_by: 'quote_volume_24h', epoch_hours: 1, count: 1,
+        rows: [{ market_id: 1, symbol: 'BTC', funding_payer: 'long' }],
+        no_market: ['TON'], no_data: ['MATIC']
+      }
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve(mockOverview)
+      })
+
+      const result = await getMarketOverview()
+      expect(result).toEqual(mockOverview)
+      // Один запрос к Wake, а не 18 к Lighter: обзор считает бэкенд, и сайт с ботом
+      // расходятся по числам ровно тогда, когда фронт пересчитывает их сам.
+      expect(fetch).toHaveBeenCalledTimes(1)
+      expect(fetch).toHaveBeenCalledWith(`${BACKEND_URL}/markets/overview`, undefined)
+    })
+
+    it('throws on backend error instead of returning an empty overview', async () => {
+      global.fetch = vi.fn().mockResolvedValue({ ok: false, status: 502 })
+      await expect(getMarketOverview()).rejects.toThrow('Бэкенд Wake 502')
     })
   })
 
@@ -139,7 +185,7 @@ describe('lighter', () => {
 
       const result = await listFollowsForFollower('f123')
       expect(result).toEqual(mockFollows)
-      expect(fetch).toHaveBeenCalledWith(expect.stringContaining('/follows/by-follower/f123'))
+      expect(fetch).toHaveBeenCalledWith(expect.stringContaining('/follows/by-follower/f123'), undefined)
     })
   })
 })

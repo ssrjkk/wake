@@ -61,6 +61,21 @@ class TestRateLimiterPerKey(unittest.TestCase):
         wait = rl.retry_after("u1", now=0)
         self.assertGreater(wait, 0)
 
+    def test_nonpositive_refill_rejected_at_construction(self):
+        """refill_rate=0 давал ZeroDivisionError внутри time_until_available, т.е.
+        только на втором запросе подряд и уже в обработчике. Невалидный env должен
+        быть виден на старте, а не как 500 у юзера."""
+        with self.assertRaises(ValueError):
+            RateLimiter(capacity=40, refill_rate=0)
+        with self.assertRaises(ValueError):
+            RateLimiter(capacity=0, refill_rate=20)
+
+    def test_retry_after_is_bounded_when_refill_is_tiny(self):
+        """Retry-After уходит в int() в middleware — бесконечность там падает."""
+        rl = RateLimiter(capacity=1, refill_rate=1e-6)
+        rl.allow("u1", now=0)
+        self.assertLess(int(rl.retry_after("u1", now=0)), 10 ** 12)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

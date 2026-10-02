@@ -4,12 +4,10 @@
 в Фазе 2. Здесь — обёртка вокруг одного, твоего
 собственного ключа, чтобы браузер мог реально разместить ордер.
 
-Почему сервис, а не подпись прямо в браузере: у Lighter нет официального
-браузерного/WASM signer'а. Есть неофициальные community-обёртки с WASM-сайнером
-(видел `smartcrypto0/lighter-ts` на GitHub) — но доверять непроверенному
-стороннему пакету подписывающую логику для реальных денег — решение, которое
-не стоит принимать между делом, без ревью конкретно этого кода. Официальный,
-уже проверенный путь — Python SDK на сервере (тот же паттерн, что в
+Почему сервис, а не подпись прямо в браузере: официального браузерного/WASM
+signer'а у Lighter нет, а ставить непроверенную стороннюю сборку там, где
+подписывают реальные деньги, — решение не на бегу. Официальный, уже
+использованный путь — Python SDK на сервере (тот же паттерн, что в
 place_order_example.py).
 
 Запуск:
@@ -18,8 +16,9 @@ place_order_example.py).
     export LIGHTER_API_KEY_PRIVATE_KEY=...    # ключ с app.lighter.xyz, НЕ приватный ключ кошелька
     uvicorn signing_service:app --reload --port 8787
 
-Фронтенд (src/App.tsx) уже настроен стучаться на localhost:8787 — если сервис не
-запущен, кнопка честно покажет ошибку, а не притворится, что сработало.
+Фронтенд берёт адрес из VITE_SIGNING_SERVICE_URL (src/lib/config.ts, по умолчанию
+localhost:8787): если сервис не запущен, кнопка честно показывает ошибку, а не
+притворяется, что сработало.
 """
 
 import os
@@ -29,14 +28,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import lighter
 
-from config import CORS_ORIGINS
+from config import CORS_ORIGINS, LIGHTER_BASE_URL, LIGHTER_NETWORK
 
 app = FastAPI(title="Wake signing service — Phase 1, solo only")
 
 # Идемпотентность: client_order_index -> (tx_hash, timestamp). Если ордер с таким
 # client_order_index уже отправлен, возвращаем предыдущий tx_hash, не отправляя
 # повторно. In-memory — для Фазы 1 (соло-трейдинг). В проде заменить на таблицу
-# в базе данных с UNIQUE-约束ением на client_order_index.
+# в базе данных с UNIQUE-ограничением на client_order_index.
 _idempotency_cache: dict[int, tuple[str, float]] = {}
 _IDEMPOTENCY_TTL = 3600  # 1 час — дольше ордер не живёт, нет смысла помнить
 
@@ -47,7 +46,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-BASE_URL = os.environ.get("LIGHTER_BASE_URL", "https://testnet.zklighter.elliot.ai")  # testnet по умолчанию — фаза проверок
+# Одна сеть на весь бэкенд: ключ лидера, данные дашборда и подписанный ордер
+# должны относиться к одному Lighter, а не к двум разным.
+BASE_URL = LIGHTER_BASE_URL
 
 
 def _get_client() -> "lighter.SignerClient":
@@ -110,4 +111,6 @@ async def place_order(req: OrderRequest):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "base_url": BASE_URL}
+    # network в ответе — не косметика: фронт показывает, к какой сети уходит
+    # ордер, и расходится с сетью данных основного бэкенда только так.
+    return {"status": "ok", "network": LIGHTER_NETWORK, "base_url": BASE_URL}

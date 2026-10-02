@@ -1,5 +1,3 @@
-version: "3.8"
-
 services:
   app:
     build:
@@ -9,11 +7,19 @@ services:
       - "8000:8000"
     environment:
       - WAKE_DRY_RUN=true  # осознанно менять на false — не значение по умолчанию нигде
-      - LIGHTER_BASE_URL=https://testnet.zklighter.elliot.ai
+      # Сеть задаём именем, а не URL: config.py выводит из неё и REST, и WS-хост,
+      # поэтому листенер не может начать слушать тестнет-стрим, беря ограничения
+      # рынка из mainnet-книги. LIGHTER_BASE_URL здесь не нужен.
+      - WAKE_LIGHTER_NETWORK=mainnet
       - WAKE_DB_PATH=/app/data/wake.db
       - WAKE_AUDIT_DB_PATH=/app/data/audit.db
+      - WAKE_CORS_ORIGINS=http://localhost:5173
+      - WAKE_SIGNING_SERVICE_URL=http://signing:8787
     env_file:
-      - backend/.env  # секреты — не в этом файле, не в git (см. backend/.gitignore)
+      # Секреты — не в этом файле и не в git. Нет backend/.env — контейнер стартует
+      # с пустыми секретами и честно падает там, где они обязательны.
+      - path: backend/.env
+        required: false
     volumes:
       - wake-data:/app/data  # wake.db, audit.db персистятся между рестартами контейнера
 
@@ -24,8 +30,50 @@ services:
     command: ["uvicorn", "signing_service:app", "--host", "0.0.0.0", "--port", "8787"]
     ports:
       - "8787:8787"
+    environment:
+      - WAKE_LIGHTER_NETWORK=mainnet
+      - WAKE_DB_PATH=/app/data/wake.db
+      - WAKE_KEYSTORE_PATH=/app/data/keystore.enc
     env_file:
-      - backend/.env
+      - path: backend/.env
+        required: false
+    volumes:
+      - wake-data:/app/data
+
+  # Тот же код, что в боте на продакшн-токене. Без TELEGRAM_BOT_TOKEN процесс
+  # выходит с внятной ошибкой вместо молчаливого простоя.
+  telegram-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    command: ["python", "telegram_bot.py"]
+    environment:
+      - WAKE_BACKEND_URL=http://app:8000
+      - WAKE_LIGHTER_NETWORK=mainnet
+    env_file:
+      - path: backend/.env
+        required: false
+    depends_on:
+      - app
+
+  # Закрывает Predict-рынки по наступлении условия. Один тик без --loop =
+  # `docker compose run --rm predict-resolver`.
+  predict-resolver:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    command: ["python", "predict_resolver.py", "--loop"]
+    environment:
+      - WAKE_LIGHTER_NETWORK=mainnet
+      - WAKE_DB_PATH=/app/data/wake.db
+      - WAKE_AUDIT_DB_PATH=/app/data/audit.db
+    env_file:
+      - path: backend/.env
+        required: false
+    volumes:
+      - wake-data:/app/data
+    depends_on:
+      - app
 
 volumes:
   wake-data:

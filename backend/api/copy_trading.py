@@ -39,6 +39,10 @@ class CreateFollow(BaseModel):
     max_leverage: float = 3
 
 
+class UpdateLeaderFee(BaseModel):
+    fee_bps: int
+
+
 class SimulateMirrorRequest(BaseModel):
     leader_id: str
     market_id: int
@@ -87,6 +91,25 @@ def delete_follow(follow_id: str):
     return {"status": "deleted"}
 
 
+@router.get("/mirror-log/{follower_id}")
+def list_mirror_log(follower_id: str, limit: int = 50):
+    """Журнал решений копи-движка по подпискам этого подписчика: что mirror_engine
+    запланировал и чем это закончилось (dry_run / sent / skipped / failed) — с причиной
+    отказа. Пишет его leader_listener.py, здесь только чтение."""
+    capped = max(1, min(limit, 200))
+    with db.connect(DB_PATH) as conn:
+        rows = conn.execute(
+            "SELECT m.id, m.follow_id, m.market_id, m.side, m.base_amount, m.reduce_only, m.status, "
+            "m.reason, m.tx_hash, m.created_at, l.handle AS leader_handle "
+            "FROM mirror_log m "
+            "JOIN follows f ON f.id = m.follow_id "
+            "JOIN leaders l ON l.id = f.leader_id "
+            "WHERE f.follower_id = ? ORDER BY m.created_at DESC LIMIT ?",
+            (follower_id, capped),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
 @router.post("/followers")
 def register_follower(req: RegisterFollower):
     with db.connect(DB_PATH) as conn:
@@ -119,6 +142,31 @@ def register_leader(req: RegisterLeader):
             success=True,
         ))
     return {"leader_id": leader_id}
+
+
+@router.patch("/leaders/{leader_id}/fee")
+def update_leader_fee(leader_id: str, req: UpdateLeaderFee):
+    """Лидер меняет комиссию в любой момент. Влияет только на то, что подписчик
+    увидит в Discover после изменения, — уже созданные строки follows не пересчитываются
+    (в них нет комиссии: она хранится один раз в leaders.fee_bps)."""
+    if not 0 <= req.fee_bps <= 500:
+        raise HTTPException(status_code=422, detail="fee_bps вне диапазона 0–500 (0–5%)")
+    with db.connect(DB_PATH) as conn:
+        row = conn.execute(
+            "SELECT lighter_account_index, handle FROM leaders WHERE id = ?", (leader_id,)
+        ).fetchone()
+        if not row:
+            raise HTTPException(status_code=404, detail="Лидер не найден")
+        db.upsert_leader(conn, leader_id, row["lighter_account_index"], row["handle"], req.fee_bps)
+    with al.connect(AUDIT_DB_PATH) as audit_conn:
+        al.log_action(audit_conn, al.AuditEntry(
+            actor=f"leader:{leader_id}",
+            action="leader_fee_changed",
+            resource=f"leader:{leader_id}",
+            details={"fee_bps": req.fee_bps},
+            success=True,
+        ))
+    return {"leader_id": leader_id, "fee_bps": req.fee_bps}
 
 
 @router.post("/follows")

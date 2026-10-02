@@ -14,18 +14,28 @@ from pydantic import BaseModel
 
 from agent_memory import AgentMemoryStore
 from agent_runner import run_agent_step
+from risk_limits import UserRiskState
 from subscription import start_trial, upgrade_to_pro
 
 router = APIRouter()
 
 _agent_memories: dict = {}      # user_id -> AgentMemoryStore
 _subscriptions: dict = {}       # user_id -> Subscription
+# Состояние лимитов риска живёт столько же, сколько процесс: без него run_agent_step
+# каждый раз получает пустой UserRiskState, и дневной объём не накапливался бы вовсе.
+_risk_states: dict = {}         # user_id -> UserRiskState
 
 
 def _get_memory(user_id: str) -> AgentMemoryStore:
     if user_id not in _agent_memories:
         _agent_memories[user_id] = AgentMemoryStore()
     return _agent_memories[user_id]
+
+
+def _get_risk_state(user_id: str) -> UserRiskState:
+    if user_id not in _risk_states:
+        _risk_states[user_id] = UserRiskState(user_id=user_id)
+    return _risk_states[user_id]
 
 
 class AgentStepRequest(BaseModel):
@@ -40,13 +50,16 @@ class AgentStepRequest(BaseModel):
 @router.post("/agent/step")
 def agent_step(req: AgentStepRequest):
     memory = _get_memory(req.user_id)
+    risk_state = _get_risk_state(req.user_id)
     decision, execution = run_agent_step(
-        memory, req.market_id, req.recent_prices, req.size_decimals, req.price_decimals, req.base_size_usd
+        memory, req.market_id, req.recent_prices, req.size_decimals, req.price_decimals,
+        req.base_size_usd, risk_state=risk_state,
     )
     return {
         "action": decision.action, "confidence": decision.confidence,
         "size_usd": decision.size_usd, "reasoning": decision.reasoning,
         "execution": execution,
+        "volume_today_usd": risk_state.volume_today_usd,
     }
 
 
@@ -58,6 +71,7 @@ def agent_memory_view(user_id: str):
         "open_trades": [t.__dict__ for t in memory.open_trades()],
         "closed_trades": [t.__dict__ for t in memory.closed_trades()],
         "win_rate": memory.win_rate(),
+        "volume_today_usd": _get_risk_state(user_id).volume_today_usd,
     }
 
 

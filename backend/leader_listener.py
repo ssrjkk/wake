@@ -11,23 +11,27 @@ apidocs.lighter.xyz/docs/websocket-reference — включая разворот
   - Каналы и их точная форма: account_all_positions/{ACCOUNT_ID} для позиций,
     user_stats/{ACCOUNT_ID} для portfolio_value как equity — обе схемы взяты из
     официальной документации, не угаданы
-  - WS_URL — wss://testnet.zklighter.elliot.ai/stream, подтверждено официальными доками
+  - WS_URL — форма wss://{mainnet|testnet}.zklighter.elliot.ai/stream подтверждена
+    официальными доками; хост берётся из WAKE_LIGHTER_NETWORK, а не из локального
+    дефолта, чтобы данные и ордера относились к одной сети
   - db.active_follows_for_leader() — протестировано в test_db.py
   - compute_mirror_plan() — 10/10 тестов зелёные
   - LeaderPositionTracker — 9/9 тестов зелёные, реальная схема сообщений
-  - DRY_RUN=True и тестнет — по умолчанию, это фаза проверок, не реальных денег
+  - DRY_RUN=True по умолчанию: ордера не уходят, пока это явно не выключено
 
 Осознанное упрощение, не устранённая неопределённость:
   - avg_entry_price из снапшота позиции — средняя цена по всей позиции, не цена
     именно последнего изменения. Разумное приближение для приращения, но не то же
     самое, что реальная цена конкретного филла. Точнее — слушать account_all_trades
     отдельно; не сделано здесь осознанно, чтобы не множить недоделанное в одном файле.
-  - constraints (min_base_amount, size_decimals) — захардкожены под BTC/ETH-подобный
-    рынок ниже, реально нужно тянуть из getOrderBooks() по market_id динамически.
+  - constraints (min_base_amount, size_decimals) тянутся из реальной order book по
+    market_id события; рынка, которого нет в полученной книге, событие логируется
+    как skip и не исполняется. Книга берётся один раз на старте процесса — новые
+    рынки Lighter потребуют перезапуска листенера.
 
-Запуск (тестнет):
+Запуск:
     pip install lighter-sdk websockets
-    python3 leader_listener.py --leader-id <id из базы> --account-index <lighter account лидера на тестнете>
+    python3 leader_listener.py --leader-id <id из базы> --account-index <lighter account лидера>
 """
 
 import argparse
@@ -40,19 +44,22 @@ import db
 import audit_log as al
 from encrypted_key_store import EncryptedKeyStore
 from mirror_engine import LeaderEvent, FollowerConfig, MarketConstraints, Side, compute_mirror_plan
-from config import DB_PATH, AUDIT_DB_PATH
+from config import DB_PATH, AUDIT_DB_PATH, DRY_RUN, LIGHTER_BASE_URL, LIGHTER_WS_URL
 
 logger = logging.getLogger("wake.leader_listener")
 
-DRY_RUN = os.environ.get("WAKE_DRY_RUN", "true").lower() != "false"
-LIGHTER_HTTP_URL = os.environ.get("LIGHTER_BASE_URL", "https://testnet.zklighter.elliot.ai")  # testnet по умолчанию
+# Оба адреса — из config, т.е. из одной сети. Раздельные env-дефолты давали
+# листенер, который слушает тестнет-стрим, читая ограничения из mainnet-книги.
+LIGHTER_HTTP_URL = LIGHTER_BASE_URL
+WS_URL = LIGHTER_WS_URL
 
-# Подтверждено (apidocs.lighter.xyz websocket-reference): wss://{mainnet|testnet}.zklighter.elliot.ai/stream
-WS_URL = os.environ.get("LIGHTER_WS_URL", "wss://testnet.zklighter.elliot.ai/stream")
 
-
-async def handle_leader_event(leader_id: str, raw_event: dict, constraints: MarketConstraints):
-    """raw_event — предполагаемая форма, см. предупреждение в докстринге файла."""
+async def handle_leader_event(leader_id: str, raw_event: dict, constraints: MarketConstraints | None):
+    """raw_event — форма из leader_position_tracker.py, проверенная тестами против
+    официальной схемы сообщений. constraints=None означает, что рынка нет в
+    полученной книге: посчитать base_amount можно только с шагом и минимумом
+    конкретного рынка, поэтому такой событие не исполняется, а логируется как
+    skip — молча угаданный размер зеркального ордера стоит реальных денег."""
     event = LeaderEvent(
         market_id=raw_event["market_id"],
         side=Side.LONG if raw_event["side"] == "long" else Side.SHORT,
@@ -65,6 +72,7 @@ async def handle_leader_event(leader_id: str, raw_event: dict, constraints: Mark
 
     with db.connect(DB_PATH) as conn:
         rows = db.active_follows_for_leader(conn, leader_id)
+        by_follower = {r["follower_id"]: r for r in rows}
         followers = [
             FollowerConfig(
                 follower_id=r["follower_id"],
@@ -76,15 +84,29 @@ async def handle_leader_event(leader_id: str, raw_event: dict, constraints: Mark
             for r in rows
         ]
 
+        if constraints is None:
+            reason = f"market_constraints_unavailable:{event.market_id}"
+            logger.warning("лидер %s: рынок %s не в книге Lighter — фолловеры не зеркалены",
+                           leader_id, event.market_id)
+            for r in rows:
+                db.log_mirror_result(conn, str(uuid.uuid4()), r["follow_id"], event.market_id,
+                                     event.side.value, 0, False, "skipped", reason)
+            return
+
         plan = compute_mirror_plan(event, followers, constraints)
 
         for skipped in plan.skipped:
             logger.info("skip follower=%s reason=%s", skipped.follower_id, skipped.reason)
-            db.log_mirror_result(conn, str(uuid.uuid4()), skipped.follower_id, event.market_id,
-                                  event.side.value, 0, event.is_increase is False, "skipped", skipped.reason)
+            # mirror_log.follow_id ссылается на follows(id), а SkippedFollower несёт
+            # follower_id подписчика. Записать его напрямую — IntegrityError, и он
+            # прилетает на самом обычном пути (skip возникает, когда аллокации не
+            # хватает на минимальный ордер), т.е. вешает листенер посреди стрима.
+            db.log_mirror_result(conn, str(uuid.uuid4()), by_follower[skipped.follower_id]["follow_id"],
+                                  event.market_id, event.side.value, 0, event.is_increase is False,
+                                  "skipped", skipped.reason)
 
         for order in plan.orders:
-            follow_row = next(r for r in rows if r["follower_id"] == order.follower_id)
+            follow_row = by_follower[order.follower_id]
             if DRY_RUN:
                 logger.info("dry_run would place %s", order)
                 db.log_mirror_result(conn, str(uuid.uuid4()), follow_row["follow_id"], order.market_id,
@@ -137,25 +159,42 @@ async def handle_leader_event(leader_id: str, raw_event: dict, constraints: Mark
             )
 
 
+def build_constraints(books: list) -> dict:
+    """market_id -> MarketConstraints из реальной книги Lighter.
+
+    Ключ — market_id, а не «BTC-шаблон на весь тикер»: у рынков разные
+    supported_size_decimals и min_base_amount, один шаблон дал бы неверный
+    base_amount на всём, кроме BTC. Значения в ответе API — строки
+    (min_base_amount="0.00007"), поэтому явные float()/int()."""
+    out = {}
+    for b in books:
+        if b.get("status") != "active":
+            continue
+        try:
+            out[int(b["market_id"])] = MarketConstraints(
+                min_base_amount=float(b["min_base_amount"]),
+                size_decimals=int(b["supported_size_decimals"]),
+            )
+        except (KeyError, TypeError, ValueError):
+            continue  # рынок без полей ограничения не должен ронять весь список
+    return out
+
+
 async def main(leader_id: str, leader_account_index: int):
     import json
     import websockets  # pip install websockets
     from leader_position_tracker import LeaderPositionTracker
     from lighter_rest import get_order_books
 
-    # constraints тянуть реально из getOrderBooks() по рынку, не хардкодить
     try:
-        books = get_order_books()
-        btc = next((m for m in books if m["symbol"] == "BTC"), None)
-        if btc:
-            constraints = MarketConstraints(
-                min_base_amount=float(btc.get("min_base_amount", 0.001)),
-                size_decimals=int(btc.get("supported_size_decimals", 3)),
-            )
-        else:
-            constraints = MarketConstraints(min_base_amount=0.001, size_decimals=3)
-    except Exception:
-        constraints = MarketConstraints(min_base_amount=0.001, size_decimals=3)
+        constraints_by_market = build_constraints(get_order_books())
+        logger.info("ограничения получены по %d активным рынкам", len(constraints_by_market))
+    except Exception as e:
+        # Без книги считать размер нельзя ни на одном рынке. Не падаем: листенер
+        # продолжает видеть события и честно пишет skip, вместо того чтобы
+        # уходить с молчаливой дырой в зеркалении.
+        constraints_by_market = {}
+        logger.error("order books не получены (%s) — ордера исполняться не будут", e)
 
     tracker = LeaderPositionTracker()
 
@@ -176,7 +215,8 @@ async def main(leader_id: str, leader_account_index: int):
 
             if msg_type in ("update/account_all_positions", "subscribed/account_all_positions"):
                 for raw_event in tracker.apply_position_update(msg):
-                    await handle_leader_event(leader_id, raw_event, constraints)
+                    await handle_leader_event(leader_id, raw_event,
+                                              constraints_by_market.get(raw_event["market_id"]))
                 continue
 
             # Прочие типы сообщений (heartbeat и т.п.) — игнорируем осознанно, не молча.

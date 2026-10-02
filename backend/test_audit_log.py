@@ -1,11 +1,11 @@
 """python3 test_audit_log.py"""
 
 import os
+import tempfile
 import audit_log as al
 
-TEST_DB = "/tmp/wake_audit_test.db"
-if os.path.exists(TEST_DB):
-    os.remove(TEST_DB)
+# tempfile вместо зашитого /tmp — на Windows такой путь не создаётся.
+TEST_DB = os.path.join(tempfile.mkdtemp(prefix="wake-audit-"), "audit.db")
 
 al.init_audit_db(TEST_DB)
 
