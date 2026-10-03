@@ -1,10 +1,10 @@
 import { useState, useEffect, useMemo } from "react";
-import { TrendingUp, TrendingDown, Radio } from "lucide-react";
+import { TrendingUp, TrendingDown, Radio, Search } from "lucide-react";
 import { AreaChart, Area, ResponsiveContainer } from "recharts";
-import { getCandles, getRecentTrades, placeOrderViaSigningService, type LighterNetwork, type OrderBook, type Candle, type Trade } from "../lib/lighter";
+import { getCandles, getRecentTrades, getFundingRates, placeOrderViaSigningService, type LighterNetwork, type OrderBook, type Candle, type Trade } from "../lib/lighter";
 import { SIGNING_SERVICE_URL } from "../lib/config";
 import { errorText } from "../lib/backend";
-import { fmt } from "./utils";
+import { fmt, usd } from "./utils";
 import { Ripple, Skeleton } from "./ui";
 
 interface TerminalProps {
@@ -25,9 +25,17 @@ export function Terminal({ asset, setAsset, markets, dataError, setToast, isCopy
   const [side, setSide] = useState<"long" | "short">("long");
   const [size, setSize] = useState(1000);
   const [leverage, setLeverage] = useState(5);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [fundingRate, setFundingRate] = useState<number | null>(null);
 
   const currentMarket = markets.find((m) => m.symbol === asset);
   const isSpot = currentMarket?.market_type === "spot";
+
+  const filteredMarkets = useMemo(() => {
+    if (!searchQuery.trim()) return markets;
+    const q = searchQuery.toUpperCase();
+    return markets.filter((m) => m.symbol.toUpperCase().includes(q));
+  }, [markets, searchQuery]);
 
   useEffect(() => {
     if (!currentMarket) return;
@@ -53,11 +61,33 @@ export function Terminal({ asset, setAsset, markets, dataError, setToast, isCopy
     return () => clearInterval(id);
   }, [currentMarket?.market_id]);
 
+  useEffect(() => {
+    if (!currentMarket) {
+      setFundingRate(null);
+      return;
+    }
+    getFundingRates()
+      .then((rows) => {
+        const row = rows.find((r) => r.market_id === currentMarket.market_id && r.exchange === "lighter");
+        setFundingRate(row?.rate ?? null);
+      })
+      .catch(() => setFundingRate(null));
+  }, [currentMarket?.market_id]);
+
   const lastCandle = candles[candles.length - 1];
   const firstCandle = candles[0];
   const price = lastCandle?.c ?? null;
   const change = lastCandle && firstCandle ? ((lastCandle.c - firstCandle.o) / firstCandle.o) * 100 : null;
   const chartData = candles.map((c, i) => ({ i, v: c.c }));
+
+  const stats24h = useMemo(() => {
+    if (candles.length < 2) return null;
+    const last24 = candles.slice(-24);
+    const high = Math.max(...last24.map((c) => c.h));
+    const low = Math.min(...last24.map((c) => c.l));
+    const volume = last24.reduce((s, c) => s + c.V, 0);
+    return { high, low, volume };
+  }, [candles]);
 
   const liqPrice = useMemo(() => {
     if (price == null) return null;
@@ -99,6 +129,33 @@ export function Terminal({ asset, setAsset, markets, dataError, setToast, isCopy
       )}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
         <div className="lg:col-span-6 bg-slate-900 border border-slate-800 rounded-2xl p-4">
+          <div className="relative mb-3">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Поиск по символу (BTC, ETH, SOL…)"
+              className="w-full bg-slate-800 border border-slate-700 rounded-xl pl-9 pr-3 py-2 text-sm text-white placeholder:text-slate-500 outline-none focus:border-cyan-500 transition-colors"
+            />
+            {searchQuery && filteredMarkets.length > 0 && (
+              <div className="absolute top-full left-0 right-0 mt-1 bg-slate-800 border border-slate-700 rounded-xl shadow-lg max-h-60 overflow-auto z-10">
+                {filteredMarkets.slice(0, 8).map((m) => (
+                  <button
+                    key={m.market_id}
+                    onClick={() => {
+                      setAsset(m.symbol);
+                      setSearchQuery("");
+                    }}
+                    className="w-full text-left px-3 py-2 text-sm text-slate-200 hover:bg-slate-700 transition-colors"
+                  >
+                    {m.symbol}
+                    <span className="text-slate-500 ml-2 text-xs">{m.market_type === "perp" ? "PERP" : "SPOT"}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
           <div className="flex items-center justify-between mb-3">
             <button
               onClick={() => setMarketPickerOpen(true)}
@@ -122,6 +179,28 @@ export function Terminal({ asset, setAsset, markets, dataError, setToast, isCopy
             <div className="text-3xl font-mono font-semibold text-white mb-2">${fmt(price, currentMarket?.supported_price_decimals ?? 2)}</div>
           ) : (
             <Skeleton className="h-9 w-40 mb-2" />
+          )}
+          {stats24h && (
+            <div className="grid grid-cols-3 gap-2 mb-2 text-xs">
+              <div>
+                <div className="text-slate-500">24h High</div>
+                <div className="font-mono text-slate-300">${fmt(stats24h.high, currentMarket?.supported_price_decimals ?? 2)}</div>
+              </div>
+              <div>
+                <div className="text-slate-500">24h Low</div>
+                <div className="font-mono text-slate-300">${fmt(stats24h.low, currentMarket?.supported_price_decimals ?? 2)}</div>
+              </div>
+              <div>
+                <div className="text-slate-500">24h Vol</div>
+                <div className="font-mono text-slate-300">{usd(stats24h.volume, 0)}</div>
+              </div>
+            </div>
+          )}
+          {fundingRate != null && (
+            <div className="text-xs text-slate-500 mb-2">
+              Funding: <span className="font-mono text-slate-300">{(fundingRate * 100).toFixed(4)}%/ч</span>
+              <span className="text-slate-600 ml-1">· {((fundingRate * 24 * 365) * 100).toFixed(1)}% годовых</span>
+            </div>
           )}
           <div className="h-48">
             {chartData.length > 1 ? (
