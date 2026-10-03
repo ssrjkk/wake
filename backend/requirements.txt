@@ -4,8 +4,17 @@
 lighter-sdk
 fastapi
 pydantic
+pydantic-settings
 uvicorn
 websockets
+
+# Database — PostgreSQL (async)
+sqlalchemy[asyncio]>=2.0
+asyncpg
+alembic
+
+# Cache & Rate limiting
+redis>=5.0
 
 # HTTP client (telegram_bot.py)
 httpx
