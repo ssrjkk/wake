@@ -321,7 +321,7 @@ export default function App() {
         <div className="mb-6">
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-3">
-              <div className="w-9 h-9 rounded-lg bg-[#ff6b35] flex items-center justify-center">
+              <div className="w-9 h-9 rounded-lg bg-[#ff6b35] flex items-center justify-center glow-logo">
                 <Zap className="w-5 h-5 text-[#0a0a0a]" strokeWidth={2.5} />
               </div>
               <span className="text-white font-bold tracking-tight text-xl" style={{ fontFamily: "Space Grotesk" }}>Wake</span>
@@ -491,7 +491,7 @@ export default function App() {
           </div>
 
           <div className="relative -mx-6 px-6 sm:mx-0 sm:px-0">
-            <nav className="flex items-center gap-1 overflow-x-auto pb-0.5">
+            <nav className="glass-panel flex items-center gap-1 overflow-x-auto pb-0.5 rounded-lg px-2 py-1">
               <NavTab active={tab === "dashboard"} onClick={() => setTab("dashboard")} label="Обзор" live />
               <NavTab active={tab === "terminal"} onClick={() => setTab("terminal")} label="Терминал" live />
               <NavTab active={tab === "discover"} onClick={() => setTab("discover")} label="Discover" />
@@ -506,7 +506,7 @@ export default function App() {
         </div>
 
         {backendChecked && !backend && (
-          <div className="mb-5 bg-[#1a1a1a] border border-[#2a2a2a] rounded-lg px-4 py-3.5 animate-fade-in">
+          <div className="mb-5 terminal-panel rounded-lg px-4 py-3.5 animate-fade-in">
             <div className="flex items-start gap-3">
               <ServerOff className="w-4 h-4 text-[#ff6b35] shrink-0 mt-0.5" />
               <div className="flex-1">

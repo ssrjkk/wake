@@ -21,15 +21,15 @@ export function NavTab({ active, onClick, label, live }: { active: boolean; onCl
     <button
       onClick={onClick}
       aria-current={active ? "page" : undefined}
-      className={`flex items-center gap-1.5 px-4 py-2 rounded text-sm font-medium transition-all duration-200 ${
+      className={`relative flex items-center gap-1.5 px-4 py-2.5 text-sm font-medium transition-all duration-200 ${
         active
-          ? "bg-[#1a1a1a] text-[#ff6b35] border border-[#2a2a2a]"
-          : "text-[#888] hover:text-[#ccc] hover:bg-[#141414]"
+          ? "nav-tab-active text-[#ff6b35]"
+          : "text-[#888] hover:text-[#ccc]"
       }`}
     >
       {label}
       {live && (
-        <span className="w-1.5 h-1.5 rounded-full bg-[#10b981] animate-pulse" title="Живые данные" />
+        <span className={`w-1.5 h-1.5 rounded-full ${active ? "bg-[#ff6b35] live-indicator" : "bg-[#10b981] animate-pulse"}`} title="Живые данные" />
       )}
     </button>
   );

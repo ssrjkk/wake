@@ -86,16 +86,16 @@ export function Dashboard({ setTab, setAsset }: DashboardProps) {
       <div className="flex items-start justify-between gap-4">
         <div>
           <h2 className="text-white font-semibold text-lg">Рынки Lighter</h2>
-          <p className="text-slate-500 text-sm mt-1 max-w-3xl">
+          <p className="text-[#666] text-sm mt-1 max-w-3xl">
             Перпы, отсортированные по фактическому $-обороту за 24 часа: оборот — сумма 24 часовых свечей по каждому
             рынку, а не поле из книги (его в /orderBooks нет). Те же строки и тот же метод, что печатает{" "}
-            <span className="text-slate-300 font-mono text-xs">/markets</span> в Telegram-боте; считать их дважды в
+            <span className="text-[#888] font-mono text-xs">/markets</span> в Telegram-боте; считать их дважды в
             браузере смысла нет — цифры разошлись бы с ботом.
           </p>
         </div>
         <button
           onClick={() => setNonce((n) => n + 1)}
-          className="shrink-0 flex items-center gap-1.5 text-xs text-slate-400 hover:text-slate-200 border border-slate-800 rounded-full px-3 py-1.5 transition-colors"
+          className="shrink-0 flex items-center gap-1.5 text-xs text-[#888] hover:text-[#ccc] border border-[#2a2a2a] hover:border-[#3a3a3a] rounded-full px-3 py-1.5 transition-colors"
           title="Обновить сейчас"
         >
           <RefreshCw className="w-3.5 h-3.5" /> обновить
@@ -103,7 +103,7 @@ export function Dashboard({ setTab, setAsset }: DashboardProps) {
       </div>
 
       {marketsError && (
-        <div className="bg-slate-900 border border-amber-800 rounded-2xl p-3 flex items-start gap-2 text-xs text-amber-300">
+        <div className="terminal-panel rounded-lg p-3 flex items-start gap-2 text-xs text-[#ff6b35]">
           <TriangleAlert className="w-4 h-4 shrink-0 mt-0.5" />
           <span>
             Обзор рынка не пришёл — {marketsError} Свечевые запросы к Lighter делает бэкенд Wake, так что к самому Lighter
@@ -113,7 +113,7 @@ export function Dashboard({ setTab, setAsset }: DashboardProps) {
       )}
 
       {!overview && !marketsError ? (
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3">
+        <div className="terminal-panel rounded-lg p-4 space-y-3">
           {[0, 1, 2, 3, 4, 5].map((i) => (
             <Skeleton key={i} className="h-5 w-full" />
           ))}
@@ -123,32 +123,32 @@ export function Dashboard({ setTab, setAsset }: DashboardProps) {
         // в баннере выше, а «рядов 0» под ним читался бы как ответ про рынок.
         null
       ) : rows.length === 0 ? (
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl py-14 text-center">
-          <p className="text-slate-400 text-sm">Ни один рынок не собрался из живых данных</p>
-          <p className="text-slate-600 text-xs mt-1">
+        <div className="terminal-panel rounded-lg py-14 text-center">
+          <p className="text-[#888] text-sm">Ни один рынок не собрался из живых данных</p>
+          <p className="text-[#666] text-xs mt-1">
             Это не пустой список по умолчанию: бэкенд вернул ответ без рядов — детали в no_market / no_data ниже.
           </p>
         </div>
       ) : (
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl overflow-x-auto">
+        <div className="terminal-panel rounded-lg overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="text-left text-xs text-slate-500 border-b border-slate-800">
-                <th className="px-4 py-2 font-normal">#</th>
-                <th className="px-2 py-2 font-normal">Актив</th>
-                <th className="px-2 py-2 font-normal text-right">Цена</th>
-                <th className="px-2 py-2 font-normal text-right">24ч</th>
-                <th className="px-2 py-2 font-normal text-right">Оборот 24ч</th>
-                <th className="px-2 py-2 font-normal text-right" title="Ставка за часовую эпоху funding">
+              <tr className="text-left text-xs text-[#666] border-b border-[#2a2a2a]">
+                <th className="px-4 py-2.5 font-normal">#</th>
+                <th className="px-2 py-2.5 font-normal">Актив</th>
+                <th className="px-2 py-2.5 font-normal text-right">Цена</th>
+                <th className="px-2 py-2.5 font-normal text-right">24ч</th>
+                <th className="px-2 py-2.5 font-normal text-right">Оборот 24ч</th>
+                <th className="px-2 py-2.5 font-normal text-right" title="Ставка за часовую эпоху funding">
                   Funding, %/ч
                 </th>
-                <th className="px-2 py-2 font-normal text-right">Годовая</th>
-                <th className="px-2 py-2 font-normal">Платят</th>
-                <th className="px-2 py-2 font-normal text-right" title="Открытый интерес в единицах актива, не в долларах">
+                <th className="px-2 py-2.5 font-normal text-right">Годовая</th>
+                <th className="px-2 py-2.5 font-normal">Платят</th>
+                <th className="px-2 py-2.5 font-normal text-right" title="Открытый интерес в единицах актива, не в долларах">
                   OI, баз.
                 </th>
-                <th className="px-2 py-2 font-normal text-right">Мин. лот</th>
-                <th className="px-2 py-2"></th>
+                <th className="px-2 py-2.5 font-normal text-right">Мин. лот</th>
+                <th className="px-2 py-2.5"></th>
               </tr>
             </thead>
             <tbody>
@@ -156,7 +156,7 @@ export function Dashboard({ setTab, setAsset }: DashboardProps) {
                 <tr
                   key={r.market_id}
                   onClick={() => openMarket(r)}
-                  className="border-b border-slate-800/60 last:border-0 hover:bg-slate-800/40 cursor-pointer transition-colors"
+                  className="border-b border-[#2a2a2a]/60 last:border-0 hover:bg-[#ff6b35]/5 cursor-pointer transition-colors"
                 >
                   <td className="px-4 py-2 text-slate-600 font-mono text-xs">{i + 1}</td>
                   <td className="px-2 py-2 text-slate-100 font-medium">{r.symbol}</td>
