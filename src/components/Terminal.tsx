@@ -114,7 +114,7 @@ export function Terminal({ asset, setAsset, markets, dataError, setToast, isCopy
   return (
     <div className="space-y-3">
       {dataError && (
-        <div className="flex items-start gap-3 bg-[#1a1a1a] border border-[#2a2a2a] rounded-lg p-4">
+        <div className="flex items-start gap-3 terminal-panel rounded-lg p-4">
           <div className="w-7 h-7 rounded bg-[#141414] border border-[#2a2a2a] flex items-center justify-center shrink-0 text-[#ff6b35] text-sm font-bold">
             !
           </div>
@@ -128,7 +128,7 @@ export function Terminal({ asset, setAsset, markets, dataError, setToast, isCopy
         </div>
       )}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-3">
-        <div className="lg:col-span-6 bg-[#1a1a1a] border border-[#2a2a2a] rounded-lg p-4">
+        <div className="lg:col-span-6 terminal-panel rounded-lg p-4">
           <div className="relative mb-4">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-[#666]" />
             <input
@@ -176,9 +176,9 @@ export function Terminal({ asset, setAsset, markets, dataError, setToast, isCopy
             )}
           </div>
           {price != null ? (
-            <div className="price-display text-5xl mb-3">${fmt(price, currentMarket?.supported_price_decimals ?? 2)}</div>
+            <div className="price-display text-6xl mb-3 tracking-tight">${fmt(price, currentMarket?.supported_price_decimals ?? 2)}</div>
           ) : (
-            <Skeleton className="h-12 w-56 mb-3 bg-[#141414]" />
+            <Skeleton className="h-14 w-64 mb-3 bg-[#141414]" />
           )}
           {stats24h && (
             <div className="grid grid-cols-3 gap-3 mb-3 pb-3 border-b border-[#2a2a2a]">
@@ -223,10 +223,10 @@ export function Terminal({ asset, setAsset, markets, dataError, setToast, isCopy
           <div className="text-xs text-[#666] mt-2 font-mono">1h · 48 точек · 20с</div>
         </div>
 
-        <div className="lg:col-span-3 bg-[#1a1a1a] border border-[#2a2a2a] rounded-lg p-4">
+        <div className="lg:col-span-3 terminal-panel rounded-lg p-4">
           <div className="flex items-center justify-between mb-3">
             <span className="stat-label">Лента сделок</span>
-            <span className={`w-1.5 h-1.5 rounded-full ${trades.length ? "bg-positive" : "bg-[#333]"}`} />
+            <span className={`w-1.5 h-1.5 rounded-full live-indicator ${trades.length ? "bg-positive" : "bg-[#333]"}`} />
           </div>
           {trades.length === 0 ? (
             <div className="space-y-2">
@@ -251,33 +251,33 @@ export function Terminal({ asset, setAsset, markets, dataError, setToast, isCopy
           <div className="text-xs text-[#666] mt-3 font-mono">4с</div>
         </div>
 
-        <div className="lg:col-span-3 bg-[#1a1a1a] border border-[#2a2a2a] rounded-lg p-4 space-y-3">
+        <div className="lg:col-span-3 terminal-panel rounded-lg p-4 space-y-3">
           {isSpot ? (
-            <div className="flex bg-[#141414] rounded p-1 border border-[#2a2a2a]">
+            <div className="flex bg-[#141414] rounded-lg p-1 border border-[#2a2a2a]">
               <button
                 onClick={() => setSide("long")}
-                className={`btn-action flex-1 py-2 rounded text-sm ${side === "long" ? "bg-positive text-[#0a0a0a]" : "text-[#888]"}`}
+                className={`btn-action flex-1 py-2.5 rounded-md text-sm transition-all ${side === "long" ? "bg-positive text-[#0a0a0a] shadow-lg shadow-emerald-500/20" : "text-[#888] hover:text-[#ccc]"}`}
               >
                 Buy
               </button>
               <button
                 onClick={() => setSide("short")}
-                className={`btn-action flex-1 py-2 rounded text-sm ${side === "short" ? "bg-negative text-[#0a0a0a]" : "text-[#888]"}`}
+                className={`btn-action flex-1 py-2.5 rounded-md text-sm transition-all ${side === "short" ? "bg-negative text-[#0a0a0a] shadow-lg shadow-red-500/20" : "text-[#888] hover:text-[#ccc]"}`}
               >
                 Sell
               </button>
             </div>
           ) : (
-            <div className="flex bg-[#141414] rounded p-1 border border-[#2a2a2a]">
+            <div className="flex bg-[#141414] rounded-lg p-1 border border-[#2a2a2a]">
               <button
                 onClick={() => setSide("long")}
-                className={`btn-action flex-1 py-2 rounded text-sm ${side === "long" ? "bg-positive text-[#0a0a0a]" : "text-[#888]"}`}
+                className={`btn-action flex-1 py-2.5 rounded-md text-sm transition-all ${side === "long" ? "bg-positive text-[#0a0a0a] shadow-lg shadow-emerald-500/20" : "text-[#888] hover:text-[#ccc]"}`}
               >
                 Long
               </button>
               <button
                 onClick={() => setSide("short")}
-                className={`btn-action flex-1 py-2 rounded text-sm ${side === "short" ? "bg-negative text-[#0a0a0a]" : "text-[#888]"}`}
+                className={`btn-action flex-1 py-2.5 rounded-md text-sm transition-all ${side === "short" ? "bg-negative text-[#0a0a0a] shadow-lg shadow-red-500/20" : "text-[#888] hover:text-[#ccc]"}`}
               >
                 Short
               </button>
@@ -320,7 +320,7 @@ export function Terminal({ asset, setAsset, markets, dataError, setToast, isCopy
 
           <button
             onClick={placeOrder}
-            className={`btn-action w-full py-2.5 rounded text-sm ${side === "long" ? "bg-positive hover:bg-emerald-400 text-[#0a0a0a]" : "bg-negative hover:bg-red-400 text-[#0a0a0a]"}`}
+            className={`btn-action w-full py-3 rounded-lg text-sm font-semibold transition-all ${side === "long" ? "bg-positive hover:bg-emerald-400 text-[#0a0a0a] shadow-lg shadow-emerald-500/30 hover:shadow-emerald-400/40" : "bg-negative hover:bg-red-400 text-[#0a0a0a] shadow-lg shadow-red-500/30 hover:shadow-red-400/40"}`}
           >
             {isSpot ? (side === "long" ? "Buy" : "Sell") : side === "long" ? "Открыть Long" : "Открыть Short"}
           </button>

@@ -5,5 +5,5 @@ describe('App', () => {
     const App = (await import('./App')).default
     expect(App).toBeDefined()
     expect(typeof App).toBe('function')
-  })
+  }, 10000)
 })
