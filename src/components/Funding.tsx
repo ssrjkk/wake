@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { RefreshCw, Percent, ArrowUpRight } from "lucide-react";
 import { getFundingRates, getCandles, type FundingRateRow, type OrderBook } from "../lib/lighter";
+import { getMarkets as getArcusMarkets, type ArcusMarket } from "../lib/arcus";
 import { backendJson, errorText } from "../lib/backend";
 import { fmt } from "./utils";
 
@@ -26,6 +27,7 @@ interface FundingProps {
 export function Funding({ markets, setToast }: FundingProps) {
   const [rates, setRates] = useState<FundingRateRow[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [arcusPerps, setArcusPerps] = useState<ArcusMarket[]>([]);
   const [onlyDeltaNeutral, setOnlyDeltaNeutral] = useState(false);
   const [selected, setSelected] = useState<Row | null>(null);
   const [capital, setCapital] = useState(2000);
@@ -46,6 +48,12 @@ export function Funding({ markets, setToast }: FundingProps) {
     load();
     const id = setInterval(load, 60000);
     return () => clearInterval(id);
+  }, []);
+
+  useEffect(() => {
+    getArcusMarkets()
+      .then((m) => setArcusPerps(m.filter((x) => x.marketId.includes("PERP"))))
+      .catch(() => setArcusPerps([]));
   }, []);
 
   const rows = useMemo<Row[]>(() => {
@@ -201,6 +209,7 @@ export function Funding({ markets, setToast }: FundingProps) {
               <th className="px-2 py-2 font-normal text-right">Binance</th>
               <th className="px-2 py-2 font-normal text-right">Bybit</th>
               <th className="px-2 py-2 font-normal text-right">Hyperliquid</th>
+              <th className="px-2 py-2 font-normal text-right">Arcus</th>
               <th className="px-2 py-2 font-normal">Спот-нога</th>
               <th className="px-2 py-2"></th>
             </tr>
@@ -223,6 +232,13 @@ export function Funding({ markets, setToast }: FundingProps) {
                       {ref(exch) != null ? `${(ref(exch)! * 100).toFixed(4)}` : "—"}
                     </td>
                   ))}
+                  <td className="px-2 py-2 text-right">
+                    {arcusPerps.some((p) => p.baseAsset === r.symbol) ? (
+                      <span className="text-xs text-[#10b981]">есть перп</span>
+                    ) : (
+                      <span className="text-xs text-slate-700">—</span>
+                    )}
+                  </td>
                   <td className="px-2 py-2">
                     {r.spot ? (
                       <span className="text-xs text-cyan-400">{r.spot.symbol}</span>
@@ -244,7 +260,7 @@ export function Funding({ markets, setToast }: FundingProps) {
             })}
             {rates != null && visible.length === 0 && (
               <tr>
-                <td colSpan={8} className="px-4 py-8 text-center text-slate-600 text-sm">
+                <td colSpan={9} className="px-4 py-8 text-center text-slate-600 text-sm">
                   Под текущий порог ({minApy}% APR) ничего не подходит — понизь порог или сними фильтр по спот-ноге.
                 </td>
               </tr>
@@ -252,7 +268,7 @@ export function Funding({ markets, setToast }: FundingProps) {
             {rates == null &&
               [0, 1, 2, 3, 4].map((i) => (
                 <tr key={i} className="border-b border-slate-800/60">
-                  <td colSpan={8} className="px-4 py-2">
+                  <td colSpan={9} className="px-4 py-2">
                     <div className="h-4 bg-slate-800 rounded animate-pulse" />
                   </td>
                 </tr>

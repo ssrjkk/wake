@@ -325,12 +325,22 @@ export default function App() {
                 <Zap className="w-5 h-5 text-[#0a0a0a]" strokeWidth={2.5} />
               </div>
               <span className="text-white font-bold tracking-tight text-xl" style={{ fontFamily: "Space Grotesk" }}>Wake</span>
-              <div className="flex rounded border border-[#2a2a2a] overflow-hidden">
+              <div className="flex items-center gap-1.5 ml-2">
+                <div className="flex items-center gap-1 px-2 py-1 rounded-md bg-[#141414] border border-[#2a2a2a]">
+                  <div className="w-1.5 h-1.5 rounded-full bg-[#ff6b35] live-indicator"></div>
+                  <span className="text-[10px] font-mono text-[#888] uppercase tracking-wide">Lighter</span>
+                </div>
+                <div className="flex items-center gap-1 px-2 py-1 rounded-md bg-[#141414] border border-[#2a2a2a]">
+                  <div className="w-1.5 h-1.5 rounded-full bg-[#10b981] live-indicator"></div>
+                  <span className="text-[10px] font-mono text-[#888] uppercase tracking-wide">Arcus</span>
+                </div>
+              </div>
+              <div className="flex rounded border border-[#2a2a2a] overflow-hidden ml-2">
                 {(["mainnet", "testnet"] as const).map((n) => (
                   <button
                     key={n}
                     onClick={() => switchNetwork(n)}
-                    title={n === "mainnet" ? "Реальные рынки Lighter, реальные цены" : "Тестовая сеть Lighter — тот же код, другие market ids"}
+                    title={n === "mainnet" ? "Реальные рынки Lighter и Arcus, реальные цены" : "Тестовая сеть — тот же код, другие market ids"}
                     className={`px-2 py-0.5 text-[10px] font-mono uppercase tracking-wide transition-colors ${
                       network === n ? "bg-[#1a1a1a] text-[#ff6b35]" : "text-[#666] hover:text-[#888]"
                     }`}

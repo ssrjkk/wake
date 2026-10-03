@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { ArrowRight, BarChart3, Percent, RefreshCw, ShieldAlert, TriangleAlert, Users } from "lucide-react";
 import { getMarketOverview, type MarketOverview, type MarketOverviewRow } from "../lib/lighter";
+import { getMarkets as getArcusMarkets, getMidPrices, type ArcusMarket } from "../lib/arcus";
 import { errorText } from "../lib/backend";
 import { getPredictMarkets, predictTimeLeft, type PredictMarket } from "../lib/predict";
 import { fmtPrice, fmtPct, fmtUsdCompact } from "./utils";
@@ -20,6 +21,9 @@ interface DashboardProps {
 export function Dashboard({ setTab, setAsset }: DashboardProps) {
   const [overview, setOverview] = useState<MarketOverview | null>(null);
   const [marketsError, setMarketsError] = useState<string | null>(null);
+  const [arcusMarkets, setArcusMarkets] = useState<ArcusMarket[]>([]);
+  const [arcusPrices, setArcusPrices] = useState<Record<string, string>>({});
+  const [arcusError, setArcusError] = useState<string | null>(null);
   // null — это «ещё не загрузилось», [] — «загрузилось и рынков правда нет».
   // Одно состояние на оба случая печатало бы «Открытых рынков нет» до первого
   // ответа бэкенда, а /markets/overview стоит дорого (18 свечных запросов) и не
@@ -70,6 +74,35 @@ export function Dashboard({ setTab, setAsset }: DashboardProps) {
     };
   }, [nonce]);
 
+  useEffect(() => {
+    let alive = true;
+    getArcusMarkets()
+      .then((markets) => {
+        if (!alive) return;
+        setArcusMarkets(markets);
+        setArcusError(null);
+        return getMidPrices().then((data) => {
+          if (!alive) return;
+          setArcusPrices(data.mids);
+        });
+      })
+      .catch((e) => {
+        if (alive) setArcusError(errorText(e));
+      });
+    const id = setInterval(() => {
+      getMidPrices()
+        .then((data) => {
+          if (!alive) return;
+          setArcusPrices(data.mids);
+        })
+        .catch(() => {});
+    }, 30000);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, []);
+
   function openMarket(row: MarketOverviewRow) {
     // symbol — ровно то, что лежит в книге Lighter: Terminal ищет рынок по этому
     // же полю, и расхождение (base вместо symbol) открывало бы пустой терминал.
@@ -85,9 +118,12 @@ export function Dashboard({ setTab, setAsset }: DashboardProps) {
     <div className="space-y-5">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h2 className="text-white font-semibold text-lg">Рынки Lighter</h2>
-          <p className="text-[#666] text-sm mt-1 max-w-3xl">
-            Перпы, отсортированные по фактическому $-обороту за 24 часа: оборот — сумма 24 часовых свечей по каждому
+          <div className="flex items-center gap-2 mb-1">
+            <h2 className="text-white font-semibold text-lg">Рынки Lighter</h2>
+            <span className="text-xs px-2 py-0.5 rounded-full bg-[#ff6b35]/10 text-[#ff6b35] border border-[#ff6b35]/20">zkLighter</span>
+          </div>
+          <p className="text-[#666] text-sm max-w-3xl">
+            Перпы на zkLighter, отсортированные по фактическому $-обороту за 24 часа: оборот — сумма 24 часовых свечей по каждому
             рынку, а не поле из книги (его в /orderBooks нет). Те же строки и тот же метод, что печатает{" "}
             <span className="text-[#888] font-mono text-xs">/markets</span> в Telegram-боте; считать их дважды в
             браузере смысла нет — цифры разошлись бы с ботом.
@@ -207,6 +243,100 @@ export function Dashboard({ setTab, setAsset }: DashboardProps) {
           </div>
         </div>
       )}
+
+      <section>
+        <div className="flex items-start justify-between gap-4 mb-3">
+          <div>
+            <div className="flex items-center gap-2 mb-1">
+              <h2 className="text-white font-semibold text-lg">Рынки Arcus</h2>
+              <span className="text-xs px-2 py-0.5 rounded-full bg-[#10b981]/10 text-[#10b981] border border-[#10b981]/20">Robinhood Chain</span>
+            </div>
+            <p className="text-[#666] text-sm max-w-3xl">
+              Спот-токены акций, ETF и валют 24/7 без комиссий. Mid-цены приходят с{" "}
+              <span className="text-[#888] font-mono text-xs">api.arcus.xyz/v1/mids</span> каждые 30 секунд; список рынков — из{" "}
+              <span className="text-[#888] font-mono text-xs">/markets</span>.
+            </p>
+          </div>
+          {arcusError && (
+            <div className="shrink-0 flex items-center gap-1.5 text-xs text-[#ff6b35]">
+              <TriangleAlert className="w-3.5 h-3.5" />
+              <span>Arcus не отвечает</span>
+            </div>
+          )}
+        </div>
+
+        {arcusMarkets.length === 0 && !arcusError ? (
+          <div className="terminal-panel rounded-lg p-4 space-y-3">
+            {[0, 1, 2, 3].map((i) => (
+              <Skeleton key={i} className="h-5 w-full" />
+            ))}
+          </div>
+        ) : arcusMarkets.length === 0 ? (
+          <div className="terminal-panel rounded-lg py-14 text-center">
+            <p className="text-[#888] text-sm">Arcus не вернул рынков</p>
+            <p className="text-[#666] text-xs mt-1">
+              API доступен, но список markets пуст — возможно, сеть testnet или временные проблемы.
+            </p>
+          </div>
+        ) : (
+          <div className="terminal-panel rounded-lg overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-xs text-[#666] border-b border-[#2a2a2a]">
+                  <th className="px-4 py-2.5 font-normal">#</th>
+                  <th className="px-2 py-2.5 font-normal">Актив</th>
+                  <th className="px-2 py-2.5 font-normal">Тип</th>
+                  <th className="px-2 py-2.5 font-normal text-right">Mid-цена</th>
+                  <th className="px-2 py-2.5 font-normal text-right">Tick size</th>
+                  <th className="px-2 py-2.5 font-normal text-right">Step size</th>
+                  <th className="px-2 py-2.5 font-normal">Статус</th>
+                </tr>
+              </thead>
+              <tbody>
+                {arcusMarkets.slice(0, 15).map((m, i) => {
+                  const price = arcusPrices[m.marketId];
+                  return (
+                    <tr
+                      key={m.marketId}
+                      className="border-b border-[#2a2a2a]/60 last:border-0 hover:bg-[#10b981]/5 cursor-pointer transition-colors"
+                      onClick={() => {
+                        setAsset(m.baseAsset);
+                        setTab("terminal");
+                      }}
+                    >
+                      <td className="px-4 py-2 text-[#666] font-mono text-xs">{i + 1}</td>
+                      <td className="px-2 py-2">
+                        <div className="text-[#fafafa] font-medium">{m.marketDisplayName}</div>
+                        <div className="text-[#666] text-xs font-mono">{m.baseAsset}/{m.quoteAsset}</div>
+                      </td>
+                      <td className="px-2 py-2">
+                        <span className="text-xs px-1.5 py-0.5 rounded bg-[#141414] text-[#888] border border-[#2a2a2a]">
+                          {m.marketId.includes("PERP") ? "PERP" : "SPOT"}
+                        </span>
+                      </td>
+                      <td className="px-2 py-2 text-right font-mono text-white">
+                        {price ? `$${Number(price).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "—"}
+                      </td>
+                      <td className="px-2 py-2 text-right font-mono text-[#888] text-xs">{m.tickSize}</td>
+                      <td className="px-2 py-2 text-right font-mono text-[#888] text-xs">{m.stepSize}</td>
+                      <td className="px-2 py-2">
+                        <span className={`text-xs ${m.status === "ACTIVE" ? "text-[#10b981]" : "text-[#666]"}`}>
+                          {m.status === "ACTIVE" ? "активен" : m.status.toLowerCase()}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            {arcusMarkets.length > 15 && (
+              <div className="px-4 py-2 border-t border-[#2a2a2a] text-xs text-[#666]">
+                показано 15 из {arcusMarkets.length} рынков
+              </div>
+            )}
+          </div>
+        )}
+      </section>
 
       <section>
         <div className="flex items-center justify-between mb-2">

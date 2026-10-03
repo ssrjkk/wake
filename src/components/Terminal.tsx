@@ -157,16 +157,21 @@ export function Terminal({ asset, setAsset, markets, dataError, setToast, isCopy
             )}
           </div>
           <div className="flex items-center justify-between mb-2">
-            <button
-              onClick={() => setMarketPickerOpen(true)}
-              className="flex items-center gap-2 bg-[#141414] hover:bg-[#1f1f1f] rounded px-3 py-1.5 text-xs font-medium text-[#fafafa] transition-colors border border-[#2a2a2a]"
-            >
-              <span className="font-mono">{currentMarket ? `${currentMarket.symbol}${currentMarket.market_type === "perp" ? "-PERP" : "/USDC"}` : asset}</span>
-              <svg className="w-3 h-3 text-[#666]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-              </svg>
-              {markets.length > 0 && <span className="text-[#666]">· {markets.length}</span>}
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setMarketPickerOpen(true)}
+                className="flex items-center gap-2 bg-[#141414] hover:bg-[#1f1f1f] rounded px-3 py-1.5 text-xs font-medium text-[#fafafa] transition-colors border border-[#2a2a2a]"
+              >
+                <span className="font-mono">{currentMarket ? `${currentMarket.symbol}${currentMarket.market_type === "perp" ? "-PERP" : "/USDC"}` : asset}</span>
+                <svg className="w-3 h-3 text-[#666]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                </svg>
+                {markets.length > 0 && <span className="text-[#666]">· {markets.length}</span>}
+              </button>
+              <span className="text-xs px-2 py-0.5 rounded-full bg-[#ff6b35]/10 text-[#ff6b35] border border-[#ff6b35]/20">
+                Lighter
+              </span>
+            </div>
             {change != null && (
               <span className={`text-sm font-mono flex items-center gap-1 ${change >= 0 ? "text-positive" : "text-negative"}`}>
                 {change >= 0 ? <TrendingUp className="w-4 h-4" /> : <TrendingDown className="w-4 h-4" />}
