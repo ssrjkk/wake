@@ -321,18 +321,18 @@ export default function App() {
         <div className="mb-6">
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-3">
-              <div className="w-9 h-9 rounded-xl bg-gradient-to-br from-cyan-400 to-blue-500 flex items-center justify-center glow-cyan">
-                <Zap className="w-5 h-5 text-white" strokeWidth={2.5} />
+              <div className="w-9 h-9 rounded-lg bg-[#ff6b35] flex items-center justify-center">
+                <Zap className="w-5 h-5 text-[#0a0a0a]" strokeWidth={2.5} />
               </div>
-              <span className="text-white font-bold tracking-tight text-xl gradient-text">Wake</span>
-              <div className="flex rounded-full border border-slate-800 overflow-hidden">
+              <span className="text-white font-bold tracking-tight text-xl" style={{ fontFamily: "Space Grotesk" }}>Wake</span>
+              <div className="flex rounded border border-[#2a2a2a] overflow-hidden">
                 {(["mainnet", "testnet"] as const).map((n) => (
                   <button
                     key={n}
                     onClick={() => switchNetwork(n)}
                     title={n === "mainnet" ? "Реальные рынки Lighter, реальные цены" : "Тестовая сеть Lighter — тот же код, другие market ids"}
                     className={`px-2 py-0.5 text-[10px] font-mono uppercase tracking-wide transition-colors ${
-                      network === n ? "bg-slate-800 text-cyan-300" : "text-slate-500 hover:text-slate-300"
+                      network === n ? "bg-[#1a1a1a] text-[#ff6b35]" : "text-[#666] hover:text-[#888]"
                     }`}
                   >
                     {n}
@@ -345,17 +345,17 @@ export default function App() {
               {address || followerId ? (
                 <button
                   onClick={() => setWalletMenuOpen((v) => !v)}
-                  className="flex items-center gap-2 bg-slate-900 border border-slate-700 hover:border-slate-600 rounded-full pl-1.5 pr-3 py-1.5 text-sm text-slate-200 font-mono transition-colors"
+                  className="flex items-center gap-2 bg-[#1a1a1a] border border-[#2a2a2a] hover:border-[#3a3a3a] rounded-full pl-1.5 pr-3 py-1.5 text-sm text-[#ccc] font-mono transition-colors"
                 >
                   <span
                     className={`w-6 h-6 rounded-full ${
-                      authSource === "telegram" ? "bg-sky-500" : "bg-emerald-500"
-                    } flex items-center justify-center text-slate-950 text-xs font-bold`}
+                      authSource === "telegram" ? "bg-[#ff6b35]" : "bg-[#10b981]"
+                    } flex items-center justify-center text-[#0a0a0a] text-xs font-bold`}
                   >
                     {(identityLabel ?? "?").replace(/^@/, "").slice(0, 1).toUpperCase()}
                   </span>
                   {identityLabel ?? "Кошелёк подключён"}
-                  <ChevronDown className="w-3.5 h-3.5 text-slate-500" />
+                  <ChevronDown className="w-3.5 h-3.5 text-[#666]" />
                 </button>
               ) : (
                 <button onClick={() => setConnectPickerOpen(true)} className="btn-primary">
@@ -366,16 +366,16 @@ export default function App() {
               {walletMenuOpen && (address || followerId) && (
                 <>
                   <div className="fixed inset-0 z-40" onClick={() => setWalletMenuOpen(false)} />
-                  <div className="absolute right-0 mt-2 w-72 glass rounded-2xl p-4 z-50 shadow-2xl animate-scale-in">
-                    <div className="text-xs text-slate-500 mb-1">Вход через {authSource === "telegram" ? "Telegram" : "кошелёк"}</div>
-                    <div className="text-sm text-slate-100 font-medium mb-3">{identityLabel ?? "—"}</div>
+                  <div className="absolute right-0 mt-2 w-72 bg-[#1a1a1a] border border-[#2a2a2a] rounded-lg p-4 z-50 shadow-2xl animate-scale-in">
+                    <div className="text-xs text-[#666] mb-1">Вход через {authSource === "telegram" ? "Telegram" : "кошелёк"}</div>
+                    <div className="text-sm text-[#ccc] font-medium mb-3">{identityLabel ?? "—"}</div>
                     {address && (
                       <>
-                        <div className="text-xs text-slate-500 mb-1">Ethereum-адрес</div>
-                        <div className="text-sm text-slate-200 font-mono mb-3 break-all">{address}</div>
+                        <div className="text-xs text-[#666] mb-1">Ethereum-адрес</div>
+                        <div className="text-sm text-[#ccc] font-mono mb-3 break-all">{address}</div>
                       </>
                     )}
-                    <div className="text-xs text-slate-400 mb-2">
+                    <div className="text-xs text-[#888] mb-2">
                       {!address
                         ? "Кошелёк не подключён — позиции Lighter по адресу не видны, подключи его в этом меню."
                         : !lighterChecked
@@ -384,25 +384,25 @@ export default function App() {
                         ? `Lighter account index: ${lighterAccountIndex}`
                         : "Аккаунт на Lighter не найден — зарегистрируйся на app.lighter.xyz"}
                     </div>
-                    <div className="text-xs text-slate-500 mb-4 font-mono">
+                    <div className="text-xs text-[#666] mb-4 font-mono">
                       {followerId ? `follower_id: ${followerId}` : backendUp ? "" : "Бэкенд Wake не отвечает — подписки не запишутся"}
                     </div>
                     {backend && (
-                      <div className="text-xs text-slate-600 mb-3 font-mono">
+                      <div className="text-xs text-[#666] mb-3 font-mono">
                         бэкенд: {backend.network} · {backend.dry_run ? "dry-run — ордера не отправляются" : "реальные ордера"}
                       </div>
                     )}
                     {address && !followerId && (
                       <button
                         onClick={() => setConnectPickerOpen(true)}
-                        className="w-full text-center text-sm text-slate-200 border border-slate-700 rounded-xl py-2 mb-2 transition-colors glass-hover"
+                        className="w-full text-center text-sm text-[#ccc] border border-[#2a2a2a] rounded py-2 mb-2 transition-colors hover:bg-[#141414]"
                       >
                         Войти через Telegram
                       </button>
                     )}
                     <button
                       onClick={signOut}
-                      className="w-full text-center text-sm text-red-400 hover:text-red-300 border border-red-900/50 rounded-xl py-2 transition-colors glass-hover"
+                      className="w-full text-center text-sm text-[#ef4444] hover:text-red-400 border border-red-900/50 rounded py-2 transition-colors hover:bg-[#141414]"
                     >
                       Выйти
                     </button>
@@ -416,75 +416,71 @@ export default function App() {
                   style={{ backgroundColor: "rgba(0,0,0,0.7)" }}
                   onClick={() => setConnectPickerOpen(false)}
                 >
-                  <div className="w-full max-w-sm glass rounded-2xl p-6 animate-scale-in" onClick={(e) => e.stopPropagation()}>
+                  <div className="w-full max-w-sm bg-[#1a1a1a] border border-[#2a2a2a] rounded-lg p-6 animate-scale-in" onClick={(e) => e.stopPropagation()}>
                     <div className="flex items-center justify-between mb-5">
                       <h3 className="text-white font-semibold text-lg">Войти в Wake</h3>
-                      <button onClick={() => setConnectPickerOpen(false)} className="text-slate-500 hover:text-slate-300 transition-colors">
+                      <button onClick={() => setConnectPickerOpen(false)} className="text-[#666] hover:text-[#888] transition-colors">
                         <X className="w-5 h-5" />
                       </button>
                     </div>
 
                     <div className="space-y-3">
-                      <div className="text-xs text-slate-400 uppercase tracking-wide font-medium mb-2">Через Telegram</div>
+                      <div className="text-xs text-[#888] uppercase tracking-wide font-medium mb-2">Через Telegram</div>
                       {isTelegramWebView() ? (
                         <>
                           <button
                             onClick={() => loginFromMiniApp(false)}
                             disabled={miniAppBusy}
-                            className="btn-primary w-full"
+                            className="btn-action w-full bg-[#ff6b35] hover:bg-orange-500 text-[#0a0a0a]"
                           >
                             {miniAppBusy ? "Проверяю initData…" : "Войти через Telegram"}
                           </button>
-                          <p className="text-xs text-slate-600 leading-relaxed">
-                            Страница открыта внутри Telegram, поэтому вход идёт по подписанной <code className="text-slate-400">initData</code>: её
-                            целиком проверяет <code className="text-slate-400">POST /auth/telegram/init</code> на токене бота. Login-виджет здесь не
+                          <p className="text-xs text-[#666] leading-relaxed font-mono">
+                            Страница открыта внутри Telegram, поэтому вход идёт по подписанной <code className="text-[#888]">initData</code>: её
+                            целиком проверяет <code className="text-[#888]">POST /auth/telegram/init</code> на токене бота. Login-виджет здесь не
                             нужен — Telegram его в вебвью обычно не рендерит.
                           </p>
                         </>
                       ) : (
                         <>
                           <TelegramLogin onLogin={handleTelegramLogin} />
-                          <p className="text-xs text-slate-600 leading-relaxed">
-                            Виджет отдаёт подпись HMAC-SHA256; её проверяет <code className="text-slate-400">POST /auth/telegram</code> на токене бота, а
-                            не браузер. Без <code className="text-slate-400">TELEGRAM_BOT_TOKEN</code> на бэкенде кнопка сознательно не появляется.
+                          <p className="text-xs text-[#666] leading-relaxed font-mono">
+                            Виджет отдаёт подпись HMAC-SHA256; её проверяет <code className="text-[#888]">POST /auth/telegram</code> на токене бота, а
+                            не браузер. Без <code className="text-[#888]">TELEGRAM_BOT_TOKEN</code> на бэкенде кнопка сознательно не появляется.
                           </p>
                         </>
                       )}
 
                       <div className="relative my-4">
                         <div className="absolute inset-0 flex items-center">
-                          <div className="w-full border-t border-slate-700"></div>
+                          <div className="w-full border-t border-[#2a2a2a]"></div>
                         </div>
                         <div className="relative flex justify-center text-xs uppercase">
-                          <span className="bg-slate-900/50 px-2 text-slate-500">или</span>
+                          <span className="bg-[#1a1a1a] px-2 text-[#666]">или</span>
                         </div>
                       </div>
 
-                      <div className="text-xs text-slate-400 uppercase tracking-wide font-medium mb-2">Через кошелёк</div>
+                      <div className="text-xs text-[#888] uppercase tracking-wide font-medium mb-2">Через кошелёк</div>
                       <div className="space-y-2">
                         {connectors.map((c) => (
                           <button
                             key={c.id}
                             onClick={() => {
-                              // connectAsync бросает ConnectorNotFoundError, если провайдера в
-                              // этом окне нет (в вебвью Telegram — типичный случай). Молча
-                              // закрыть пикер означало бы «кнопка не работает», поэтому
-                              // причину показываем.
                               connectAsync({ connector: c })
                                 .then(() => setConnectPickerOpen(false))
                                 .catch((e) => setToast(`Кошелёк не подключился: ${errorText(e)}`));
                             }}
                             disabled={isPending}
-                            className="w-full flex items-center justify-between glass-hover rounded-xl px-4 py-3"
+                            className="w-full flex items-center justify-between bg-[#141414] border border-[#2a2a2a] hover:border-[#3a3a3a] rounded px-4 py-3 transition-colors"
                           >
-                            <span className="text-slate-200 text-sm font-medium">{c.name}</span>
-                            <ChevronRight className="w-4 h-4 text-slate-600" />
+                            <span className="text-[#ccc] text-sm font-medium">{c.name}</span>
+                            <ChevronRight className="w-4 h-4 text-[#666]" />
                           </button>
                         ))}
                       </div>
-                      <p className="text-xs text-slate-600 leading-relaxed">
+                      <p className="text-xs text-[#666] leading-relaxed font-mono">
                         Список — то, что реально нашлось в этом окне. QR-подключение (WalletConnect) появляется только когда фронт собран с{" "}
-                        <code className="text-slate-400">VITE_WALLETCONNECT_PROJECT_ID</code>: без project id AppKit при старте ловит 400/403, поэтому
+                        <code className="text-[#888]">VITE_WALLETCONNECT_PROJECT_ID</code>: без project id AppKit при старте ловит 400/403, поэтому
                         коннектор не добавляется.
                       </p>
                     </div>
@@ -510,23 +506,23 @@ export default function App() {
         </div>
 
         {backendChecked && !backend && (
-          <div className="mb-5 glass rounded-2xl px-4 py-3.5 animate-fade-in">
+          <div className="mb-5 bg-[#1a1a1a] border border-[#2a2a2a] rounded-lg px-4 py-3.5 animate-fade-in">
             <div className="flex items-start gap-3">
-              <ServerOff className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+              <ServerOff className="w-4 h-4 text-[#ff6b35] shrink-0 mt-0.5" />
               <div className="flex-1">
-                <div className="text-sm text-slate-100 font-medium">
-                  Бэкенд Wake к <code className="text-slate-300 font-mono text-xs">{BACKEND_URL}</code> не подключён
+                <div className="text-sm text-[#ccc] font-medium">
+                  Бэкенд Wake к <code className="text-[#888] font-mono text-xs">{BACKEND_URL}</code> не подключён
                 </div>
-                <p className="text-xs text-slate-400 leading-relaxed mt-1.5 mb-2">
-                  Сайт — статика на Cloudflare Pages, Wake-бэкенд (<code className="text-slate-500 font-mono">backend/app.py</code>) — отдельный
+                <p className="text-xs text-[#888] leading-relaxed mt-1.5 mb-2 font-mono">
+                  Сайт — статика на Cloudflare Pages, Wake-бэкенд (<code className="text-[#666]">backend/app.py</code>) — отдельный
                   сервис, в сборку сайта он не входит. Сейчас работают панели, которые говорят с публичным API Lighter напрямую:
                   «Терминал» — стакан, свечи и лента сделок; «Funding» — ставки Lighter рядом с Binance, Bybit и Hyperliquid; «Портфель» —
                   позиции по адресу. Остальные хранят состояние в базе Wake — копи-трейд, Predict, агент, риск-расчёты и обзор рынка с
-                  ранжированием по 24-часовому обороту. Поднять бэкенд локально: <code className="text-slate-500 font-mono">docker compose up app</code>.
+                  ранжированием по 24-часовому обороту. Поднять бэкенд локально: <code className="text-[#666]">docker compose up app</code>.
                 </p>
                 <button
                   onClick={checkBackend}
-                  className="text-xs text-slate-300 hover:text-white border border-slate-700 hover:border-slate-600 rounded-lg px-3 py-1.5 transition-colors inline-flex items-center gap-1.5"
+                  className="text-xs text-[#ccc] hover:text-white border border-[#2a2a2a] hover:border-[#3a3a3a] rounded px-3 py-1.5 transition-colors inline-flex items-center gap-1.5"
                 >
                   <RefreshCw className="w-3 h-3" />
                   Проверить снова
@@ -616,13 +612,13 @@ export default function App() {
           onClick={() => setMarketPickerOpen(false)}
         >
           <div
-            className="w-full max-w-md bg-slate-900 border border-slate-700 rounded-2xl p-4 flex flex-col"
+            className="w-full max-w-md bg-[#1a1a1a] border border-[#2a2a2a] rounded-lg p-4 flex flex-col"
             style={{ height: "560px" }}
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-white font-semibold text-sm">Выбор рынка</h3>
-              <button onClick={() => setMarketPickerOpen(false)} className="text-slate-500 hover:text-slate-300">
+              <button onClick={() => setMarketPickerOpen(false)} className="text-[#666] hover:text-[#888]">
                 <X className="w-5 h-5" />
               </button>
             </div>
@@ -632,15 +628,15 @@ export default function App() {
               onChange={(e) => setMarketSearch(e.target.value)}
               placeholder="Поиск по символу…"
               autoFocus
-              className="bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 mb-3 text-white text-sm outline-none w-full"
+              className="input-mono bg-[#141414] border border-[#2a2a2a] rounded px-3 py-2 mb-3 outline-none w-full"
             />
             <div className="flex gap-1.5 mb-3 overflow-x-auto">
               {(["Все", "Crypto", "Spot", "Stocks", "Forex", "Commodities"] as const).map((c) => (
                 <button
                   key={c}
                   onClick={() => setMarketCategory(c)}
-                  className={`px-2.5 py-1 rounded-full text-xs font-medium whitespace-nowrap transition-colors ${
-                    marketCategory === c ? "bg-cyan-500 text-slate-950" : "bg-slate-800 text-slate-400"
+                  className={`px-2.5 py-1 rounded text-xs font-medium whitespace-nowrap transition-colors ${
+                    marketCategory === c ? "bg-[#ff6b35] text-[#0a0a0a]" : "bg-[#141414] text-[#888] border border-[#2a2a2a]"
                   }`}
                 >
                   {c}
@@ -648,7 +644,7 @@ export default function App() {
               ))}
             </div>
             <div className="flex-1 overflow-y-auto space-y-1">
-              {filteredMarkets.length === 0 && <p className="text-slate-600 text-sm text-center py-8">Ничего не найдено</p>}
+              {filteredMarkets.length === 0 && <p className="text-[#666] text-sm text-center py-8 font-mono">Ничего не найдено</p>}
               {filteredMarkets.map((m) => (
                 <button
                   key={m.market_id}
@@ -657,15 +653,15 @@ export default function App() {
                     setMarketPickerOpen(false);
                     setMarketSearch("");
                   }}
-                  className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-left transition-colors ${
-                    m.symbol === asset ? "bg-slate-800 border border-cyan-700" : "hover:bg-slate-800"
+                  className={`w-full flex items-center justify-between px-3 py-2 rounded text-left transition-colors ${
+                    m.symbol === asset ? "bg-[#141414] border border-[#ff6b35]" : "hover:bg-[#141414] border border-transparent"
                   }`}
                 >
                   <div className="flex items-center gap-2">
-                    <span className="text-slate-100 text-sm font-medium">{m.symbol}</span>
-                    <span className="text-slate-600 text-xs">{categorizeMarket(m)}</span>
+                    <span className="text-[#ccc] text-sm font-medium font-mono">{m.symbol}</span>
+                    <span className="text-[#666] text-xs">{categorizeMarket(m)}</span>
                   </div>
-                  <span className="text-slate-600 text-xs font-mono">{m.market_type}</span>
+                  <span className="text-[#666] text-xs font-mono">{m.market_type}</span>
                 </button>
               ))}
             </div>
@@ -679,7 +675,7 @@ export default function App() {
           style={{ backgroundColor: "rgba(0,0,0,0.6)" }}
           onClick={() => setCopyModal(null)}
         >
-          <div className="w-full max-w-sm bg-slate-900 border border-slate-700 rounded-2xl p-5" onClick={(e) => e.stopPropagation()}>
+          <div className="w-full max-w-sm bg-[#1a1a1a] border border-[#2a2a2a] rounded-lg p-5" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-2">
                 <div
@@ -689,51 +685,51 @@ export default function App() {
                 </div>
                 <div>
                   <div className="text-white font-medium text-sm">{copyModal.handle}</div>
-                  <div className="text-slate-500 text-xs font-mono">Lighter #{copyModal.lighterAccountIndex}</div>
+                  <div className="text-[#666] text-xs font-mono">Lighter #{copyModal.lighterAccountIndex}</div>
                 </div>
               </div>
-              <button onClick={() => setCopyModal(null)} className="text-slate-500 hover:text-slate-300">
+              <button onClick={() => setCopyModal(null)} className="text-[#666] hover:text-[#888]">
                 <X className="w-5 h-5" />
               </button>
             </div>
 
             <div className="grid grid-cols-2 gap-3 mb-4 text-sm font-mono">
               <div>
-                <div className="text-xs text-slate-500">Комиссия</div>
-                <div className="text-slate-200">{(copyModal.feeBps / 100).toFixed(2)}% за сделку</div>
+                <div className="stat-label">Комиссия</div>
+                <div className="text-[#ccc]">{(copyModal.feeBps / 100).toFixed(2)}% за сделку</div>
               </div>
               <div>
-                <div className="text-xs text-slate-500">Реализованный PnL</div>
-                <div className={copyModal.exchange ? (copyModal.exchange.realizedPnlUsd >= 0 ? "text-emerald-400" : "text-red-400") : "text-slate-500"}>
+                <div className="stat-label">Реализованный PnL</div>
+                <div className={copyModal.exchange ? (copyModal.exchange.realizedPnlUsd >= 0 ? "text-positive" : "text-negative") : "text-[#666]"}>
                   {copyModal.exchange ? `${copyModal.exchange.realizedPnlUsd >= 0 ? "+" : ""}${usd(copyModal.exchange.realizedPnlUsd, 0)}` : "нет ответа Lighter"}
                 </div>
               </div>
               <div>
-                <div className="text-xs text-slate-500">Подписчиков</div>
-                <div className="text-slate-200">{fmt(copyModal.followers)}</div>
+                <div className="stat-label">Подписчиков</div>
+                <div className="text-[#ccc]">{fmt(copyModal.followers)}</div>
               </div>
               <div>
-                <div className="text-xs text-slate-500">Открытых позиций</div>
-                <div className="text-slate-200">{copyModal.exchange ? fmt(copyModal.exchange.openPositions.length) : "—"}</div>
+                <div className="stat-label">Открытых позиций</div>
+                <div className="text-[#ccc]">{copyModal.exchange ? fmt(copyModal.exchange.openPositions.length) : "—"}</div>
               </div>
             </div>
 
-            <label className="text-xs text-slate-400 mb-1 block">Аллокация — сколько твоих денег участвует в копировании</label>
-            <div className="flex items-center bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 mb-3">
-              <span className="text-slate-500 mr-1">$</span>
+            <label className="stat-label mb-1 block">Аллокация — сколько твоих денег участвует в копировании</label>
+            <div className="flex items-center bg-[#141414] border border-[#2a2a2a] rounded px-3 py-2 mb-3">
+              <span className="text-[#666] mr-1 font-mono text-sm">$</span>
               <input
                 type="number"
                 min={10}
                 value={allocation}
                 onChange={(e) => setAllocation(Number(e.target.value))}
-                className="bg-transparent text-white font-mono outline-none w-full"
+                className="input-mono bg-transparent outline-none w-full"
               />
             </div>
 
             <div className="mb-4">
-              <div className="flex justify-between text-xs text-slate-400 mb-1">
-                <span>Максимальное плечо по копии</span>
-                <span className="font-mono text-slate-200">{copyLeverage}x</span>
+              <div className="flex justify-between mb-1">
+                <span className="stat-label">Максимальное плечо по копии</span>
+                <span className="stat-value text-sm">{copyLeverage}x</span>
               </div>
               <input
                 type="range"
@@ -741,22 +737,22 @@ export default function App() {
                 max="20"
                 value={copyLeverage}
                 onChange={(e) => setCopyLeverage(Number(e.target.value))}
-                className="w-full accent-cyan-500"
+                className="w-full accent-[#ff6b35]"
               />
             </div>
 
             <button
               onClick={confirmCopy}
               disabled={allocation <= 0}
-              className="w-full bg-cyan-500 hover:bg-cyan-400 disabled:opacity-50 text-slate-950 font-semibold rounded-xl py-3 transition-colors"
+              className="btn-action w-full bg-[#ff6b35] hover:bg-orange-500 disabled:opacity-50 text-[#0a0a0a] py-3 rounded"
             >
               Подписаться
             </button>
-            <p className="text-xs text-slate-500 mt-3 leading-relaxed">
-              Подписка пишется в таблицу <code className="text-slate-400">follows</code> и становится входом для{" "}
-              <code className="text-slate-400">mirror_engine</code>. Дальше всё зависит от того, как запущен{" "}
-              <code className="text-slate-400">leader_listener.py</code>: по умолчанию <code className="text-slate-400">WAKE_DRY_RUN=true</code> —
-              решение считается и пишется в <code className="text-slate-400">mirror_log</code> со статусом <code className="text-slate-400">dry_run</code>,
+            <p className="text-xs text-[#666] mt-3 leading-relaxed font-mono">
+              Подписка пишется в таблицу <code className="text-[#888]">follows</code> и становится входом для{" "}
+              <code className="text-[#888]">mirror_engine</code>. Дальше всё зависит от того, как запущен{" "}
+              <code className="text-[#888]">leader_listener.py</code>: по умолчанию <code className="text-[#888]">WAKE_DRY_RUN=true</code> —
+              решение считается и пишется в <code className="text-[#888]">mirror_log</code> со статусом <code className="text-[#888]">dry_run</code>,
               ордер на Lighter не уходит. Каждый исход виден во вкладке «Портфель».
             </p>
           </div>
@@ -764,9 +760,9 @@ export default function App() {
       )}
 
       {toast && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 glass rounded-full px-5 py-3 shadow-2xl flex items-center gap-2 z-50 max-w-md text-center animate-slide-up glow-cyan">
-          <Check className="w-4 h-4 text-emerald-400 shrink-0" />
-          <span className="text-sm text-slate-100">{toast}</span>
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-[#1a1a1a] border border-[#2a2a2a] rounded-full px-5 py-3 shadow-2xl flex items-center gap-2 z-50 max-w-md text-center animate-slide-up">
+          <Check className="w-4 h-4 text-[#10b981] shrink-0" />
+          <span className="text-sm text-[#ccc]">{toast}</span>
         </div>
       )}
     </div>
