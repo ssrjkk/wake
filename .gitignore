@@ -15,10 +15,9 @@ backend/.coverage
 .coverage
 htmlcov/
 backend/.env
-backend/wake.db
-backend/audit.db
 backend/*.enc
 backend/dev_keystore*.json
+*.db
 
 # OS
 .DS_Store
