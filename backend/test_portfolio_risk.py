@@ -2,8 +2,14 @@
 
 import unittest
 from portfolio_risk import (
-    price_returns, volatility, pearson_correlation, Position,
-    portfolio_dollar_volatility, naive_dollar_volatility, diversification_score, suggest_hedge,
+    price_returns,
+    volatility,
+    pearson_correlation,
+    Position,
+    portfolio_dollar_volatility,
+    naive_dollar_volatility,
+    diversification_score,
+    suggest_hedge,
 )
 
 
@@ -55,7 +61,11 @@ class TestPortfolioVolatilityProperties(unittest.TestCase):
     def test_single_position_portfolio_vol_equals_naive(self):
         returns = {0: [0.02, -0.01, 0.03, -0.02, 0.01]}
         positions = [Position(0, "BTC", 1000)]
-        self.assertAlmostEqual(portfolio_dollar_volatility(positions, returns), naive_dollar_volatility(positions, returns), places=9)
+        self.assertAlmostEqual(
+            portfolio_dollar_volatility(positions, returns),
+            naive_dollar_volatility(positions, returns),
+            places=9,
+        )
 
     def test_perfectly_correlated_same_direction_no_diversification_benefit(self):
         # B = A * 2 (детерминированно скоррелировано 1.0)
@@ -64,7 +74,12 @@ class TestPortfolioVolatilityProperties(unittest.TestCase):
         returns = {0: a, 1: b}
         positions = [Position(0, "A", 1000), Position(1, "B", 1000)]
         score = diversification_score(positions, returns)
-        self.assertAlmostEqual(score, 0.0, places=4, msg="идеально скоррелированные позиции не должны давать эффект диверсификации")
+        self.assertAlmostEqual(
+            score,
+            0.0,
+            places=4,
+            msg="идеально скоррелированные позиции не должны давать эффект диверсификации",
+        )
 
     def test_long_and_short_same_asset_fully_cancels(self):
         returns = {0: [0.02, -0.01, 0.03, -0.02, 0.015]}
@@ -81,7 +96,11 @@ class TestPortfolioVolatilityProperties(unittest.TestCase):
         positions = [Position(0, "A", 1000), Position(1, "B", 1000)]
         naive = naive_dollar_volatility(positions, returns)
         actual = portfolio_dollar_volatility(positions, returns)
-        self.assertLess(actual, naive, "некоррелированные позиции должны давать реальный эффект диверсификации")
+        self.assertLess(
+            actual,
+            naive,
+            "некоррелированные позиции должны давать реальный эффект диверсификации",
+        )
 
     def test_diversification_score_bounded_between_zero_and_one(self):
         a = [0.02, -0.02, 0.02, -0.02, 0.02, -0.02]
@@ -96,11 +115,19 @@ class TestPortfolioVolatilityProperties(unittest.TestCase):
 class TestHedgeSuggestion(unittest.TestCase):
     def test_perfectly_correlated_candidate_with_equal_vol_hedges_to_near_zero(self):
         a = [0.02, -0.01, 0.03, -0.02, 0.015]
-        returns = {0: a, 1: a}  # candidate идентичен target по волатильности и корреляции
+        returns = {
+            0: a,
+            1: a,
+        }  # candidate идентичен target по волатильности и корреляции
         target = Position(0, "BTC", 1000)
         suggestion = suggest_hedge(target, [(1, "BTC-CORRELATED")], returns)
         self.assertIsNotNone(suggestion)
-        self.assertAlmostEqual(suggestion.hedge_notional_usd, -1000, places=2, msg="полный хедж идентичным активом — противоположная позиция того же размера")
+        self.assertAlmostEqual(
+            suggestion.hedge_notional_usd,
+            -1000,
+            places=2,
+            msg="полный хедж идентичным активом — противоположная позиция того же размера",
+        )
         self.assertAlmostEqual(suggestion.resulting_portfolio_vol_usd, 0.0, places=4)
 
     def test_uncorrelated_candidate_gives_poor_hedge_high_residual_vol(self):
@@ -111,17 +138,29 @@ class TestHedgeSuggestion(unittest.TestCase):
         suggestion = suggest_hedge(target, [(1, "B")], returns)
         self.assertIsNotNone(suggestion)
         naive = abs(target.signed_notional_usd) * volatility(a)
-        self.assertGreater(suggestion.resulting_portfolio_vol_usd, naive * 0.5, "некоррелированный актив не должен давать иллюзию хорошего хеджа")
+        self.assertGreater(
+            suggestion.resulting_portfolio_vol_usd,
+            naive * 0.5,
+            "некоррелированный актив не должен давать иллюзию хорошего хеджа",
+        )
 
-    def test_picks_best_among_multiple_candidates_by_resulting_vol_not_raw_correlation(self):
+    def test_picks_best_among_multiple_candidates_by_resulting_vol_not_raw_correlation(
+        self,
+    ):
         a = [0.02, -0.01, 0.03, -0.02, 0.015]
         noise = [-0.01, 0.02, -0.005, 0.01, -0.02]  # независимый от a ряд
-        weak_correlated = [0.4 * a[i] + 0.6 * noise[i] for i in range(len(a))]  # реально ~0.19 корреляция, не масштабирование
+        weak_correlated = [
+            0.4 * a[i] + 0.6 * noise[i] for i in range(len(a))
+        ]  # реально ~0.19 корреляция, не масштабирование
         strong_correlated = a  # идентичен — лучший хедж
         returns = {0: a, 1: weak_correlated, 2: strong_correlated}
         target = Position(0, "A", 1000)
         suggestion = suggest_hedge(target, [(1, "WEAK"), (2, "STRONG")], returns)
-        self.assertEqual(suggestion.market_id, 2, "должен выбрать кандидата с наименьшим результирующим риском, не первого по списку")
+        self.assertEqual(
+            suggestion.market_id,
+            2,
+            "должен выбрать кандидата с наименьшим результирующим риском, не первого по списку",
+        )
 
     def test_returns_none_when_target_has_zero_volatility(self):
         returns = {0: [0.0, 0.0, 0.0], 1: [0.01, -0.01, 0.02]}

@@ -17,16 +17,14 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-DATABASE_URL = os.environ.get(
-    "WAKE_DATABASE_URL",
-    "postgresql+asyncpg://wake:wake@localhost:5432/wake",
-)
+# Один источник правды — pydantic-settings (config.py), который читает .env.
+# Прямой os.environ.get() здесь пропускал .env: движок всегда уходил в
+# дефолтный localhost PostgreSQL, а /ready честно отвечал database: fail.
+from config import DATABASE_URL
 
 engine = create_async_engine(
     DATABASE_URL,
     echo=os.environ.get("WAKE_DB_ECHO", "false").lower() == "true",
-    pool_size=20,
-    max_overflow=10,
     pool_pre_ping=True,
 )
 
@@ -65,3 +63,11 @@ async def init_db() -> None:
 async def close_db() -> None:
     """Dispose engine connections (called on app shutdown)."""
     await engine.dispose()
+
+
+def is_connected() -> bool:
+    """True, если пул движка жив (быстрая проверка без похода в БД)."""
+    try:
+        return engine.pool.status() != "Pool is closed"  # type: ignore[attr-defined]
+    except Exception:
+        return False

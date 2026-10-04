@@ -31,6 +31,48 @@ export type Following = {
 
 export type RiskPosition = { marketId: number; symbol: string; notionalUsd: number; side: "long" | "short" };
 
+// POST /portfolio/risk (backend/api/portfolio.py)
+export type RiskAnalysis = {
+  naive_dollar_volatility: number;
+  portfolio_dollar_volatility: number;
+  diversification_score: number;
+};
+
+// POST /portfolio/hedge: suggestion null, когда хеджа не нашлось
+export type HedgeSuggestion = {
+  market_id: number;
+  symbol: string;
+  hedge_notional_usd: number;
+  correlation_to_target: number;
+  resulting_portfolio_vol_usd: number;
+};
+
+// POST /funding-arb/check (backend/api/funding.py): opportunity null —
+// отрицательный funding или APR ниже порога
+export type FundingCheck = {
+  opportunity: {
+    symbol: string;
+    market_id: number;
+    annualized_yield: number;
+    perp_side: string;
+    spot_needed: boolean;
+    hourly_rate: number;
+  } | null;
+};
+
+// POST /funding-arb/size: position null + reason, когда капитала не хватает
+export type FundingSizing = {
+  position: {
+    perp_notional_usd: number;
+    spot_notional_usd: number;
+    perp_base_amount: number;
+    spot_base_amount: number;
+  } | null;
+  reason?: string;
+  // цена подставляется на клиенте из последней 1h-свечи
+  price?: number;
+};
+
 // Ответ GET /subscription/<user_id> (backend/api/agent.py): «none» синтезируется
 // бэкендом, когда записи о подписке нет, остальные — значения Tier из
 // backend/subscription.py. days_left_in_trial приходит только у подписки.

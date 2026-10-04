@@ -2,7 +2,7 @@ import { useState } from "react";
 import { X } from "lucide-react";
 import { getCandles, type OrderBook } from "../lib/lighter";
 import { backendJson, errorText } from "../lib/backend";
-import type { RiskPosition } from "./types";
+import type { RiskAnalysis, HedgeSuggestion, RiskPosition } from "./types";
 
 interface RiskProps {
   markets: OrderBook[];
@@ -12,8 +12,8 @@ interface RiskProps {
 export function Risk({ markets, setToast }: RiskProps) {
   const [riskPositions, setRiskPositions] = useState<RiskPosition[]>([]);
   const [riskPickerOpen, setRiskPickerOpen] = useState(false);
-  const [riskResult, setRiskResult] = useState<any>(null);
-  const [hedgeResult, setHedgeResult] = useState<any>(null);
+  const [riskResult, setRiskResult] = useState<RiskAnalysis | null>(null);
+  const [hedgeResult, setHedgeResult] = useState<{ suggestion: HedgeSuggestion | null } | null>(null);
   const [riskBusy, setRiskBusy] = useState(false);
 
   function addRiskPosition(m: OrderBook, side: "long" | "short") {
@@ -42,7 +42,7 @@ export function Risk({ markets, setToast }: RiskProps) {
         returnsByMarket[String(pos.marketId)] = returns;
       }
 
-      setRiskResult(await backendJson("/portfolio/risk", {
+      setRiskResult(await backendJson<RiskAnalysis>("/portfolio/risk", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -74,7 +74,7 @@ export function Risk({ markets, setToast }: RiskProps) {
         returnsByMarket[String(m.market_id)] = closes.slice(1).map((c, i) => (c - closes[i]) / closes[i]);
         if (m.market_id !== target.marketId) candidates.push([m.market_id, m.symbol]);
       }
-      setHedgeResult(await backendJson("/portfolio/hedge", {
+      setHedgeResult(await backendJson<{ suggestion: HedgeSuggestion | null }>("/portfolio/hedge", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -93,33 +93,33 @@ export function Risk({ markets, setToast }: RiskProps) {
   return (
     <div>
       <div className="mb-4">
-        <h2 className="text-white font-semibold">Portfolio Risk</h2>
-        <p className="text-slate-500 text-sm">
+        <h2 className="text-text-primary font-semibold">Portfolio Risk</h2>
+        <p className="text-text-tertiary text-sm">
           Единая маржа Lighter: риск считается по всему набору позиций разом, а не по одной ноге. Выбираешь позиции из{" "}
           {markets.length ? `${markets.length} живых рынков ` : "списка живых рынков "}
           Lighter во вкладке «Терминал» — корреляции считаются по их часовым свечам.
         </p>
       </div>
 
-      <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 mb-4">
+      <div className="bg-surface-100 border border-border rounded-2xl p-4 mb-4">
         <div className="flex items-center justify-between mb-3">
-          <span className="text-xs text-slate-500 uppercase tracking-wide">Позиции для анализа</span>
+          <span className="text-xs text-text-tertiary uppercase tracking-wide">Позиции для анализа</span>
           <button
             onClick={() => setRiskPickerOpen(true)}
-            className="bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium px-3 py-1.5 rounded-full transition-colors"
+            className="bg-surface-200 hover:bg-surface-200 text-text-primary text-xs font-medium px-3 py-1.5 rounded-full transition-colors"
           >
             + Добавить
           </button>
         </div>
         {riskPositions.length === 0 ? (
-          <p className="text-slate-600 text-sm py-4 text-center">Добавь хотя бы одну позицию с разных рынков, чтобы увидеть эффект диверсификации</p>
+          <p className="text-text-muted text-sm py-4 text-center">Добавь хотя бы одну позицию с разных рынков, чтобы увидеть эффект диверсификации</p>
         ) : (
           <div className="space-y-2">
             {riskPositions.map((p, i) => (
-              <div key={i} className="flex items-center justify-between bg-slate-800 rounded-xl px-3 py-2">
+              <div key={i} className="flex items-center justify-between bg-surface-200 rounded-xl px-3 py-2">
                 <div className="flex items-center gap-2">
                   <span className={`text-xs font-mono ${p.side === "long" ? "text-emerald-400" : "text-red-400"}`}>{p.side === "long" ? "LONG" : "SHORT"}</span>
-                  <span className="text-slate-200 text-sm font-medium">{p.symbol}</span>
+                  <span className="text-text-primary text-sm font-medium">{p.symbol}</span>
                 </div>
                 <div className="flex items-center gap-3">
                   <input
@@ -129,9 +129,9 @@ export function Risk({ markets, setToast }: RiskProps) {
                       const v = Number(e.target.value);
                       setRiskPositions((arr) => arr.map((x, idx) => (idx === i ? { ...x, notionalUsd: v } : x)));
                     }}
-                    className="w-20 bg-slate-950 border border-slate-700 rounded-lg px-2 py-1 text-white font-mono text-xs outline-none"
+                    className="w-20 bg-surface-50 border border-border-hover rounded-lg px-2 py-1 text-text-primary font-mono text-xs outline-none"
                   />
-                  <button onClick={() => removeRiskPosition(i)} className="text-slate-500 hover:text-red-400">
+                  <button onClick={() => removeRiskPosition(i)} className="text-text-tertiary hover:text-red-400">
                     <X className="w-3.5 h-3.5" />
                   </button>
                 </div>
@@ -142,16 +142,16 @@ export function Risk({ markets, setToast }: RiskProps) {
         {riskPositions.length > 0 && (
           <div className="flex gap-2 mt-3">
             <button
-              onClick={analyzePortfolioRisk}
+              onClick={() => void analyzePortfolioRisk()}
               disabled={riskBusy}
-              className="flex-1 bg-cyan-500 hover:bg-cyan-400 disabled:opacity-50 text-slate-950 text-sm font-semibold py-2 rounded-xl transition-colors"
+              className="flex-1 bg-cyan-500 hover:bg-cyan-400 disabled:opacity-50 text-surface-50 text-sm font-semibold py-2 rounded-xl transition-colors"
             >
               {riskBusy ? "Считаю на реальных свечах…" : "Проанализировать"}
             </button>
             <button
-              onClick={findHedge}
+              onClick={() => void findHedge()}
               disabled={riskBusy}
-              className="flex-1 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 text-sm font-semibold py-2 rounded-xl transition-colors"
+              className="flex-1 bg-surface-200 hover:bg-surface-200 disabled:opacity-50 text-text-primary text-sm font-semibold py-2 rounded-xl transition-colors"
             >
               Найти хедж
             </button>
@@ -160,41 +160,41 @@ export function Risk({ markets, setToast }: RiskProps) {
       </div>
 
       {riskResult && (
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 mb-4">
-          <div className="text-xs text-slate-500 uppercase tracking-wide mb-3">Результат</div>
+        <div className="bg-surface-100 border border-border rounded-2xl p-4 mb-4">
+          <div className="text-xs text-text-tertiary uppercase tracking-wide mb-3">Результат</div>
           <div className="grid grid-cols-2 gap-3 mb-3">
             <div>
-              <div className="text-slate-500 text-xs mb-1">Наивная сумма риска</div>
-              <div className="text-white font-mono">${riskResult.naive_dollar_volatility.toFixed(0)}</div>
+              <div className="text-text-tertiary text-xs mb-1">Наивная сумма риска</div>
+              <div className="text-text-primary font-mono">${riskResult.naive_dollar_volatility.toFixed(0)}</div>
             </div>
             <div>
-              <div className="text-slate-500 text-xs mb-1">Реальный риск портфеля</div>
+              <div className="text-text-tertiary text-xs mb-1">Реальный риск портфеля</div>
               <div className="text-cyan-400 font-mono">${riskResult.portfolio_dollar_volatility.toFixed(0)}</div>
             </div>
           </div>
           <div className="flex items-center gap-3">
-            <div className="flex-1 h-2 bg-slate-800 rounded-full overflow-hidden">
+            <div className="flex-1 h-2 bg-surface-200 rounded-full overflow-hidden">
               <div className="h-full bg-emerald-500" style={{ width: `${Math.max(0, riskResult.diversification_score * 100).toFixed(0)}%` }} />
             </div>
-            <span className="text-xs font-mono text-slate-400">{(riskResult.diversification_score * 100).toFixed(0)}% диверсификация</span>
+            <span className="text-xs font-mono text-text-secondary">{(riskResult.diversification_score * 100).toFixed(0)}% диверсификация</span>
           </div>
         </div>
       )}
 
       {hedgeResult && (
-        <div className="bg-slate-900 border border-amber-700 rounded-2xl p-4">
+        <div className="bg-surface-100 border border-amber-700 rounded-2xl p-4">
           <div className="text-xs text-amber-400 uppercase tracking-wide mb-2">Предложение хеджа</div>
           {hedgeResult.suggestion ? (
             <div>
-              <p className="text-slate-200 text-sm mb-1">
+              <p className="text-text-primary text-sm mb-1">
                 {hedgeResult.suggestion.hedge_notional_usd < 0 ? "Short" : "Long"} <span className="font-mono">${Math.abs(hedgeResult.suggestion.hedge_notional_usd).toFixed(0)}</span> {hedgeResult.suggestion.symbol}
               </p>
-              <p className="text-slate-500 text-xs">
+              <p className="text-text-tertiary text-xs">
                 Корреляция {(hedgeResult.suggestion.correlation_to_target * 100).toFixed(0)}%, остаточный риск ${hedgeResult.suggestion.resulting_portfolio_vol_usd.toFixed(0)}
               </p>
             </div>
           ) : (
-            <p className="text-slate-500 text-sm">Хорошего хеджа среди доступных рынков не нашлось</p>
+            <p className="text-text-tertiary text-sm">Хорошего хеджа среди доступных рынков не нашлось</p>
           )}
         </div>
       )}
@@ -205,28 +205,28 @@ export function Risk({ markets, setToast }: RiskProps) {
           style={{ backgroundColor: "rgba(0,0,0,0.6)" }}
           onClick={() => setRiskPickerOpen(false)}
         >
-          <div className="w-full max-w-sm bg-slate-900 border border-slate-700 rounded-2xl p-5 max-h-[70vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+          <div className="w-full max-w-sm bg-surface-100 border border-border-hover rounded-2xl p-5 max-h-[70vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-3">
-              <h3 className="text-white font-semibold text-sm">Добавить позицию</h3>
-              <button onClick={() => setRiskPickerOpen(false)} className="text-slate-500 hover:text-slate-300">
+              <h3 className="text-text-primary font-semibold text-sm">Добавить позицию</h3>
+              <button onClick={() => setRiskPickerOpen(false)} className="text-text-tertiary hover:text-text-secondary">
                 <X className="w-5 h-5" />
               </button>
             </div>
             <div className="space-y-1.5">
               {markets.slice(0, 60).map((m) => (
-                <div key={m.market_id} className="flex items-center justify-between bg-slate-800 rounded-xl px-3 py-2">
-                  <span className="text-slate-200 text-sm">{m.symbol}</span>
+                <div key={m.market_id} className="flex items-center justify-between bg-surface-200 rounded-xl px-3 py-2">
+                  <span className="text-text-primary text-sm">{m.symbol}</span>
                   <div className="flex gap-1.5">
                     <button
                       onClick={() => addRiskPosition(m, "long")}
-                      className="bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-semibold px-2.5 py-1 rounded-lg transition-colors"
+                      className="bg-emerald-500 hover:bg-emerald-400 text-surface-50 text-xs font-semibold px-2.5 py-1 rounded-lg transition-colors"
                     >
                       Long
                     </button>
                     {m.market_type === "perp" && (
                       <button
                         onClick={() => addRiskPosition(m, "short")}
-                        className="bg-red-500 hover:bg-red-400 text-slate-950 text-xs font-semibold px-2.5 py-1 rounded-lg transition-colors"
+                        className="bg-red-500 hover:bg-red-400 text-surface-50 text-xs font-semibold px-2.5 py-1 rounded-lg transition-colors"
                       >
                         Short
                       </button>
@@ -234,7 +234,7 @@ export function Risk({ markets, setToast }: RiskProps) {
                   </div>
                 </div>
               ))}
-              {markets.length === 0 && <p className="text-slate-600 text-sm text-center py-6">Рынки ещё загружаются</p>}
+              {markets.length === 0 && <p className="text-text-muted text-sm text-center py-6">Рынки ещё загружаются</p>}
             </div>
           </div>
         </div>

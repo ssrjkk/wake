@@ -27,7 +27,7 @@ def volatility(returns: list) -> float:
         return 0.0
     mean = sum(returns) / n
     variance = sum((x - mean) ** 2 for x in returns) / n
-    return variance ** 0.5
+    return variance**0.5
 
 
 def pearson_correlation(returns_a: list, returns_b: list) -> float:
@@ -44,7 +44,9 @@ def pearson_correlation(returns_a: list, returns_b: list) -> float:
     if std_a == 0 or std_b == 0:
         return 0.0  # нет вариации — корреляция не определена, трактуем как отсутствие связи
     r = cov / (std_a * std_b)
-    return max(-1.0, min(1.0, r))  # float-шум может дать 1.0000000002 — зажимаем в валидный диапазон
+    return max(
+        -1.0, min(1.0, r)
+    )  # float-шум может дать 1.0000000002 — зажимаем в валидный диапазон
 
 
 @dataclass(frozen=True)
@@ -70,14 +72,25 @@ def portfolio_dollar_volatility(positions: list, returns_by_market: dict) -> flo
     for pi in positions:
         for pj in positions:
             corr = _correlation_between(pi.market_id, pj.market_id, returns_by_market)
-            variance += pi.signed_notional_usd * pj.signed_notional_usd * corr * vols[pi.market_id] * vols[pj.market_id]
-    return max(0.0, variance) ** 0.5  # float-шум изредка даёт крошечную отрицательную дисперсию
+            variance += (
+                pi.signed_notional_usd
+                * pj.signed_notional_usd
+                * corr
+                * vols[pi.market_id]
+                * vols[pj.market_id]
+            )
+    return (
+        max(0.0, variance) ** 0.5
+    )  # float-шум изредка даёт крошечную отрицательную дисперсию
 
 
 def naive_dollar_volatility(positions: list, returns_by_market: dict) -> float:
     """Если бы риски просто складывались без учёта корреляции — точка сравнения
     для diversification_score."""
-    return sum(abs(p.signed_notional_usd) * volatility(returns_by_market[p.market_id]) for p in positions)
+    return sum(
+        abs(p.signed_notional_usd) * volatility(returns_by_market[p.market_id])
+        for p in positions
+    )
 
 
 def diversification_score(positions: list, returns_by_market: dict) -> float:
@@ -100,7 +113,9 @@ class HedgeSuggestion:
     resulting_portfolio_vol_usd: float
 
 
-def suggest_hedge(target: Position, candidates: list, returns_by_market: dict) -> HedgeSuggestion | None:
+def suggest_hedge(
+    target: Position, candidates: list, returns_by_market: dict
+) -> HedgeSuggestion | None:
     """Minimum-variance hedge ratio: h* = corr(target,candidate) * vol_target / vol_candidate.
     Перебирает кандидатов, выбирает того, кто даёт наименьшую результирующую
     портфельную волатильность (не просто наибольшую |корреляцию| — это разные
@@ -121,9 +136,13 @@ def suggest_hedge(target: Position, candidates: list, returns_by_market: dict) -
         hedge_notional = -hedge_ratio * target.signed_notional_usd
 
         hedge_position = Position(candidate_id, candidate_symbol, hedge_notional)
-        resulting_vol = portfolio_dollar_volatility([target, hedge_position], returns_by_market)
+        resulting_vol = portfolio_dollar_volatility(
+            [target, hedge_position], returns_by_market
+        )
 
         if best is None or resulting_vol < best.resulting_portfolio_vol_usd:
-            best = HedgeSuggestion(candidate_id, candidate_symbol, hedge_notional, corr, resulting_vol)
+            best = HedgeSuggestion(
+                candidate_id, candidate_symbol, hedge_notional, corr, resulting_vol
+            )
 
     return best

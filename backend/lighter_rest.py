@@ -14,6 +14,7 @@ import time
 import random
 import urllib.request
 import urllib.error
+from concurrent.futures import ThreadPoolExecutor
 from cache import cached
 from config import LIGHTER_NETWORK, LIGHTER_HOSTS
 from funding_arb import base_asset, snapshot_from_signed_rate
@@ -22,8 +23,16 @@ MAX_RETRIES = 3
 RETRY_DELAY = 1.0
 
 # Длительность интервала в мс — те же разрешения, что принимает /candles.
-RESOLUTION_MS = {"1m": 60_000, "5m": 300_000, "15m": 900_000, "30m": 1_800_000,
-                 "1h": 3_600_000, "4h": 14_400_000, "12h": 43_200_000, "1d": 86_400_000}
+RESOLUTION_MS = {
+    "1m": 60_000,
+    "5m": 300_000,
+    "15m": 900_000,
+    "30m": 1_800_000,
+    "1h": 3_600_000,
+    "4h": 14_400_000,
+    "12h": 43_200_000,
+    "1d": 86_400_000,
+}
 
 
 def _base(network: str) -> str:
@@ -50,7 +59,7 @@ def _get(url: str) -> dict:
             last_err = e
             if attempt < MAX_RETRIES - 1:
                 # Exponential backoff with jitter: 1s, 2s, 4s + random 0-0.5s
-                delay = RETRY_DELAY * (2 ** attempt) + random.uniform(0, 0.5)
+                delay = RETRY_DELAY * (2**attempt) + random.uniform(0, 0.5)
                 time.sleep(delay)
     raise RuntimeError(f"Lighter API недоступен: {last_err}")
 
@@ -85,8 +94,12 @@ def get_funding_rates(network: str = LIGHTER_NETWORK) -> list:
     return data.get("funding_rates", data.get("rates", []))
 
 
-def get_candles(market_id: int, resolution: str = "1h", count: int = 24,
-                network: str = LIGHTER_NETWORK) -> list:
+def get_candles(
+    market_id: int,
+    resolution: str = "1h",
+    count: int = 24,
+    network: str = LIGHTER_NETWORK,
+) -> list:
     """Ровно последние `count` свечей.
 
     Живое поведение (замерено на mainnet 2026-10-02, а не по докам): количество
@@ -137,11 +150,20 @@ def get_funding_rate(market_id: int, network: str = LIGHTER_NETWORK) -> dict:
     direction в ответе отсутствует, знак живёт в самом числе, поэтому
     направление выводится из знака, а не подставляется "long" по умолчанию."""
     market_id = int(market_id)
-    row = next((r for r in get_funding_rates(network)
-                if r.get("exchange") == "lighter" and int(r.get("market_id", -1)) == market_id), None)
+    row = next(
+        (
+            r
+            for r in get_funding_rates(network)
+            if r.get("exchange") == "lighter"
+            and int(r.get("market_id", -1)) == market_id
+        ),
+        None,
+    )
     if row is None:
         raise RuntimeError(f"нет funding rate для market_id={market_id}")
-    snapshot = snapshot_from_signed_rate(market_id, row.get("symbol", ""), float(row["rate"]))
+    snapshot = snapshot_from_signed_rate(
+        market_id, row.get("symbol", ""), float(row["rate"])
+    )
     return {
         "market_id": market_id,
         "symbol": snapshot.symbol,
@@ -157,8 +179,26 @@ def get_funding_rate(market_id: int, network: str = LIGHTER_NETWORK) -> dict:
 # ранжирование возможно только по свечам, а свечей на 211 активных перпов —
 # 211 запросов. Каждый символ ниже проверен как активный перп mainnet; TON и
 # MATIC среди них отсутствуют, и в списке их нет осознанно, а не по забывчивости.
-MAJOR_PERPS = ("BTC", "ETH", "SOL", "XRP", "BNB", "DOGE", "ADA", "LINK", "AVAX",
-               "UNI", "AAVE", "LIT", "HYPE", "1000PEPE", "WLD", "ARB", "OP", "SUI")
+MAJOR_PERPS = (
+    "BTC",
+    "ETH",
+    "SOL",
+    "XRP",
+    "BNB",
+    "DOGE",
+    "ADA",
+    "LINK",
+    "AVAX",
+    "UNI",
+    "AAVE",
+    "LIT",
+    "HYPE",
+    "1000PEPE",
+    "WLD",
+    "ARB",
+    "OP",
+    "SUI",
+)
 
 
 def _num(row: dict, key: str, default: float = 0.0) -> float:
@@ -172,8 +212,9 @@ def _num(row: dict, key: str, default: float = 0.0) -> float:
 
 
 @cached("market_overview", ttl=60)
-def get_market_overview(symbols: tuple = MAJOR_PERPS,
-                        network: str = LIGHTER_NETWORK) -> dict:
+def get_market_overview(
+    symbols: tuple = MAJOR_PERPS, network: str = LIGHTER_NETWORK
+) -> dict:
     """Цена, изменение и оборот за 24ч по каждому рынку, отсортированные по обороту.
 
     Один запрос к книге + по одному свечному запросу на рынок, всё под общим
@@ -190,31 +231,53 @@ def get_market_overview(symbols: tuple = MAJOR_PERPS,
             continue
         by_base.setdefault(base_asset(str(book.get("symbol", ""))), book)
 
-    rows, no_market, no_data = [], [], []
+    known = []
     for symbol in symbols:
         book = by_base.get(base_asset(str(symbol)))
         if book is None:
-            no_market.append(symbol)
             continue
+        known.append((symbol, int(book["market_id"])))
+
+    # 18 свечных запросов подряд — это 18 × сетевой RTT (на mainnet ~6с за
+    # запрос, суммарно холодный ответ растягивался на ~2 минуты). Свечи разных
+    # рынков не зависят друг от друга, поэтому параллелим; ThreadPoolExecutor
+    # вместо async, потому что _get — блокирующий urllib, а функция синхронная.
+    with ThreadPoolExecutor(max_workers=len(known) or 1) as pool:
+        futures = {
+            symbol: pool.submit(get_24h_stats, market_id, network)
+            for symbol, market_id in known
+        }
+        stats_by_symbol = {}
+        for symbol, future in futures.items():
+            try:
+                stats_by_symbol[symbol] = future.result()
+            except RuntimeError:
+                pass
+
+    known_symbols = {symbol for symbol, _ in known}
+    rows, no_market, no_data = [], [], []
+    for symbol in symbols:
+        if symbol not in stats_by_symbol:
+            (no_market if symbol not in known_symbols else no_data).append(symbol)
+            continue
+        book = by_base.get(base_asset(str(symbol)))
         market_id = int(book["market_id"])
-        try:
-            stats = get_24h_stats(market_id, network)
-        except RuntimeError:
-            no_data.append(symbol)
-            continue
-        rows.append({
-            "market_id": market_id,
-            "symbol": str(book.get("symbol", "")),
-            "base": base_asset(str(book.get("symbol", ""))),
-            "price": stats["price"],
-            "change_24h": stats["change_24h"],
-            "quote_volume_24h": stats["quote_volume_24h"],
-            "open_interest_base": _num(book, "open_interest"),
-            "min_base_amount": _num(book, "min_base_amount"),
-            "size_decimals": int(_num(book, "supported_size_decimals")),
-            "taker_fee": _num(book, "taker_fee"),
-            "maker_fee": _num(book, "maker_fee"),
-        })
+        stats = stats_by_symbol[symbol]
+        rows.append(
+            {
+                "market_id": market_id,
+                "symbol": str(book.get("symbol", "")),
+                "base": base_asset(str(book.get("symbol", ""))),
+                "price": stats["price"],
+                "change_24h": stats["change_24h"],
+                "quote_volume_24h": stats["quote_volume_24h"],
+                "open_interest_base": _num(book, "open_interest"),
+                "min_base_amount": _num(book, "min_base_amount"),
+                "size_decimals": int(_num(book, "supported_size_decimals")),
+                "taker_fee": _num(book, "taker_fee"),
+                "maker_fee": _num(book, "maker_fee"),
+            }
+        )
     rows.sort(key=lambda r: r["quote_volume_24h"], reverse=True)
     return {
         "network": network,

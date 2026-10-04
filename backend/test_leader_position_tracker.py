@@ -7,15 +7,24 @@ from leader_position_tracker import LeaderPositionTracker
 def position_msg(market_id: int, size: str, sign: int, avg_entry_price: str) -> dict:
     """Форма ответа по официальной схеме account_all_positions (update/account_all_positions)."""
     return {
-        "channel": f"account_all_positions:1",
+        "channel": "account_all_positions:1",
         "positions": {
             str(market_id): {
-                "market_id": market_id, "symbol": "ETH-USD",
-                "initial_margin_fraction": "0.1", "open_order_count": 0,
-                "pending_order_count": 0, "position_tied_order_count": 0,
-                "sign": sign, "position": size, "avg_entry_price": avg_entry_price,
-                "position_value": "0", "unrealized_pnl": "0", "realized_pnl": "0",
-                "liquidation_price": "0", "margin_mode": 1, "allocated_margin": "0",
+                "market_id": market_id,
+                "symbol": "ETH-USD",
+                "initial_margin_fraction": "0.1",
+                "open_order_count": 0,
+                "pending_order_count": 0,
+                "position_tied_order_count": 0,
+                "sign": sign,
+                "position": size,
+                "avg_entry_price": avg_entry_price,
+                "position_value": "0",
+                "unrealized_pnl": "0",
+                "realized_pnl": "0",
+                "liquidation_price": "0",
+                "margin_mode": 1,
+                "allocated_margin": "0",
             }
         },
         "shares": [],
@@ -28,11 +37,16 @@ def user_stats_msg(portfolio_value: str) -> dict:
     return {
         "channel": "user_stats:1",
         "stats": {
-            "collateral": "5000", "portfolio_value": portfolio_value, "leverage": "3.0",
-            "available_balance": "2000", "margin_usage": "0.5", "buying_power": "4000",
+            "collateral": "5000",
+            "portfolio_value": portfolio_value,
+            "leverage": "3.0",
+            "available_balance": "2000",
+            "margin_usage": "0.5",
+            "buying_power": "4000",
             "account_trading_mode": 1,
         },
-        "timestamp": 1773158679717, "type": "update/user_stats",
+        "timestamp": 1773158679717,
+        "type": "update/user_stats",
     }
 
 
@@ -40,7 +54,9 @@ class TestNoEquityYet(unittest.TestCase):
     def test_increase_without_known_equity_is_withheld(self):
         t = LeaderPositionTracker()
         events = t.apply_position_update(position_msg(0, "0.5", 1, "100000"))
-        self.assertEqual(events, [], "без известного equity приращение не должно эмиттиться")
+        self.assertEqual(
+            events, [], "без известного equity приращение не должно эмиттиться"
+        )
         # но состояние всё равно обновилось внутри
         self.assertEqual(t.positions[0]["size"], 0.5)
 
@@ -79,7 +95,9 @@ class TestBasicFlow(unittest.TestCase):
         self.assertFalse(e["is_increase"])
         self.assertAlmostEqual(e["size_delta"], 0.3, places=6)
         self.assertAlmostEqual(e["leader_position_before"], 0.5, places=6)
-        self.assertEqual(e["side"], "long")  # закрываем ДОЛЮ лонга, событие всё ещё "long"
+        self.assertEqual(
+            e["side"], "long"
+        )  # закрываем ДОЛЮ лонга, событие всё ещё "long"
 
     def test_full_close_to_zero(self):
         t = LeaderPositionTracker()
@@ -105,9 +123,13 @@ class TestReversal(unittest.TestCase):
         t.apply_user_stats(user_stats_msg("50000"))
         t.apply_position_update(position_msg(0, "0.5", 1, "100000"))  # long 0.5
 
-        events = t.apply_position_update(position_msg(0, "0.3", -1, "99000"))  # flips to short 0.3
+        events = t.apply_position_update(
+            position_msg(0, "0.3", -1, "99000")
+        )  # flips to short 0.3
 
-        self.assertEqual(len(events), 2, "разворот должен дать два события: закрытие и открытие")
+        self.assertEqual(
+            len(events), 2, "разворот должен дать два события: закрытие и открытие"
+        )
 
         close_e, open_e = events
         self.assertEqual(close_e["side"], "long")

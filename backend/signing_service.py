@@ -57,7 +57,9 @@ def _get_client() -> "lighter.SignerClient":
         api_key_index = int(os.environ.get("LIGHTER_API_KEY_INDEX", "0"))
         private_key = os.environ["LIGHTER_API_KEY_PRIVATE_KEY"]
     except KeyError as e:
-        raise RuntimeError(f"Не задана переменная окружения {e} — см. докстринг файла") from e
+        raise RuntimeError(
+            f"Не задана переменная окружения {e} — см. докстринг файла"
+        ) from e
 
     return lighter.SignerClient(
         url=BASE_URL,
@@ -69,9 +71,9 @@ def _get_client() -> "lighter.SignerClient":
 class OrderRequest(BaseModel):
     market_index: int
     client_order_index: int
-    base_amount: int   # уже отмасштабировано под supported_size_decimals рынка — см. lib/lighter.ts
-    price: int          # уже отмасштабировано под supported_price_decimals рынка
-    is_ask: bool         # True = short/sell, False = long/buy
+    base_amount: int  # уже отмасштабировано под supported_size_decimals рынка — см. lib/lighter.ts
+    price: int  # уже отмасштабировано под supported_price_decimals рынка
+    is_ask: bool  # True = short/sell, False = long/buy
     reduce_only: bool = False
 
 

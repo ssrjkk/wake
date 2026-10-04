@@ -33,7 +33,12 @@ import os
 import httpx
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup, Message, WebAppInfo
+from aiogram.types import (
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+    WebAppInfo,
+)
 
 import lighter_rest
 from config import LIGHTER_NETWORK, TELEGRAM_BOT_TOKEN
@@ -127,7 +132,9 @@ def markets_report(overview: dict, limit: int = 10) -> str:
     rows = overview["rows"][:limit]
     if not rows:
         return "Данных по рынку нет — Lighter API не ответил."
-    lines = [f"Топ {len(rows)} перпов Lighter по обороту за 24ч ({overview['network']}):"]
+    lines = [
+        f"Топ {len(rows)} перпов Lighter по обороту за 24ч ({overview['network']}):"
+    ]
     for i, r in enumerate(rows, 1):
         lines.append(
             f"{i:>2}. {r['symbol']:<9} {fmt_price(r['price']):>10}  "
@@ -156,7 +163,9 @@ def _fmt_left(resolve_at: float, now: datetime.datetime) -> str:
     return f"осталось {minutes}м"
 
 
-def predict_report(markets: list, limit: int = 10, now: datetime.datetime | None = None) -> str:
+def predict_report(
+    markets: list, limit: int = 10, now: datetime.datetime | None = None
+) -> str:
     now = now or datetime.datetime.now(datetime.timezone.utc)
     rows = markets[:limit]
     if not rows:
@@ -180,8 +189,12 @@ def funding_report(rates: list, limit: int = 10) -> str:
     rows = rates[:limit]
     if not rows:
         return "Подходящих ставок funding нет — бэкенд не ответил или все рынки платят шортам."
-    lines = ["Funding Lighter (эпох 1 час), годовая по убыванию. Показаны рынки, где ставку"]
-    lines.append("получают шорты перпа — только они забираются cash-and-carry без займа актива:")
+    lines = [
+        "Funding Lighter (эпох 1 час), годовая по убыванию. Показаны рынки, где ставку"
+    ]
+    lines.append(
+        "получают шорты перпа — только они забираются cash-and-carry без займа актива:"
+    )
     for r in rows:
         lines.append(
             f"• {str(r['symbol']):<9} {r['hourly_rate'] * 100:.4f}%/ч → "
@@ -193,9 +206,15 @@ def funding_report(rates: list, limit: int = 10) -> str:
 
 
 def _miniapp_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="Открыть Wake", web_app=WebAppInfo(url=WAKE_MINIAPP_URL))]
-    ])
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Открыть Wake", web_app=WebAppInfo(url=WAKE_MINIAPP_URL)
+                )
+            ]
+        ]
+    )
 
 
 async def _get_json(path: str) -> object:
@@ -264,7 +283,11 @@ async def cmd_funding(message: Message):
 @dp.message(Command("predict"))
 async def cmd_predict(message: Message):
     parts = (message.text or "").split()
-    status = parts[1] if len(parts) > 1 and parts[1] in ("open", "resolved", "all") else "open"
+    status = (
+        parts[1]
+        if len(parts) > 1 and parts[1] in ("open", "resolved", "all")
+        else "open"
+    )
     try:
         markets = await _get_json(f"/predict/markets?status={status}")
     except httpx.HTTPError as e:

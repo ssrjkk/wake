@@ -10,7 +10,13 @@ Cross-asset portfolio risk: /portfolio/risk и /portfolio/hedge.
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from portfolio_risk import Position, portfolio_dollar_volatility, naive_dollar_volatility, diversification_score, suggest_hedge
+from portfolio_risk import (
+    Position,
+    portfolio_dollar_volatility,
+    naive_dollar_volatility,
+    diversification_score,
+    suggest_hedge,
+)
 
 router = APIRouter()
 
@@ -34,7 +40,9 @@ class HedgeRequest(BaseModel):
 
 @router.post("/portfolio/risk")
 def portfolio_risk_endpoint(req: PortfolioRiskRequest):
-    positions = [Position(p.market_id, p.symbol, p.signed_notional_usd) for p in req.positions]
+    positions = [
+        Position(p.market_id, p.symbol, p.signed_notional_usd) for p in req.positions
+    ]
     returns_by_market = {int(k): v for k, v in req.returns_by_market.items()}
     try:
         naive = naive_dollar_volatility(positions, returns_by_market)
@@ -51,7 +59,9 @@ def portfolio_risk_endpoint(req: PortfolioRiskRequest):
 
 @router.post("/portfolio/hedge")
 def portfolio_hedge_endpoint(req: HedgeRequest):
-    target = Position(req.target.market_id, req.target.symbol, req.target.signed_notional_usd)
+    target = Position(
+        req.target.market_id, req.target.symbol, req.target.signed_notional_usd
+    )
     candidates = [(c[0], c[1]) for c in req.candidates]
     returns_by_market = {int(k): v for k, v in req.returns_by_market.items()}
     try:

@@ -60,8 +60,11 @@ def find_perp_market(symbol: str, network: str) -> dict:
     min_base_amount берутся оттуда, а не из памяти: у одного тикера на разных сетях
     разные id и ограничения, а ордер с неверным числом знаков сеть просто отклонит."""
     for book in lighter_rest.get_order_books(network):
-        if (book.get("symbol") == symbol and book.get("market_type") == "perp"
-                and book.get("status") == "active"):
+        if (
+            book.get("symbol") == symbol
+            and book.get("market_type") == "perp"
+            and book.get("status") == "active"
+        ):
             return book
     raise SystemExit(f"активного перп-рынка {symbol} в книге {network} нет")
 
@@ -82,7 +85,7 @@ async def main():
     price = lighter_rest.get_mark_price(market_index, NETWORK)
     # Вниз, всегда вниз: округление вверх дало бы ордер больше запрошенного размера,
     # а лимиты считаются от того, что уже стоит в заявке.
-    base_amount = math.floor(SIZE_USD / price * 10 ** size_decimals) / 10 ** size_decimals
+    base_amount = math.floor(SIZE_USD / price * 10**size_decimals) / 10**size_decimals
     if base_amount < min_base_amount:
         raise SystemExit(
             f"размер {base_amount} меньше минимума рынка ({min_base_amount}) — "
@@ -100,19 +103,28 @@ async def main():
             market_index=market_index,
             # Свой уникальный index — по нему ордер отменяют, если он ещё жив.
             client_order_index=int(time.time()),
-            base_amount=int(base_amount * 10 ** size_decimals),
+            base_amount=int(base_amount * 10**size_decimals),
             # Для IOC-маркета это предельно приемлемая цена. Здесь она равна
             # последней mark-цене, без запаса на проскальзывание: на резком рынке
             # такой ордер отклонят, а не исполнят по плохой цене. Запас добавляют
             # осознанно, потому что он и есть максимальное проскальзывание.
-            price=int(round(price * 10 ** price_decimals)),
-            is_ask=SIDE == "sell",          # False = buy/long, True = sell/short
+            price=int(round(price * 10**price_decimals)),
+            is_ask=SIDE == "sell",  # False = buy/long, True = sell/short
             order_type=client.ORDER_TYPE_MARKET,
             time_in_force=client.ORDER_TIME_IN_FORCE_IMMEDIATE_OR_CANCEL,
             reduce_only=False,
             order_expiry=client.DEFAULT_IOC_EXPIRY,
         )
-        print("сеть:", NETWORK, "| рынок:", market["symbol"], "| размер:", base_amount, "| цена:", price)
+        print(
+            "сеть:",
+            NETWORK,
+            "| рынок:",
+            market["symbol"],
+            "| размер:",
+            base_amount,
+            "| цена:",
+            price,
+        )
         print("tx:", tx)
         print("tx_hash:", tx_hash)
         # code=200 значит «принято сиквенсером», а не «гарантированно исполнено»:

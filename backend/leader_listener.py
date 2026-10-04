@@ -36,14 +36,19 @@ apidocs.lighter.xyz/docs/websocket-reference — включая разворот
 
 import argparse
 import asyncio
-import os
 import uuid
 import logging
 
 import db
 import audit_log as al
 from encrypted_key_store import EncryptedKeyStore
-from mirror_engine import LeaderEvent, FollowerConfig, MarketConstraints, Side, compute_mirror_plan
+from mirror_engine import (
+    LeaderEvent,
+    FollowerConfig,
+    MarketConstraints,
+    Side,
+    compute_mirror_plan,
+)
 from config import DB_PATH, AUDIT_DB_PATH, DRY_RUN, LIGHTER_BASE_URL, LIGHTER_WS_URL
 
 logger = logging.getLogger("wake.leader_listener")
@@ -54,7 +59,9 @@ LIGHTER_HTTP_URL = LIGHTER_BASE_URL
 WS_URL = LIGHTER_WS_URL
 
 
-async def handle_leader_event(leader_id: str, raw_event: dict, constraints: MarketConstraints | None):
+async def handle_leader_event(
+    leader_id: str, raw_event: dict, constraints: MarketConstraints | None
+):
     """raw_event — форма из leader_position_tracker.py, проверенная тестами против
     официальной схемы сообщений. constraints=None означает, что рынка нет в
     полученной книге: посчитать base_amount можно только с шагом и минимумом
@@ -77,7 +84,9 @@ async def handle_leader_event(leader_id: str, raw_event: dict, constraints: Mark
             FollowerConfig(
                 follower_id=r["follower_id"],
                 allocation_usd=r["allocation_usd"],
-                available_margin_usd=r["allocation_usd"],  # см. app.py — то же упрощение, требует реальной margin-проверки
+                available_margin_usd=r[
+                    "allocation_usd"
+                ],  # см. app.py — то же упрощение, требует реальной margin-проверки
                 max_leverage=r["max_leverage"],
                 current_mirrored_size=r["current_mirrored_size"],
             )
@@ -86,52 +95,98 @@ async def handle_leader_event(leader_id: str, raw_event: dict, constraints: Mark
 
         if constraints is None:
             reason = f"market_constraints_unavailable:{event.market_id}"
-            logger.warning("лидер %s: рынок %s не в книге Lighter — фолловеры не зеркалены",
-                           leader_id, event.market_id)
+            logger.warning(
+                "лидер %s: рынок %s не в книге Lighter — фолловеры не зеркалены",
+                leader_id,
+                event.market_id,
+            )
             for r in rows:
-                db.log_mirror_result(conn, str(uuid.uuid4()), r["follow_id"], event.market_id,
-                                     event.side.value, 0, False, "skipped", reason)
+                db.log_mirror_result(
+                    conn,
+                    str(uuid.uuid4()),
+                    r["follow_id"],
+                    event.market_id,
+                    event.side.value,
+                    0,
+                    False,
+                    "skipped",
+                    reason,
+                )
             return
 
         plan = compute_mirror_plan(event, followers, constraints)
 
         for skipped in plan.skipped:
-            logger.info("skip follower=%s reason=%s", skipped.follower_id, skipped.reason)
+            logger.info(
+                "skip follower=%s reason=%s", skipped.follower_id, skipped.reason
+            )
             # mirror_log.follow_id ссылается на follows(id), а SkippedFollower несёт
             # follower_id подписчика. Записать его напрямую — IntegrityError, и он
             # прилетает на самом обычном пути (skip возникает, когда аллокации не
             # хватает на минимальный ордер), т.е. вешает листенер посреди стрима.
-            db.log_mirror_result(conn, str(uuid.uuid4()), by_follower[skipped.follower_id]["follow_id"],
-                                  event.market_id, event.side.value, 0, event.is_increase is False,
-                                  "skipped", skipped.reason)
+            db.log_mirror_result(
+                conn,
+                str(uuid.uuid4()),
+                by_follower[skipped.follower_id]["follow_id"],
+                event.market_id,
+                event.side.value,
+                0,
+                event.is_increase is False,
+                "skipped",
+                skipped.reason,
+            )
 
         for order in plan.orders:
             follow_row = by_follower[order.follower_id]
             if DRY_RUN:
                 logger.info("dry_run would place %s", order)
-                db.log_mirror_result(conn, str(uuid.uuid4()), follow_row["follow_id"], order.market_id,
-                                      order.side.value, order.base_amount, order.reduce_only, "dry_run")
+                db.log_mirror_result(
+                    conn,
+                    str(uuid.uuid4()),
+                    follow_row["follow_id"],
+                    order.market_id,
+                    order.side.value,
+                    order.base_amount,
+                    order.reduce_only,
+                    "dry_run",
+                )
                 continue
 
             key_store = EncryptedKeyStore()  # шифрование на диске — см. encrypted_key_store.py, всё ещё НЕ HSM-эквивалент
             key = key_store.get_key(order.follower_id)
             if not key:
-                logger.error("no key on file for follower=%s — skipping execution", order.follower_id)
-                db.log_mirror_result(conn, str(uuid.uuid4()), follow_row["follow_id"], order.market_id,
-                                      order.side.value, order.base_amount, order.reduce_only, "failed", "no_key")
+                logger.error(
+                    "no key on file for follower=%s — skipping execution",
+                    order.follower_id,
+                )
+                db.log_mirror_result(
+                    conn,
+                    str(uuid.uuid4()),
+                    follow_row["follow_id"],
+                    order.market_id,
+                    order.side.value,
+                    order.base_amount,
+                    order.reduce_only,
+                    "failed",
+                    "no_key",
+                )
                 with al.connect(AUDIT_DB_PATH) as audit_conn:
-                    al.log_action(audit_conn, al.AuditEntry(
-                        actor=f"follower:{order.follower_id}",
-                        action="key_access_denied",
-                        resource=f"follower:{order.follower_id}",
-                        details={"reason": "no_key", "market_id": order.market_id},
-                        success=False,
-                    ))
+                    al.log_action(
+                        audit_conn,
+                        al.AuditEntry(
+                            actor=f"follower:{order.follower_id}",
+                            action="key_access_denied",
+                            resource=f"follower:{order.follower_id}",
+                            details={"reason": "no_key", "market_id": order.market_id},
+                            success=False,
+                        ),
+                    )
                 continue
 
             # Тот же паттерн, что в place_order_example.py / signing_service.py —
             # намеренно не дублирую здесь другую реализацию.
             import lighter  # локальный импорт: только когда реально доходим до исполнения
+
             client = lighter.SignerClient(
                 url=LIGHTER_HTTP_URL,
                 api_private_keys={key["api_key_index"]: key["private_key"]},
@@ -140,7 +195,7 @@ async def handle_leader_event(leader_id: str, raw_event: dict, constraints: Mark
             tx, tx_hash, err = await client.create_order(
                 market_index=order.market_id,
                 client_order_index=int(uuid.uuid4().int % 1_000_000),
-                base_amount=int(order.base_amount * 10 ** constraints.size_decimals),
+                base_amount=int(order.base_amount * 10**constraints.size_decimals),
                 price=int(event.price),
                 is_ask=(order.side == Side.SHORT),
                 order_type=client.ORDER_TYPE_MARKET,
@@ -151,11 +206,23 @@ async def handle_leader_event(leader_id: str, raw_event: dict, constraints: Mark
             await client.close()
 
             status = "sent" if not err else "failed"
-            db.log_mirror_result(conn, str(uuid.uuid4()), follow_row["follow_id"], order.market_id,
-                                  order.side.value, order.base_amount, order.reduce_only, status, str(err) if err else None, tx_hash)
+            db.log_mirror_result(
+                conn,
+                str(uuid.uuid4()),
+                follow_row["follow_id"],
+                order.market_id,
+                order.side.value,
+                order.base_amount,
+                order.reduce_only,
+                status,
+                str(err) if err else None,
+                tx_hash,
+            )
             db.update_mirrored_size(
-                conn, follow_row["follow_id"],
-                follow_row["current_mirrored_size"] + (order.base_amount if not order.reduce_only else -order.base_amount),
+                conn,
+                follow_row["follow_id"],
+                follow_row["current_mirrored_size"]
+                + (order.base_amount if not order.reduce_only else -order.base_amount),
             )
 
 
@@ -188,7 +255,9 @@ async def main(leader_id: str, leader_account_index: int):
 
     try:
         constraints_by_market = build_constraints(get_order_books())
-        logger.info("ограничения получены по %d активным рынкам", len(constraints_by_market))
+        logger.info(
+            "ограничения получены по %d активным рынкам", len(constraints_by_market)
+        )
     except Exception as e:
         # Без книги считать размер нельзя ни на одном рынке. Не падаем: листенер
         # продолжает видеть события и честно пишет skip, вместо того чтобы
@@ -198,12 +267,27 @@ async def main(leader_id: str, leader_account_index: int):
 
     tracker = LeaderPositionTracker()
 
-    logger.info("DRY_RUN=%s — %s", DRY_RUN, "реальные ордера НЕ уходят" if DRY_RUN else "РЕАЛЬНОЕ ИСПОЛНЕНИЕ ВКЛЮЧЕНО")
+    logger.info(
+        "DRY_RUN=%s — %s",
+        DRY_RUN,
+        "реальные ордера НЕ уходят" if DRY_RUN else "РЕАЛЬНОЕ ИСПОЛНЕНИЕ ВКЛЮЧЕНО",
+    )
     logger.info("Слушаю лидера account_index=%s на %s", leader_account_index, WS_URL)
 
     async with websockets.connect(WS_URL) as ws:
-        await ws.send(json.dumps({"type": "subscribe", "channel": f"account_all_positions/{leader_account_index}"}))
-        await ws.send(json.dumps({"type": "subscribe", "channel": f"user_stats/{leader_account_index}"}))
+        await ws.send(
+            json.dumps(
+                {
+                    "type": "subscribe",
+                    "channel": f"account_all_positions/{leader_account_index}",
+                }
+            )
+        )
+        await ws.send(
+            json.dumps(
+                {"type": "subscribe", "channel": f"user_stats/{leader_account_index}"}
+            )
+        )
 
         async for raw in ws:
             msg = json.loads(raw)
@@ -213,10 +297,16 @@ async def main(leader_id: str, leader_account_index: int):
                 tracker.apply_user_stats(msg)
                 continue
 
-            if msg_type in ("update/account_all_positions", "subscribed/account_all_positions"):
+            if msg_type in (
+                "update/account_all_positions",
+                "subscribed/account_all_positions",
+            ):
                 for raw_event in tracker.apply_position_update(msg):
-                    await handle_leader_event(leader_id, raw_event,
-                                              constraints_by_market.get(raw_event["market_id"]))
+                    await handle_leader_event(
+                        leader_id,
+                        raw_event,
+                        constraints_by_market.get(raw_event["market_id"]),
+                    )
                 continue
 
             # Прочие типы сообщений (heartbeat и т.п.) — игнорируем осознанно, не молча.

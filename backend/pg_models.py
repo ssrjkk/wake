@@ -88,7 +88,9 @@ class Follow(Base):
     )
     allocation_usd: Mapped[float] = mapped_column(Float, nullable=False)
     max_leverage: Mapped[float] = mapped_column(Float, nullable=False, default=3.0)
-    current_mirrored_size: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    current_mirrored_size: Mapped[float] = mapped_column(
+        Float, nullable=False, default=0.0
+    )
     paused: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False

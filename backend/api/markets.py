@@ -35,13 +35,22 @@ def markets_overview():
     rows = []
     for r in overview["rows"]:
         signed = rates.get(r["market_id"])
-        snapshot = snapshot_from_signed_rate(r["market_id"], r["symbol"], signed) if signed is not None else None
-        rows.append(dict(r) | {
-            "funding_hourly": snapshot.hourly_rate if snapshot else None,
-            "funding_annualized": snapshot.hourly_rate * HOURS_PER_YEAR if snapshot else None,
-            # direction — это КТО платит: "long" = платят лонги, ставку забирают шорты.
-            "funding_payer": snapshot.direction if snapshot else None,
-        })
+        snapshot = (
+            snapshot_from_signed_rate(r["market_id"], r["symbol"], signed)
+            if signed is not None
+            else None
+        )
+        rows.append(
+            dict(r)
+            | {
+                "funding_hourly": snapshot.hourly_rate if snapshot else None,
+                "funding_annualized": snapshot.hourly_rate * HOURS_PER_YEAR
+                if snapshot
+                else None,
+                # direction — это КТО платит: "long" = платят лонги, ставку забирают шорты.
+                "funding_payer": snapshot.direction if snapshot else None,
+            }
+        )
     return {
         "network": overview["network"],
         "ranked_by": overview["ranked_by"],

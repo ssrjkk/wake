@@ -16,6 +16,12 @@ const NETWORKS = {
 
 export type ArcusNetwork = keyof typeof NETWORKS;
 
+// res.json() is Promise<any> — this is the single entry point where an external
+// response crosses into typed code; each function declares its response shape.
+async function json<T>(res: Response): Promise<T> {
+  return (await res.json()) as T;
+}
+
 let currentNetwork: ArcusNetwork = "mainnet";
 export function setNetwork(network: ArcusNetwork) {
   currentNetwork = network;
@@ -25,36 +31,44 @@ export function getNetwork(): ArcusNetwork {
 }
 const BASE_URL = () => NETWORKS[currentNetwork];
 
-// GET /v1/markets returns MarketInfo array with fields like marketDisplayName, marketId,
-// status, baseAsset, quoteAsset, tickSize, stepSize, and trading bounds.
-// Verified from docs.arcus.xyz API reference.
+// GET /v1/markets returns MarketInfo array. Live mainnet response (2026-10-04):
+// marketId is an INT (1, 2, 3…), the perp/spot discriminator is the `type` field
+// ("PERPETUAL"), and status is "ONLINE", not "ACTIVE". Docs described an earlier
+// shape; the fields below are what the API actually returns.
 export type ArcusMarket = {
   marketDisplayName: string;
-  marketId: string;
+  marketId: number;
   status: string;
   baseAsset: string;
   quoteAsset: string;
   tickSize: string;
   stepSize: string;
+  type?: string;
+  category?: string;
   minOrderSize?: string;
   maxOrderSize?: string;
 };
 
+export function isArcusPerp(m: ArcusMarket): boolean {
+  return m.type === "PERPETUAL" || m.marketDisplayName.includes("-PERP");
+}
+
 export async function getMarkets(): Promise<ArcusMarket[]> {
   const res = await fetch(`${BASE_URL()}/markets`);
   if (!res.ok) throw new Error(`Arcus API ${res.status}`);
-  const data = await res.json();
+  const data = await json<{ markets?: ArcusMarket[] }>(res);
   return data.markets ?? [];
 }
 
-// GET /v1/mids returns mid prices as a map of market → price string, plus globalSequenceId.
-// Optional query param: market (string) to filter to a single market.
-// Verified from docs: response is { mids: { [market]: price }, globalSequenceId: number }.
-export async function getMidPrices(market?: string): Promise<{ mids: Record<string, string>; globalSequenceId: number }> {
+// GET /v1/mids returns mid prices keyed by marketDisplayName ("BTC-USD": "85212.05"
+// on live mainnet), plus globalSequenceId.
+export type MidPrices = { mids: Record<string, string>; globalSequenceId: number };
+
+export async function getMidPrices(market?: string): Promise<MidPrices> {
   const params = market ? `?market=${encodeURIComponent(market)}` : "";
   const res = await fetch(`${BASE_URL()}/mids${params}`);
   if (!res.ok) throw new Error(`Arcus API ${res.status}`);
-  return res.json();
+  return json<MidPrices>(res);
 }
 
 // GET /v1/trades returns recent trades for a market.
@@ -76,38 +90,6 @@ export async function getRecentTrades(market: string, limit = 100): Promise<Arcu
   });
   const res = await fetch(`${BASE_URL()}/trades?${params}`);
   if (!res.ok) throw new Error(`Arcus API ${res.status}`);
-  const data = await res.json();
+  const data = await json<{ trades?: ArcusTrade[] }>(res);
   return data.trades ?? [];
-}
-
-// GET /v1/l2OrderBook/{market} returns L2 orderbook snapshot.
-// Params: nLevels (default 20), sigFigs (significant figures for price/size).
-// Response: OrderbookSnapshot with bids, asks, timestamps.
-export type ArcusOrderBookLevel = {
-  price: string;
-  size: string;
-};
-
-export type ArcusOrderBook = {
-  market: string;
-  bids: ArcusOrderBookLevel[];
-  asks: ArcusOrderBookLevel[];
-  timestamp: number;
-  sequenceId: number;
-};
-
-export async function getOrderBook(market: string, nLevels = 20): Promise<ArcusOrderBook> {
-  const params = new URLSearchParams({
-    nLevels: String(nLevels),
-  });
-  const res = await fetch(`${BASE_URL()}/l2OrderBook/${encodeURIComponent(market)}?${params}`);
-  if (!res.ok) throw new Error(`Arcus API ${res.status}`);
-  return res.json();
-}
-
-// Convenience: get a single mid price for a market. Returns null if market not found.
-export async function getMidPrice(market: string): Promise<number | null> {
-  const data = await getMidPrices(market);
-  const price = data.mids[market];
-  return price ? Number(price) : null;
 }

@@ -59,7 +59,7 @@ class TestStats(unittest.TestCase):
         m.record_open("t1", 0, "long", 100, 1)
         m.record_close("t1", 110)  # win
         m.record_open("t2", 0, "long", 100, 1)
-        m.record_close("t2", 90)   # loss
+        m.record_close("t2", 90)  # loss
         m.record_open("t3", 0, "long", 100, 1)
         m.record_close("t3", 105)  # win
         self.assertAlmostEqual(m.win_rate(), 2 / 3, places=6)
@@ -69,7 +69,7 @@ class TestStats(unittest.TestCase):
         m.record_open("t1", market_id=0, side="long", entry_price=100, size=1)
         m.record_close("t1", 110)  # market 0, win
         m.record_open("t2", market_id=1, side="long", entry_price=100, size=1)
-        m.record_close("t2", 90)   # market 1, loss
+        m.record_close("t2", 90)  # market 1, loss
         self.assertAlmostEqual(m.win_rate(market_id=0), 1.0, places=6)
         self.assertAlmostEqual(m.win_rate(market_id=1), 0.0, places=6)
 
@@ -78,7 +78,7 @@ class TestStats(unittest.TestCase):
         m.record_open("t1", 0, "long", 100, 1)
         m.record_close("t1", 110)  # +10
         m.record_open("t2", 0, "long", 100, 1)
-        m.record_close("t2", 80)   # -20
+        m.record_close("t2", 80)  # -20
         self.assertAlmostEqual(m.avg_pnl(), -5.0, places=6)
 
 
@@ -86,6 +86,7 @@ class TestRecentAndSummary(unittest.TestCase):
     def test_recent_trades_returns_most_recent_first(self):
         m = AgentMemoryStore()
         import time
+
         m.record_open("t1", 0, "long", 100, 1)
         time.sleep(0.01)
         m.record_open("t2", 0, "long", 100, 1)

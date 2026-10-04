@@ -32,10 +32,14 @@ def _require_curator(request: Request):
     против своей позиции. В проде заменить на полноценный auth-слой."""
     curator_token = os.environ.get("WAKE_CURATOR_TOKEN", "")
     if not curator_token:
-        raise HTTPException(status_code=500, detail="WAKE_CURATOR_TOKEN не настроен на сервере")
+        raise HTTPException(
+            status_code=500, detail="WAKE_CURATOR_TOKEN не настроен на сервере"
+        )
     auth_header = request.headers.get("X-Curator-Token", "")
     if not hmac.compare_digest(auth_header, curator_token):
-        raise HTTPException(status_code=403, detail="Недостаточно прав: требуется токен куратора")
+        raise HTTPException(
+            status_code=403, detail="Недостаточно прав: требуется токен куратора"
+        )
 
 
 class CreatePriceMarket(BaseModel):
@@ -86,9 +90,17 @@ def create_price_market(req: CreatePriceMarket, request: Request):
     _require_curator(request)
     market_id = str(uuid.uuid4())
     with pdb.connect(DB_PATH) as conn:
-        pdb.create_market(conn, market_id, "price", req.question, req.resolve_at, req.b,
-                           lighter_market_id=req.lighter_market_id, threshold=req.threshold,
-                           comparator=req.comparator)
+        pdb.create_market(
+            conn,
+            market_id,
+            "price",
+            req.question,
+            req.resolve_at,
+            req.b,
+            lighter_market_id=req.lighter_market_id,
+            threshold=req.threshold,
+            comparator=req.comparator,
+        )
     return {"market_id": market_id}
 
 
@@ -121,23 +133,33 @@ def list_positions(user_id: str):
         amm = LMSRMarket(b=r["b"], q_yes=r["q_yes"], q_no=r["q_no"])
         shares = r["shares"]
         net_cost = r["net_cost"] or 0.0
-        market_payout = shares * 1.0 if (r["status"] == "resolved" and r["market_outcome"] == r["outcome"]) else 0.0
-        result.append({
-            "market_id": r["market_id"],
-            "question": r["question"],
-            "kind": r["kind"],
-            "market_status": r["status"],
-            "market_outcome": r["market_outcome"],
-            "resolve_at": r["resolve_at"],
-            "outcome": r["outcome"],
-            "shares": shares,
-            "net_cost_usd": net_cost,
-            "avg_entry_usd": net_cost / shares if shares > 0 else 0.0,
-            "mark_price": amm.price_yes() if r["outcome"] == "yes" else amm.price_no(),
-            "mark_value_usd": amm.price_yes() * shares if r["outcome"] == "yes" else amm.price_no() * shares,
-            "claimable_usd": 0.0 if r["claimed"] else market_payout,
-            "claimed": bool(r["claimed"]),
-        })
+        market_payout = (
+            shares * 1.0
+            if (r["status"] == "resolved" and r["market_outcome"] == r["outcome"])
+            else 0.0
+        )
+        result.append(
+            {
+                "market_id": r["market_id"],
+                "question": r["question"],
+                "kind": r["kind"],
+                "market_status": r["status"],
+                "market_outcome": r["market_outcome"],
+                "resolve_at": r["resolve_at"],
+                "outcome": r["outcome"],
+                "shares": shares,
+                "net_cost_usd": net_cost,
+                "avg_entry_usd": net_cost / shares if shares > 0 else 0.0,
+                "mark_price": amm.price_yes()
+                if r["outcome"] == "yes"
+                else amm.price_no(),
+                "mark_value_usd": amm.price_yes() * shares
+                if r["outcome"] == "yes"
+                else amm.price_no() * shares,
+                "claimable_usd": 0.0 if r["claimed"] else market_payout,
+                "claimed": bool(r["claimed"]),
+            }
+        )
     return result
 
 
@@ -149,7 +171,6 @@ def get_predict_market(market_id: str):
             raise HTTPException(status_code=404, detail="рынок не найден")
         stats = pdb.market_stats(conn)
     return _with_prices(m, stats)
-
 
 
 @router.get("/predict/markets/{market_id}/preview")
@@ -171,19 +192,42 @@ def trade_predict_market(market_id: str, req: TradeRequest):
     trade_id = str(uuid.uuid4())
     with pdb.connect(DB_PATH) as conn:
         try:
-            cost = pdb.record_trade(conn, trade_id, req.user_id, market_id, req.outcome, req.shares)
+            cost = pdb.record_trade(
+                conn, trade_id, req.user_id, market_id, req.outcome, req.shares
+            )
         except ValueError as e:
             with al.connect(AUDIT_DB_PATH) as aconn:
-                al.log_action(aconn, al.AuditEntry(
-                    actor=req.user_id, action="trade_executed", resource=market_id,
-                    details={"outcome": req.outcome, "shares": req.shares, "error": str(e)}, success=False,
-                ))
+                al.log_action(
+                    aconn,
+                    al.AuditEntry(
+                        actor=req.user_id,
+                        action="trade_executed",
+                        resource=market_id,
+                        details={
+                            "outcome": req.outcome,
+                            "shares": req.shares,
+                            "error": str(e),
+                        },
+                        success=False,
+                    ),
+                )
             raise HTTPException(status_code=400, detail=str(e))
     with al.connect(AUDIT_DB_PATH) as aconn:
-        al.log_action(aconn, al.AuditEntry(
-            actor=req.user_id, action="trade_executed", resource=market_id,
-            details={"outcome": req.outcome, "shares": req.shares, "cost_usd": cost, "trade_id": trade_id}, success=True,
-        ))
+        al.log_action(
+            aconn,
+            al.AuditEntry(
+                actor=req.user_id,
+                action="trade_executed",
+                resource=market_id,
+                details={
+                    "outcome": req.outcome,
+                    "shares": req.shares,
+                    "cost_usd": cost,
+                    "trade_id": trade_id,
+                },
+                success=True,
+            ),
+        )
     return {"trade_id": trade_id, "cost_usd": cost}
 
 
@@ -197,17 +241,32 @@ def resolve_event(market_id: str, req: ResolveEventRequest, request: Request):
     if current["status"] != "open":
         # Проверка до audit_log: запись о резолюции, которая не состоялась,
         # ухудшает аудит хуже, чем её отсутствие.
-        raise HTTPException(status_code=409, detail=f"рынок уже резолвлен с исходом {current['outcome']}")
+        raise HTTPException(
+            status_code=409,
+            detail=f"рынок уже резолвлен с исходом {current['outcome']}",
+        )
     try:
-        resolution = resolve_event_market(req.outcome, req.resolved_by, _time.time(), req.evidence_url)
+        resolution = resolve_event_market(
+            req.outcome, req.resolved_by, _time.time(), req.evidence_url
+        )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     with pdb.connect(DB_PATH) as conn:
         try:
-            pdb.resolve_market(conn, market_id, resolution.outcome, resolution.resolved_by, resolution.evidence_url)
+            pdb.resolve_market(
+                conn,
+                market_id,
+                resolution.outcome,
+                resolution.resolved_by,
+                resolution.evidence_url,
+            )
         except ValueError as e:
             raise HTTPException(status_code=409, detail=str(e))
-    return {"outcome": resolution.outcome, "resolved_by": resolution.resolved_by, "evidence_url": resolution.evidence_url}
+    return {
+        "outcome": resolution.outcome,
+        "resolved_by": resolution.resolved_by,
+        "evidence_url": resolution.evidence_url,
+    }
 
 
 @router.post("/predict/markets/{market_id}/resolve-price")
@@ -222,6 +281,7 @@ def resolve_price(market_id: str, req: ResolvePriceRequest, request: Request):
     догоняет пропущенные тики, а не пересоздаёт исход."""
     _require_curator(request)
     from lighter_rest import get_mark_price
+
     now = _time.time()
     with pdb.connect(DB_PATH) as conn:
         m = pdb.get_market(conn, market_id)
@@ -230,7 +290,9 @@ def resolve_price(market_id: str, req: ResolvePriceRequest, request: Request):
         if m["kind"] != "price":
             raise HTTPException(status_code=400, detail="не price-рынок")
         if m["status"] != "open":
-            raise HTTPException(status_code=409, detail=f"рынок уже резолвлен с исходом {m['outcome']}")
+            raise HTTPException(
+                status_code=409, detail=f"рынок уже резолвлен с исходом {m['outcome']}"
+            )
         if now < m["resolve_at"]:
             raise HTTPException(
                 status_code=409,
@@ -240,9 +302,18 @@ def resolve_price(market_id: str, req: ResolvePriceRequest, request: Request):
             observed = get_mark_price(m["lighter_market_id"], req.network)
         except RuntimeError as e:
             raise HTTPException(status_code=502, detail=str(e))
-        resolution = resolve_price_market(observed, m["threshold"], Comparator(m["comparator"]))
-        pdb.resolve_market(conn, market_id, resolution.outcome, "auto:lighter_mark_price", None)
-    return {"outcome": resolution.outcome, "observed_price": observed, "network": req.network, "resolve_at": m["resolve_at"]}
+        resolution = resolve_price_market(
+            observed, m["threshold"], Comparator(m["comparator"])
+        )
+        pdb.resolve_market(
+            conn, market_id, resolution.outcome, "auto:lighter_mark_price", None
+        )
+    return {
+        "outcome": resolution.outcome,
+        "observed_price": observed,
+        "network": req.network,
+        "resolve_at": m["resolve_at"],
+    }
 
 
 @router.post("/predict/markets/{market_id}/claim")

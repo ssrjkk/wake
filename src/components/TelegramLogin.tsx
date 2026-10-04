@@ -1,16 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { TELEGRAM_BOT_NAME } from "../lib/config";
-import { backendJson } from "../lib/backend";
-import type { TelegramProfile } from "../lib/telegram";
+import type { TelegramUser } from "../lib/telegram";
 
-export interface TelegramUser {
-  id: number;
-  first_name: string;
-  last_name?: string;
-  username?: string;
-  photo_url?: string;
-  auth_date: number;
-  hash: string;
+// Telegram Login Widget объявляет колбэк на window по data-onauth; window в
+// lib.dom не знает про него — расширяем тип, чтобы не гасить no-explicit-any.
+declare global {
+  interface Window {
+    onTelegramAuth?: (user: TelegramUser) => void;
+  }
 }
 
 interface TelegramLoginProps {
@@ -38,7 +35,7 @@ export function TelegramLogin({ onLogin, onMissingConfig }: TelegramLoginProps) 
     const container = containerRef.current;
     if (!container || container.hasChildNodes()) return;
 
-    (window as any).onTelegramAuth = (user: TelegramUser) => callbacks.current.onLogin(user);
+    window.onTelegramAuth = (user: TelegramUser) => callbacks.current.onLogin(user);
 
     const script = document.createElement("script");
     script.src = "https://telegram.org/js/telegram-widget.js?22";
@@ -53,29 +50,19 @@ export function TelegramLogin({ onLogin, onMissingConfig }: TelegramLoginProps) 
     container.appendChild(script);
 
     return () => {
-      delete (window as any).onTelegramAuth;
+      delete window.onTelegramAuth;
       container.replaceChildren();
     };
   }, []);
 
   if (missingConfig) {
     return (
-      <div className="text-xs text-slate-500 text-center py-3 px-4 bg-slate-950 border border-slate-800 rounded-xl">
-        Вход через Telegram выключен: собери фронт с <code className="text-slate-400">VITE_TELEGRAM_BOT_NAME</code> (имя бота без «@») и задай{" "}
-        <code className="text-slate-400">TELEGRAM_BOT_TOKEN</code> на бэкенде — иначе подпись пользователя нечем проверить.
+      <div className="text-xs text-text-tertiary text-center py-3 px-4 bg-surface-50 border border-border rounded-xl">
+        Вход через Telegram выключен: собери фронт с <code className="text-text-secondary">VITE_TELEGRAM_BOT_NAME</code> (имя бота без «@») и задай{" "}
+        <code className="text-text-secondary">TELEGRAM_BOT_TOKEN</code> на бэкенде — иначе подпись пользователя нечем проверить.
       </div>
     );
   }
 
   return <div ref={containerRef} className="flex justify-center" />;
-}
-
-export async function verifyTelegramLogin(user: TelegramUser): Promise<TelegramProfile> {
-  // Ответ бэкенда — единственное, что показывается в интерфейсе: до проверки подписи
-  // поля виджета это ещё данные браузера.
-  return backendJson<TelegramProfile>("/auth/telegram", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(user),
-  });
 }

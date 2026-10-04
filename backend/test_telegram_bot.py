@@ -13,22 +13,41 @@ import cache
 import telegram_bot as tb
 
 
-BOOK = {"market_id": 1, "symbol": "BTC", "market_type": "perp", "status": "active",
-        "open_interest": "372.658848", "min_base_amount": "0.00007",
-        "supported_size_decimals": 5, "taker_fee": "0.0002"}
+BOOK = {
+    "market_id": 1,
+    "symbol": "BTC",
+    "market_type": "perp",
+    "status": "active",
+    "open_interest": "372.658848",
+    "min_base_amount": "0.00007",
+    "supported_size_decimals": 5,
+    "taker_fee": "0.0002",
+}
 
-STATS = {"price": 84408.7, "change_24h": -0.002, "quote_volume_24h": 847_828_634.0,
-         "candles_used": 24}
+STATS = {
+    "price": 84408.7,
+    "change_24h": -0.002,
+    "quote_volume_24h": 847_828_634.0,
+    "candles_used": 24,
+}
 
-FUNDING = {"market_id": 1, "symbol": "BTC", "rate": 0.00008, "signed_rate": 0.00008,
-           "direction": "long"}
+FUNDING = {
+    "market_id": 1,
+    "symbol": "BTC",
+    "rate": 0.00008,
+    "signed_rate": 0.00008,
+    "direction": "long",
+}
 
 
 class TestImportIsTokenFree(unittest.TestCase):
     def test_module_imports_and_registers_handlers_without_token(self):
         self.assertIsNotNone(tb.dp)
-        self.assertEqual(len(tb.dp.message.handlers), 6,
-                         "/start /price /markets /funding /predict и fallback")
+        self.assertEqual(
+            len(tb.dp.message.handlers),
+            6,
+            "/start /price /markets /funding /predict и fallback",
+        )
 
 
 class TestFormatting(unittest.TestCase):
@@ -60,10 +79,14 @@ class TestPriceReport(unittest.TestCase):
         self.assertIn("-0.20%", got)
         self.assertIn("$847.8M", got)
         self.assertIn("market_id 1", got)
-        self.assertIn("0.00007", got, "минимальный размер — из книги, он определяет, что вообще исполнимо")
+        self.assertIn(
+            "0.00007",
+            got,
+            "минимальный размер — из книги, он определяет, что вообще исполнимо",
+        )
 
     def test_funding_payer_follows_sign(self):
-        """"платят лонги" при direction="long" — именно так cash-and-carry и
+        """ "платят лонги" при direction="long" — именно так cash-and-carry и
         читается: шорт перпа получает ставку. Перепутать — значит отправить юзера
         в противоположную ногу."""
         self.assertIn("платят лонги", tb.price_report("BTC", BOOK, STATS, FUNDING))
@@ -82,9 +105,24 @@ class TestMarketsReport(unittest.TestCase):
         "ranked_by": "quote_volume_24h",
         "count": 3,
         "rows": [
-            {"symbol": "BTC", "price": 84408.7, "change_24h": -0.002, "quote_volume_24h": 847_828_634.0},
-            {"symbol": "ETH", "price": 2660.34, "change_24h": -0.0138, "quote_volume_24h": 350_475_314.0},
-            {"symbol": "SOL", "price": 117.68, "change_24h": 0.0035, "quote_volume_24h": 55_100_000.0},
+            {
+                "symbol": "BTC",
+                "price": 84408.7,
+                "change_24h": -0.002,
+                "quote_volume_24h": 847_828_634.0,
+            },
+            {
+                "symbol": "ETH",
+                "price": 2660.34,
+                "change_24h": -0.0138,
+                "quote_volume_24h": 350_475_314.0,
+            },
+            {
+                "symbol": "SOL",
+                "price": 117.68,
+                "change_24h": 0.0035,
+                "quote_volume_24h": 55_100_000.0,
+            },
         ],
         "no_market": ["TON"],
         "no_data": [],
@@ -111,9 +149,19 @@ class TestPredictReport(unittest.TestCase):
     NOW = datetime.datetime(2026, 10, 3, 12, 0, tzinfo=datetime.timezone.utc)
 
     def test_open_market_shows_price_volume_and_time_left(self):
-        rows = [{"id": "m1", "question": "BTC выше 90k к 5 октября?", "status": "open",
-                 "price_yes": 0.62, "volume_usd": 1500.0, "trade_count": 12,
-                 "resolve_at": (self.NOW + datetime.timedelta(days=1, hours=3)).timestamp()}]
+        rows = [
+            {
+                "id": "m1",
+                "question": "BTC выше 90k к 5 октября?",
+                "status": "open",
+                "price_yes": 0.62,
+                "volume_usd": 1500.0,
+                "trade_count": 12,
+                "resolve_at": (
+                    self.NOW + datetime.timedelta(days=1, hours=3)
+                ).timestamp(),
+            }
+        ]
         got = tb.predict_report(rows, now=self.NOW)
         self.assertIn("62% YES", got)
         self.assertIn("объём $1.5K", got)
@@ -121,19 +169,36 @@ class TestPredictReport(unittest.TestCase):
         self.assertIn("осталось 1д 3ч", got)
 
     def test_resolved_market_shows_outcome_instead_of_price(self):
-        rows = [{"id": "m2", "question": "ETH выше 2500?", "status": "resolved",
-                 "outcome": "yes", "price_yes": 1.0, "volume_usd": 0.0, "trade_count": 3,
-                 "resolve_at": (self.NOW - datetime.timedelta(hours=2)).timestamp()}]
+        rows = [
+            {
+                "id": "m2",
+                "question": "ETH выше 2500?",
+                "status": "resolved",
+                "outcome": "yes",
+                "price_yes": 1.0,
+                "volume_usd": 0.0,
+                "trade_count": 3,
+                "resolve_at": (self.NOW - datetime.timedelta(hours=2)).timestamp(),
+            }
+        ]
         got = tb.predict_report(rows, now=self.NOW)
         self.assertIn("исход: yes", got)
         self.assertNotIn("осталось", got, "у истёкшего рынка не может быть «осталось»")
 
     def test_time_left_formats_hours_and_minutes(self):
-        for delta, expected in ((datetime.timedelta(hours=5, minutes=20), "осталось 5ч 20м"),
-                                (datetime.timedelta(minutes=40), "осталось 40м"),
-                                (datetime.timedelta(hours=-1), "срок истёк")):
-            rows = [{"question": "q", "status": "open", "price_yes": 0.5,
-                     "resolve_at": (self.NOW + delta).timestamp()}]
+        for delta, expected in (
+            (datetime.timedelta(hours=5, minutes=20), "осталось 5ч 20м"),
+            (datetime.timedelta(minutes=40), "осталось 40м"),
+            (datetime.timedelta(hours=-1), "срок истёк"),
+        ):
+            rows = [
+                {
+                    "question": "q",
+                    "status": "open",
+                    "price_yes": 0.5,
+                    "resolve_at": (self.NOW + delta).timestamp(),
+                }
+            ]
             self.assertIn(expected, tb.predict_report(rows, now=self.NOW))
 
     def test_empty_list_points_at_resolved_filter(self):
@@ -142,8 +207,18 @@ class TestPredictReport(unittest.TestCase):
 
 class TestFundingReport(unittest.TestCase):
     RATES = [
-        {"symbol": "LIT", "hourly_rate": 0.00232, "annualized": 2.032, "direction": "long"},
-        {"symbol": "SKY", "hourly_rate": 0.00112, "annualized": 0.981, "direction": "long"},
+        {
+            "symbol": "LIT",
+            "hourly_rate": 0.00232,
+            "annualized": 2.032,
+            "direction": "long",
+        },
+        {
+            "symbol": "SKY",
+            "hourly_rate": 0.00112,
+            "annualized": 0.981,
+            "direction": "long",
+        },
     ]
 
     def test_rows_and_wording(self):
@@ -158,17 +233,38 @@ class TestFundingReport(unittest.TestCase):
 
 class TestFindPerp(unittest.TestCase):
     BOOKS = [
-        {"market_id": 1, "symbol": "BTC", "market_type": "perp", "status": "active",
-         "open_interest": "372.658848", "min_base_amount": "0.00007",
-         "supported_size_decimals": 5},
-        {"market_id": 2048, "symbol": "BTC/USDC", "market_type": "spot", "status": "active",
-         "open_interest": "0", "min_base_amount": "0.001", "supported_size_decimals": 4},
-        {"market_id": 9, "symbol": "OLD", "market_type": "perp", "status": "closed",
-         "open_interest": "1", "min_base_amount": "1", "supported_size_decimals": 0},
+        {
+            "market_id": 1,
+            "symbol": "BTC",
+            "market_type": "perp",
+            "status": "active",
+            "open_interest": "372.658848",
+            "min_base_amount": "0.00007",
+            "supported_size_decimals": 5,
+        },
+        {
+            "market_id": 2048,
+            "symbol": "BTC/USDC",
+            "market_type": "spot",
+            "status": "active",
+            "open_interest": "0",
+            "min_base_amount": "0.001",
+            "supported_size_decimals": 4,
+        },
+        {
+            "market_id": 9,
+            "symbol": "OLD",
+            "market_type": "perp",
+            "status": "closed",
+            "open_interest": "1",
+            "min_base_amount": "1",
+            "supported_size_decimals": 0,
+        },
     ]
 
     def setUp(self):
         import lighter_rest
+
         cache.clear()
         self._original = lighter_rest.get_order_books
         lighter_rest.get_order_books = lambda network=None: list(self.BOOKS)
@@ -176,10 +272,12 @@ class TestFindPerp(unittest.TestCase):
         cache.clear()
 
     def test_perp_not_spot_not_inactive(self):
-        """"BTC/USDC" — тот же актив, но спот: взять его означало бы показать юзеру
+        """ "BTC/USDC" — тот же актив, но спот: взять его означало бы показать юзеру
         ограничения не той ноги. Рынок со status="closed" вообще не торговается."""
         self.assertEqual(tb.find_perp("BTC")["market_id"], 1)
-        self.assertEqual(tb.find_perp("btc-perp")["market_id"], 1, "вписанный тикер нормализуется")
+        self.assertEqual(
+            tb.find_perp("btc-perp")["market_id"], 1, "вписанный тикер нормализуется"
+        )
         self.assertIsNone(tb.find_perp("OLD"), "закрытый рынок не находится намеренно")
         self.assertIsNone(tb.find_perp("NOPE"))
 

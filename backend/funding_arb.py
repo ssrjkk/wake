@@ -38,17 +38,17 @@ VENUES = ("lighter", "binance", "bybit", "hyperliquid")
 class FundingSnapshot:
     market_id: int
     symbol: str
-    hourly_rate: float       # беззнаковая величина за час, доля (0.0001 = 0.01%/час)
-    direction: str            # "long" | "short" — кто платит: "long" значит лонги платят шортам
+    hourly_rate: float  # беззнаковая величина за час, доля (0.0001 = 0.01%/час)
+    direction: str  # "long" | "short" — кто платит: "long" значит лонги платят шортам
 
 
 @dataclass(frozen=True)
 class ArbOpportunity:
     symbol: str
     market_id: int
-    annualized_yield: float       # простая (не сложная) годовая доходность, доля
-    perp_side: str                  # "short" — сторона перпа, которую нужно открыть
-    spot_needed: bool               # True — нужно держать/купить спот того же актива
+    annualized_yield: float  # простая (не сложная) годовая доходность, доля
+    perp_side: str  # "short" — сторона перпа, которую нужно открыть
+    spot_needed: bool  # True — нужно держать/купить спот того же актива
     hourly_rate: float
 
 
@@ -58,7 +58,9 @@ def annualized_yield(snapshot: FundingSnapshot) -> float:
     return snapshot.hourly_rate * HOURS_PER_YEAR
 
 
-def snapshot_from_signed_rate(market_id: int, symbol: str, rate: float) -> FundingSnapshot:
+def snapshot_from_signed_rate(
+    market_id: int, symbol: str, rate: float
+) -> FundingSnapshot:
     """Живой /funding-rates отдаёт знак в самом числе, а не в отдельном поле.
     Приводим к беззнаковой ставке + direction, которые ожидает остальной модуль:
     rate > 0 — платят лонги (direction="long"), rate < 0 — платят шорты.
@@ -125,7 +127,9 @@ def base_asset(symbol: str) -> str:
     return s
 
 
-def find_opportunity(snapshot: FundingSnapshot, min_annualized_yield: float = 0.05) -> ArbOpportunity | None:
+def find_opportunity(
+    snapshot: FundingSnapshot, min_annualized_yield: float = 0.05
+) -> ArbOpportunity | None:
     """min_annualized_yield по умолчанию 5% — ниже этого операционная сложность
     (открыть 2 ноги, следить за позицией) обычно не стоит свеч. Порог настраиваемый,
     не зашит жёстко."""
@@ -189,13 +193,14 @@ def size_delta_neutral_position(
 
 
 def _round_down(value: float, decimals: int) -> float:
-    factor = 10 ** decimals
+    factor = 10**decimals
     return int(value * factor) / factor
 
 
 @dataclass(frozen=True)
 class CarryLegs:
     """Обе ноги одной дельта-нейтральной позиции на одном аккаунте Lighter."""
+
     symbol: str
     perp_market_id: int
     spot_market_id: int
@@ -221,7 +226,9 @@ def pairable_carry_markets(books: list, quote: str = "USDC") -> list:
     perps = {
         b["symbol"]: b
         for b in books
-        if b.get("market_type") == "perp" and b.get("status") == "active" and b.get("symbol")
+        if b.get("market_type") == "perp"
+        and b.get("status") == "active"
+        and b.get("symbol")
     }
     legs = []
     for b in books:
@@ -231,13 +238,15 @@ def pairable_carry_markets(books: list, quote: str = "USDC") -> list:
         perp = perps.get(base) if sep and quoted == quote else None
         if perp is None:
             continue
-        legs.append(CarryLegs(
-            symbol=base,
-            perp_market_id=int(perp["market_id"]),
-            spot_market_id=int(b["market_id"]),
-            perp_min_base_amount=float(perp["min_base_amount"]),
-            spot_min_base_amount=float(b["min_base_amount"]),
-            perp_size_decimals=int(perp["supported_size_decimals"]),
-            spot_size_decimals=int(b["supported_size_decimals"]),
-        ))
-    return sorted(legs, key=lambda l: l.symbol)
+        legs.append(
+            CarryLegs(
+                symbol=base,
+                perp_market_id=int(perp["market_id"]),
+                spot_market_id=int(b["market_id"]),
+                perp_min_base_amount=float(perp["min_base_amount"]),
+                spot_min_base_amount=float(b["min_base_amount"]),
+                perp_size_decimals=int(perp["supported_size_decimals"]),
+                spot_size_decimals=int(b["supported_size_decimals"]),
+            )
+        )
+    return sorted(legs, key=lambda leg: leg.symbol)

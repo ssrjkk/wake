@@ -50,30 +50,47 @@ def check_order(
     if is_reduce_only:
         # Закрытие позиции не должно блокироваться лимитами — иначе лимит
         # мешает выйти из уже открытой позиции, что хуже, чем не иметь лимита.
-        return RiskCheckResult(True, "reduce_only — лимиты не применяются", capped_size_usd=requested_usd)
+        return RiskCheckResult(
+            True, "reduce_only — лимиты не применяются", capped_size_usd=requested_usd
+        )
 
     if requested_usd > limits.max_order_usd:
         return RiskCheckResult(
-            False, f"ордер ${requested_usd:.0f} превышает лимит на транзакцию ${limits.max_order_usd:.0f}",
+            False,
+            f"ордер ${requested_usd:.0f} превышает лимит на транзакцию ${limits.max_order_usd:.0f}",
         )
 
     remaining_daily = limits.max_daily_volume_usd - state.volume_today_usd
     if remaining_daily <= 0:
-        return RiskCheckResult(False, f"дневной лимит объёма ${limits.max_daily_volume_usd:.0f} исчерпан")
+        return RiskCheckResult(
+            False, f"дневной лимит объёма ${limits.max_daily_volume_usd:.0f} исчерпан"
+        )
 
     current_position = state.open_position_usd.get(market_id, 0.0)
     remaining_position_room = limits.max_position_usd - current_position
     if remaining_position_room <= 0:
-        return RiskCheckResult(False, f"лимит позиции по рынку {market_id} (${limits.max_position_usd:.0f}) исчерпан")
+        return RiskCheckResult(
+            False,
+            f"лимит позиции по рынку {market_id} (${limits.max_position_usd:.0f}) исчерпан",
+        )
 
     allowed_size = min(requested_usd, remaining_daily, remaining_position_room)
     if allowed_size < requested_usd:
-        return RiskCheckResult(True, "размер урезан под оставшийся лимит", capped_size_usd=allowed_size)
+        return RiskCheckResult(
+            True, "размер урезан под оставшийся лимит", capped_size_usd=allowed_size
+        )
 
-    return RiskCheckResult(True, "в пределах всех лимитов", capped_size_usd=requested_usd)
+    return RiskCheckResult(
+        True, "в пределах всех лимитов", capped_size_usd=requested_usd
+    )
 
 
-def record_executed(state: UserRiskState, market_id: int, executed_usd: float, is_reduce_only: bool = False):
+def record_executed(
+    state: UserRiskState,
+    market_id: int,
+    executed_usd: float,
+    is_reduce_only: bool = False,
+):
     state.volume_today_usd += executed_usd
     current = state.open_position_usd.get(market_id, 0.0)
     if is_reduce_only:

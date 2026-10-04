@@ -240,7 +240,7 @@ export function Terminal({ asset, setAsset, markets, dataError, setToast, isCopy
               ))}
             </div>
           ) : (
-            <div className="space-y-0.5 max-h-56 overflow-hidden">
+            <div className="space-y-0.5 max-h-56 overflow-hidden relative">
               {trades.slice(0, 14).map((t, i) => (
                 <div
                   key={t.id}
@@ -251,6 +251,7 @@ export function Terminal({ asset, setAsset, markets, dataError, setToast, isCopy
                   <span className="text-[#666]">{t.size}</span>
                 </div>
               ))}
+              <div className="absolute bottom-0 left-0 right-0 h-12 bg-gradient-to-t from-surface-50 to-transparent pointer-events-none z-10" />
             </div>
           )}
           <div className="text-xs text-[#666] mt-3 font-mono">4с</div>
@@ -324,7 +325,7 @@ export function Terminal({ asset, setAsset, markets, dataError, setToast, isCopy
           </div>
 
           <button
-            onClick={placeOrder}
+            onClick={() => void placeOrder()}
             className={`btn-action w-full py-3 rounded-lg text-sm font-semibold transition-all ${side === "long" ? "bg-positive hover:bg-emerald-400 text-[#0a0a0a] shadow-lg shadow-emerald-500/30 hover:shadow-emerald-400/40" : "bg-negative hover:bg-red-400 text-[#0a0a0a] shadow-lg shadow-red-500/30 hover:shadow-red-400/40"}`}
           >
             {isSpot ? (side === "long" ? "Buy" : "Sell") : side === "long" ? "Открыть Long" : "Открыть Short"}

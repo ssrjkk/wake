@@ -21,6 +21,13 @@ const NETWORKS = {
 
 export type LighterNetwork = keyof typeof NETWORKS;
 
+// res.json() — Promise<any>: единственное место, где внешний ответ входит в
+// типизированный мир. Каждая функция ниже описывает свою сырую форму и один
+// раз приводит её к публичному типу — any дальше по коду не расходится.
+async function json<T>(res: Response): Promise<T> {
+  return (await res.json()) as T;
+}
+
 // Сеть по умолчанию задаётся переменной окружения VITE_LIGHTER_NETWORK.
 let currentNetwork: LighterNetwork = LIGHTER_NETWORK;
 export function setNetwork(network: LighterNetwork) {
@@ -51,7 +58,7 @@ export type OrderBook = {
 export async function getOrderBooks(filter: "all" | "spot" | "perp" = "perp"): Promise<OrderBook[]> {
   const res = await fetch(`${BASE_URL()}/orderBooks?filter=${filter}`);
   if (!res.ok) throw new Error(`Lighter API ${res.status}`);
-  const data = await res.json();
+  const data = await json<{ order_books: OrderBook[] }>(res);
   return data.order_books;
 }
 
@@ -99,9 +106,8 @@ export async function getCandles(marketId: number, resolution: Resolution, count
   });
   const res = await fetch(`${BASE_URL()}/candles?${params}`);
   if (!res.ok) throw new Error(`Lighter API ${res.status}`);
-  const data = await res.json();
-  const candles: Candle[] = data.c ?? [];
-  return candles.slice(-count);
+  const data = await json<{ c?: Candle[] }>(res);
+  return (data.c ?? []).slice(-count);
 }
 
 export type Trade = {
@@ -116,13 +122,21 @@ export type Trade = {
 // { code, trades: [ { trade_id, price, size, is_maker_ask, timestamp, ... } ] }
 // where price/size come back as STRINGS, so they must be Number()-coerced before math.
 // Params per https://apidocs.lighter.xyz/reference/recenttrades (market_id int16, limit 1-100).
+// Raw trade row: the payload fields noted above; extras are ignored.
+type RawTrade = {
+  trade_id?: string | number;
+  price: string | number;
+  size: string | number;
+  is_maker_ask?: boolean | number;
+  timestamp?: number;
+};
+
 export async function getRecentTrades(marketId: number, limit = 20): Promise<Trade[]> {
   const params = new URLSearchParams({ market_id: String(marketId), limit: String(Math.min(limit, 100)) });
   const res = await fetch(`${BASE_URL()}/recentTrades?${params}`);
   if (!res.ok) throw new Error(`Lighter API ${res.status}`);
-  const data = await res.json();
-  const list: any[] = data.trades ?? [];
-  return list.map((t, i) => ({
+  const data = await json<{ trades?: RawTrade[] }>(res);
+  return (data.trades ?? []).map((t, i) => ({
     id: t.trade_id ?? i,
     price: Number(t.price),
     size: Number(t.size),
@@ -147,20 +161,12 @@ export type FundingRateRow = {
 export async function getFundingRates(): Promise<FundingRateRow[]> {
   const res = await fetch(`${BASE_URL()}/funding-rates`);
   if (!res.ok) throw new Error(`Lighter API ${res.status}`);
-  const data = await res.json();
+  const data = await json<{ funding_rates: FundingRateRow[] }>(res);
   return data.funding_rates;
 }
 
-export async function getAccountByL1Address(address: string) {
-  const res = await fetch(`${BASE_URL()}/account?by=l1_address&value=${address}`);
-  if (!res.ok) throw new Error(`Lighter API ${res.status}`);
-  return res.json();
-}
-
-// One entry in account.positions. Verified live on mainnet 2026-10-02
-// (GET /api/v1/account?by=index&value=100): every number comes back as a STRING,
-// and Lighter returns a row per market the account has ever touched, so most rows
-// carry position "0.0000" — callers filter on `size`.
+// One entry in account.positions. Numbers are Number()-coerced from the raw
+// STRING fields of the API response — see RawPosition below.
 export type LighterPosition = {
   marketId: number;
   symbol: string;
@@ -179,15 +185,48 @@ export type LighterAccount = {
   realizedPnlUsd: number;
 };
 
+// Raw /account response shapes. Verified live on mainnet 2026-10-02: every
+// numeric field arrives as a STRING, including the ones the types below
+// declare as number — Number() coercion happens in the mapping code.
+type RawPosition = {
+  market_id: number;
+  symbol: string;
+  position: string | number;
+  avg_entry_price: string | number;
+  position_value: string | number;
+  unrealized_pnl: string | number;
+  realized_pnl: string | number;
+  liquidation_price: string | number;
+};
+
+type RawAccount = {
+  index: number;
+  total_asset_value: string | number;
+  positions?: RawPosition[];
+};
+
+export async function getAccountByL1Address(address: string): Promise<LighterAccount> {
+  const res = await fetch(`${BASE_URL()}/account?by=l1_address&value=${address}`);
+  if (!res.ok) throw new Error(`Lighter API ${res.status}`);
+  const data = await json<{ accounts?: RawAccount[] }>(res);
+  return mapAccount(data.accounts ?? []);
+}
+
 // by=index is public on the same /account endpoint; the bulk /accounts route is not
 // (it answers 403 without an API key), so one request per account is the only option.
 export async function getAccountByIndex(index: number): Promise<LighterAccount> {
   const res = await fetch(`${BASE_URL()}/account?by=index&value=${index}`);
   if (!res.ok) throw new Error(`Lighter API ${res.status}`);
-  const data = await res.json();
-  const account = (data.accounts ?? [])[0];
+  const data = await json<{ accounts?: RawAccount[] }>(res);
+  return mapAccount(data.accounts ?? []);
+}
+
+// Lighter returns a row per market the account has ever touched, so most rows
+// carry position "0.0000" — they are kept as-is (size 0); callers filter on size.
+function mapAccount(accounts: RawAccount[]): LighterAccount {
+  const account = accounts[0];
   if (!account) throw new Error("Аккаунт не найден");
-  const positions: LighterPosition[] = (account.positions ?? []).map((p: any) => ({
+  const positions: LighterPosition[] = (account.positions ?? []).map((p) => ({
     marketId: p.market_id,
     symbol: p.symbol,
     size: Number(p.position),
@@ -255,12 +294,14 @@ export async function registerFollower(l1Address: string): Promise<string> {
 
 export type BackendFollow = {
   id: string;
+  follower_id: string;
   leader_id: string;
-  leader_handle: string;
+  leader_handle?: string;
   allocation_usd: number;
   max_leverage: number;
   current_mirrored_size: number;
   paused: number;
+  created_at: number;
 };
 
 export async function listFollowsForFollower(followerId: string): Promise<BackendFollow[]> {
@@ -332,8 +373,8 @@ export type LeaderFollowRow = {
 };
 
 export async function listFollowsForLeader(leaderId: string): Promise<LeaderFollowRow[]> {
-  const data = await backendJson<{ follows?: any[] }>(`/follows/by-leader/${leaderId}`);
-  return (data.follows ?? []).map((r: any) => ({
+  const data = await backendJson<{ follows?: BackendFollow[] }>(`/follows/by-leader/${leaderId}`);
+  return (data.follows ?? []).map((r) => ({
     id: r.id,
     follower_id: r.follower_id,
     allocation_usd: Number(r.allocation_usd),
@@ -398,5 +439,5 @@ export async function placeOrderViaSigningService(
     const detail = await res.text().catch(() => res.statusText);
     throw new Error(detail);
   }
-  return res.json();
+  return json<{ tx_hash: string }>(res);
 }

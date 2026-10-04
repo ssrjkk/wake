@@ -11,6 +11,7 @@ websockets
 # Database — PostgreSQL (async)
 sqlalchemy[asyncio]>=2.0
 asyncpg
+aiosqlite
 alembic
 
 # Cache & Rate limiting

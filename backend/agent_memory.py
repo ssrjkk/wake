@@ -12,18 +12,18 @@
 """
 
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 
 @dataclass
 class TradeRecord:
     id: str
     market_id: int
-    side: str            # "long" | "short"
+    side: str  # "long" | "short"
     entry_price: float
     size: float
     opened_at: float
-    context_note: str = ""     # что "думал" агент при входе — для будущего LLM-контекста
+    context_note: str = ""  # что "думал" агент при входе — для будущего LLM-контекста
     exit_price: float | None = None
     closed_at: float | None = None
 
@@ -43,11 +43,26 @@ class AgentMemoryStore:
     def __init__(self):
         self.trades: list[TradeRecord] = []
 
-    def record_open(self, id_: str, market_id: int, side: str, entry_price: float, size: float, context_note: str = "") -> TradeRecord:
+    def record_open(
+        self,
+        id_: str,
+        market_id: int,
+        side: str,
+        entry_price: float,
+        size: float,
+        context_note: str = "",
+    ) -> TradeRecord:
         if side not in ("long", "short"):
             raise ValueError("side должен быть 'long' или 'short'")
-        t = TradeRecord(id=id_, market_id=market_id, side=side, entry_price=entry_price,
-                         size=size, opened_at=time.time(), context_note=context_note)
+        t = TradeRecord(
+            id=id_,
+            market_id=market_id,
+            side=side,
+            entry_price=entry_price,
+            size=size,
+            opened_at=time.time(),
+            context_note=context_note,
+        )
         self.trades.append(t)
         return t
 
@@ -62,10 +77,18 @@ class AgentMemoryStore:
         return t
 
     def closed_trades(self, market_id: int | None = None) -> list:
-        return [t for t in self.trades if not t.is_open and (market_id is None or t.market_id == market_id)]
+        return [
+            t
+            for t in self.trades
+            if not t.is_open and (market_id is None or t.market_id == market_id)
+        ]
 
     def open_trades(self, market_id: int | None = None) -> list:
-        return [t for t in self.trades if t.is_open and (market_id is None or t.market_id == market_id)]
+        return [
+            t
+            for t in self.trades
+            if t.is_open and (market_id is None or t.market_id == market_id)
+        ]
 
     def win_rate(self, market_id: int | None = None) -> float | None:
         closed = self.closed_trades(market_id)
@@ -91,13 +114,19 @@ class AgentMemoryStore:
         avg = self.avg_pnl(market_id)
         lines = []
         if wr is not None:
-            lines.append(f"Винрейт за {len(closed)} закрытых сделок: {wr*100:.0f}%, средний PnL ${avg:.2f}")
+            lines.append(
+                f"Винрейт за {len(closed)} закрытых сделок: {wr * 100:.0f}%, средний PnL ${avg:.2f}"
+            )
         else:
             lines.append("Закрытых сделок ещё нет — истории для статистики нет.")
         recent = self.recent_trades(n)
         if recent:
             lines.append("Последние сделки:")
             for t in recent:
-                status = f"закрыта, PnL ${t.pnl_usd:.2f}" if not t.is_open else "открыта"
-                lines.append(f"  {t.side} market={t.market_id} @ {t.entry_price} ({status}) — {t.context_note or 'без заметки'}")
+                status = (
+                    f"закрыта, PnL ${t.pnl_usd:.2f}" if not t.is_open else "открыта"
+                )
+                lines.append(
+                    f"  {t.side} market={t.market_id} @ {t.entry_price} ({status}) — {t.context_note or 'без заметки'}"
+                )
         return "\n".join(lines)

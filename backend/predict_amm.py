@@ -26,7 +26,9 @@ class LMSRMarket:
 
     def _cost(self, q_yes: float, q_no: float) -> float:
         m = max(q_yes, q_no) / self.b
-        return self.b * (m + math.log(math.exp(q_yes / self.b - m) + math.exp(q_no / self.b - m)))
+        return self.b * (
+            m + math.log(math.exp(q_yes / self.b - m) + math.exp(q_no / self.b - m))
+        )
 
     def price_yes(self) -> float:
         """Логистическая форма — эквивалентна наивной, но не переполняется на больших q."""

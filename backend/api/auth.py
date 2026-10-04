@@ -14,12 +14,15 @@ Telegram authentication endpoints.
 import hashlib
 import hmac
 import time
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 from aiogram.utils.web_app import check_webapp_signature, safe_parse_webapp_init_data
 
-import db
-from config import DB_PATH, TELEGRAM_BOT_TOKEN
+from database import get_db
+from pg_models import Follower
+from config import settings
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -46,11 +49,11 @@ class MiniAppAuthData(BaseModel):
 
 def verify_telegram_auth(data: TelegramAuthData) -> bool:
     """Verify Telegram Login Widget signature per Telegram docs."""
-    if not TELEGRAM_BOT_TOKEN:
+    if not settings.telegram_bot_token:
         return False
 
     check_hash = data.hash
-    token_hash = hashlib.sha256(TELEGRAM_BOT_TOKEN.encode()).digest()
+    token_hash = hashlib.sha256(settings.telegram_bot_token.encode()).digest()
 
     data_check_string = "\n".join(
         f"{k}={v}"
@@ -75,54 +78,115 @@ def verify_mini_app_init_data(init_data: str):
     Ошибки — HTTPException: 503 без токена, 400 на пустой строке, 401 на чужой
     подписи, отсутствии пользователя или протухшем auth_date.
     """
-    if not TELEGRAM_BOT_TOKEN:
+    if not settings.telegram_bot_token:
         raise HTTPException(
             status_code=503,
-            detail="Telegram-вход не настроен: на бэкенде нет TELEGRAM_BOT_TOKEN",
+            detail={
+                "error": {
+                    "code": "TELEGRAM_NOT_CONFIGURED",
+                    "message": "Telegram-вход не настроен: на бэкенде нет TELEGRAM_BOT_TOKEN",
+                }
+            },
         )
     if not init_data:
-        raise HTTPException(status_code=400, detail="Пустой initData")
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": {
+                    "code": "EMPTY_INIT_DATA",
+                    "message": "Пустой initData",
+                }
+            },
+        )
 
     # aiogram разбирает query-строку ровно так, как её подписывает Telegram (включая
     # percent-encoding поля user), и считает HMAC по действующей спецификации.
-    if not check_webapp_signature(TELEGRAM_BOT_TOKEN, init_data):
-        raise HTTPException(status_code=401, detail="Подпись initData не совпала")
+    if not check_webapp_signature(settings.telegram_bot_token, init_data):
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error": {
+                    "code": "INVALID_SIGNATURE",
+                    "message": "Подпись initData не совпала",
+                }
+            },
+        )
 
-    parsed = safe_parse_webapp_init_data(TELEGRAM_BOT_TOKEN, init_data)
+    parsed = safe_parse_webapp_init_data(settings.telegram_bot_token, init_data)
     if parsed.user is None:
-        raise HTTPException(status_code=401, detail="В initData нет пользователя")
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error": {
+                    "code": "NO_USER_IN_INIT_DATA",
+                    "message": "В initData нет пользователя",
+                }
+            },
+        )
 
     auth_date = parsed.auth_date
     # pydantic разворачивает unix-seconds в datetime с tzinfo=UTC, так что
     # .timestamp() даёт корректный абсолютный момент.
     if time.time() - auth_date.timestamp() > MAX_AUTH_AGE_S:
-        raise HTTPException(status_code=401, detail="initData старше 24 часов")
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error": {
+                    "code": "INIT_DATA_EXPIRED",
+                    "message": "initData старше 24 часов",
+                }
+            },
+        )
 
     return parsed
 
 
-def _follower_for_telegram_user(conn, telegram_id: int):
-    # Один follower на оба Telegram-входа: ищем по telegram_id, чтобы виджет и
-    # мини-апп не плодили два аккаунта под одного человека. l1_address — NOT NULL
-    # UNIQUE, а L1-адреса у Telegram-входа нет, поэтому туда идёт то же имя, что и
-    # в user_id.
+async def _follower_for_telegram_user(db: AsyncSession, telegram_id: int) -> str:
+    """Найти или создать follower по telegram_id.
+
+    Один follower на оба Telegram-входа: ищем по telegram_id, чтобы виджет и
+    мини-апп не плодили два аккаунта под одного человека. l1_address — NOT NULL
+    UNIQUE, а L1-адреса у Telegram-входа нет, поэтому туда идёт то же имя, что и
+    в user_id.
+    """
     user_id = f"tg_{telegram_id}"
-    existing = conn.execute("SELECT id FROM followers WHERE telegram_id = ?", (telegram_id,)).fetchone()
+
+    result = await db.execute(
+        select(Follower).where(Follower.telegram_id == telegram_id)
+    )
+    existing = result.scalar_one_or_none()
+
     if existing:
-        user_id = existing["id"]
-    else:
-        db.upsert_follower(conn, user_id, l1_address=f"tg:{telegram_id}", telegram_id=telegram_id)
+        return existing.id
+
+    new_follower = Follower(
+        id=user_id,
+        l1_address=f"tg:{telegram_id}",
+        telegram_id=telegram_id,
+    )
+    db.add(new_follower)
+    await db.flush()
     return user_id
 
 
 @router.post("/telegram")
-async def auth_telegram(data: TelegramAuthData):
+async def auth_telegram(
+    data: TelegramAuthData,
+    db: AsyncSession = Depends(get_db),
+):
     """Authenticate via Telegram Login Widget, return user_id."""
     if not verify_telegram_auth(data):
-        raise HTTPException(status_code=401, detail="Invalid Telegram auth data")
+        raise HTTPException(
+            status_code=401,
+            detail={
+                "error": {
+                    "code": "INVALID_TELEGRAM_AUTH",
+                    "message": "Invalid Telegram auth data",
+                }
+            },
+        )
 
-    with db.connect(DB_PATH) as conn:
-        user_id = _follower_for_telegram_user(conn, data.id)
+    user_id = await _follower_for_telegram_user(db, data.id)
 
     return {
         "user_id": user_id,
@@ -133,12 +197,14 @@ async def auth_telegram(data: TelegramAuthData):
 
 
 @router.post("/telegram/init")
-async def auth_telegram_init(data: MiniAppAuthData):
+async def auth_telegram_init(
+    data: MiniAppAuthData,
+    db: AsyncSession = Depends(get_db),
+):
     """Вход изнутри мини-аппа: проверяем initData и отдаём тот же user_id, что и виджет."""
     parsed = verify_mini_app_init_data(data.init_data)
 
-    with db.connect(DB_PATH) as conn:
-        user_id = _follower_for_telegram_user(conn, parsed.user.id)
+    user_id = await _follower_for_telegram_user(db, parsed.user.id)
 
     return {
         "user_id": user_id,

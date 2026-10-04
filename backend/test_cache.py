@@ -6,7 +6,6 @@ get_funding_rate(2) отдавал ставку market 1 в пределах TTL
 книги раздавался как mainnet-данные.
 """
 
-import time
 import unittest
 
 import cache
@@ -21,6 +20,7 @@ class TestCachedKey(unittest.TestCase):
         def fn(market_id, network="mainnet"):
             self.calls.append((market_id, network))
             return result
+
         return cache.cached("fx", ttl=60)(fn)
 
     def test_same_args_hit_cache_once(self):
@@ -38,8 +38,11 @@ class TestCachedKey(unittest.TestCase):
 
         fn = cache.cached("fx", ttl=60)(fetch)
         self.assertEqual(fn(1)["rate"], 0.01)
-        self.assertEqual(fn(2)["rate"], -0.03,
-                         "под market_id 2 вернулась ставка market 1 — общий ключ")
+        self.assertEqual(
+            fn(2)["rate"],
+            -0.03,
+            "под market_id 2 вернулась ставка market 1 — общий ключ",
+        )
 
     def test_network_is_part_of_the_key(self):
         fn = self._fetch("mainnet-значение")
@@ -60,7 +63,9 @@ class TestCachedKey(unittest.TestCase):
 
         fn = cache.cached("fx", ttl=0)(tick)
         self.assertEqual(fn(), 1)
-        self.assertEqual(fn(), 2, "ttl=0 — запись сразу протухла, каждый вызов реальный")
+        self.assertEqual(
+            fn(), 2, "ttl=0 — запись сразу протухла, каждый вызов реальный"
+        )
 
 
 if __name__ == "__main__":

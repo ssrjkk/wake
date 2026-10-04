@@ -4,6 +4,7 @@ Revision ID: 001_initial
 Revises:
 Create Date: 2026-10-03
 """
+
 from typing import Sequence, Union
 
 from alembic import op
@@ -92,9 +93,7 @@ def upgrade() -> None:
             nullable=False,
         ),
     )
-    op.create_index(
-        "idx_mirror_log_follow", "mirror_log", ["follow_id", "created_at"]
-    )
+    op.create_index("idx_mirror_log_follow", "mirror_log", ["follow_id", "created_at"])
 
     # ── Predict ───────────────────────────────────────────────────────────────
     op.create_table(

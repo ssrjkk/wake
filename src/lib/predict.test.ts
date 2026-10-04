@@ -92,10 +92,10 @@ describe('predict', () => {
     it('sells with negative shares on the same endpoint as buying', async () => {
       ok({ cost_usd: -4.2 })
       await tradePredictMarket('m1', 'tg_1', 'yes', -3)
-      const [url, init] = fetchMock.mock.calls[0]
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit & { method: string; body: string }]
       expect(url).toBe(`${BACKEND_URL}/predict/markets/m1/trade`)
       expect(init.method).toBe('POST')
-      expect(JSON.parse(init.body)).toEqual({ user_id: 'tg_1', outcome: 'yes', shares: -3 })
+      expect(JSON.parse(String(init.body))).toEqual({ user_id: 'tg_1', outcome: 'yes', shares: -3 })
     })
 
     it('surfaces the backend reason, not a bare status code', async () => {

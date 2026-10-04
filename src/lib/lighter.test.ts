@@ -134,8 +134,29 @@ describe('lighter', () => {
   })
 
   describe('getAccountByL1Address', () => {
-    it('fetches account by L1 address', async () => {
-      const mockAccount = { account_index: 123, l1_address: '0xabc' }
+    it('maps the raw account row into LighterAccount', async () => {
+      // Живой ответ mainnet: все числа строками, позиция — строка на каждый
+      // тронутый рынок. Мок повторяет эту форму, а не придуманную.
+      const mockAccount = {
+        accounts: [
+          {
+            index: 123,
+            total_asset_value: '1000.50',
+            positions: [
+              {
+                market_id: 1,
+                symbol: 'BTC',
+                position: '0.5',
+                avg_entry_price: '90000',
+                position_value: '45000',
+                unrealized_pnl: '10.25',
+                realized_pnl: '-2',
+                liquidation_price: '45000.5',
+              },
+            ],
+          },
+        ],
+      }
       const fetchMock = vi.fn().mockResolvedValue({
         ok: true,
         json: () => Promise.resolve(mockAccount)
@@ -143,8 +164,30 @@ describe('lighter', () => {
       global.fetch = fetchMock
 
       const result = await getAccountByL1Address('0xabc')
-      expect(result).toEqual(mockAccount)
+      expect(result.accountIndex).toBe(123)
+      expect(result.equityUsd).toBe(1000.5)
+      expect(result.realizedPnlUsd).toBe(-2)
+      expect(result.positions).toHaveLength(1)
+      expect(result.positions[0]).toEqual({
+        marketId: 1,
+        symbol: 'BTC',
+        size: 0.5,
+        avgEntry: 90000,
+        value: 45000,
+        unrealizedPnl: 10.25,
+        realizedPnl: -2,
+        liquidationPrice: 45000.5,
+      })
       expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('value=0xabc'))
+    })
+
+    it('throws when Lighter answers without accounts', async () => {
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({})
+      })
+
+      await expect(getAccountByL1Address('0xabc')).rejects.toThrow('Аккаунт не найден')
     })
 
     it('throws on error', async () => {

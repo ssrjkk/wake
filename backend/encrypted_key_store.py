@@ -20,7 +20,6 @@
 key management" — это разница, которую отрасль не зря обозначает разными словами.
 """
 
-import base64
 import json
 import os
 from cryptography.fernet import Fernet, InvalidToken
@@ -55,7 +54,9 @@ class EncryptedKeyStore:
         try:
             plaintext = self.fernet.decrypt(blob)
         except InvalidToken as e:
-            raise RuntimeError("Не удалось расшифровать keystore — неверный WAKE_MASTER_KEY или файл повреждён") from e
+            raise RuntimeError(
+                "Не удалось расшифровать keystore — неверный WAKE_MASTER_KEY или файл повреждён"
+            ) from e
         return json.loads(plaintext)
 
     def _write(self, data: dict):

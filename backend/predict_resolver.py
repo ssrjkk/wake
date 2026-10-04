@@ -44,7 +44,9 @@ logger = logging.getLogger("wake.predict_resolver")
 TICK_SECONDS = int(os.environ.get("WAKE_PREDICT_RESOLVER_TICK", "300"))
 
 
-def resolve_due_markets(conn, now: float, price_fn, network: str = LIGHTER_NETWORK) -> list[dict]:
+def resolve_due_markets(
+    conn, now: float, price_fn, network: str = LIGHTER_NETWORK
+) -> list[dict]:
     """Закрывает все просроченные открытые price-рынки. price_fn(market_id, network)
     возвращает mark-цену — инжектится, чтобы цикл можно было прогнать тестами без
     сети (test_predict_resolver.py). Рынок, по которому цена не получена, остаётся
@@ -56,37 +58,54 @@ def resolve_due_markets(conn, now: float, price_fn, network: str = LIGHTER_NETWO
             continue
         try:
             observed = price_fn(m["lighter_market_id"], network)
-            resolution = resolve_price_market(observed, m["threshold"], Comparator(m["comparator"]))
+            resolution = resolve_price_market(
+                observed, m["threshold"], Comparator(m["comparator"])
+            )
         except (RuntimeError, ValueError) as e:
             logger.warning("рынок %s не закрыт: %s", m["id"], e)
             continue
         try:
-            pdb.resolve_market(conn, m["id"], resolution.outcome, "auto:lighter_mark_price", None)
+            pdb.resolve_market(
+                conn, m["id"], resolution.outcome, "auto:lighter_mark_price", None
+            )
         except ValueError as e:
             # Кто-то закрыл рынок между list_markets и этим UPDATE (ручной триггер
             # куратора или предыдущий тик). Исход уже записан — перетирать его нельзя.
             logger.warning("рынок %s не закрыт: %s", m["id"], e)
             continue
-        logger.info("закрыт %s: %s (цена %s, порог %s %s)",
-                    m["id"], resolution.outcome, resolution.observed_price,
-                    resolution.comparator.value, m["threshold"])
-        closed.append({
-            "market_id": m["id"],
-            "outcome": resolution.outcome,
-            "observed_price": resolution.observed_price,
-        })
+        logger.info(
+            "закрыт %s: %s (цена %s, порог %s %s)",
+            m["id"],
+            resolution.outcome,
+            resolution.observed_price,
+            resolution.comparator.value,
+            m["threshold"],
+        )
+        closed.append(
+            {
+                "market_id": m["id"],
+                "outcome": resolution.outcome,
+                "observed_price": resolution.observed_price,
+            }
+        )
     return closed
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--loop", action="store_true", help=f"работать постоянно, тик {TICK_SECONDS} с")
+    parser.add_argument(
+        "--loop", action="store_true", help=f"работать постоянно, тик {TICK_SECONDS} с"
+    )
     args = parser.parse_args()
 
-    from lighter_rest import get_mark_price  # сетевой вызов — только когда реально доходим до дела
+    from lighter_rest import (
+        get_mark_price,
+    )  # сетевой вызов — только когда реально доходим до дела
 
     pdb.init_predict_db(DB_PATH)
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s [%(name)s] %(message)s")
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s [%(name)s] %(message)s"
+    )
     logger.info("Резолвер Predict: сеть=%s, база=%s", LIGHTER_NETWORK, DB_PATH)
 
     while True:

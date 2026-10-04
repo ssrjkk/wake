@@ -7,7 +7,6 @@
 Запуск: python -m migrate
 """
 
-import os
 import time
 import sqlite3
 from config import DB_PATH
@@ -71,7 +70,9 @@ def add_follower_telegram_id(conn):
     SQLite не умеет ALTER TABLE ... ADD COLUMN с UNIQUE, поэтому уникальность — отдельным
     частичным индексом (NULL пропускается, то есть один telegram_id на пользователя).
     """
-    columns = {row[1] for row in conn.execute("PRAGMA table_info(followers)").fetchall()}
+    columns = {
+        row[1] for row in conn.execute("PRAGMA table_info(followers)").fetchall()
+    }
     if "telegram_id" not in columns:
         conn.execute("ALTER TABLE followers ADD COLUMN telegram_id INTEGER")
     conn.execute("""

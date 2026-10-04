@@ -44,22 +44,56 @@ class LeaderPositionTracker:
                 # Разворот позиции: сначала полностью закрываем старую сторону.
                 # Закрытие не использует leader_equity_usd в mirror_engine, поэтому
                 # эмиттим его независимо от того, известен ли equity.
-                events.append(self._event(market_id, prev_sign, False, prev_size, price, prev_size))
+                events.append(
+                    self._event(
+                        market_id, prev_sign, False, prev_size, price, prev_size
+                    )
+                )
                 effective_prev_size = 0.0
 
             if new_size > effective_prev_size:
                 if self.equity is not None:
-                    events.append(self._event(market_id, new_sign, True, new_size - effective_prev_size, price, 0))
+                    events.append(
+                        self._event(
+                            market_id,
+                            new_sign,
+                            True,
+                            new_size - effective_prev_size,
+                            price,
+                            0,
+                        )
+                    )
                 # else: приращение без известного equity — намеренно не эмиттим, чтобы
                 # не считать risk fraction от неизвестного числа. Состояние всё равно
                 # обновится ниже, следующее сообщение посчитает дельту от него верно.
             elif new_size < effective_prev_size:
-                events.append(self._event(market_id, prev_sign, False, effective_prev_size - new_size, price, effective_prev_size))
+                events.append(
+                    self._event(
+                        market_id,
+                        prev_sign,
+                        False,
+                        effective_prev_size - new_size,
+                        price,
+                        effective_prev_size,
+                    )
+                )
 
-            self.positions[market_id] = {"size": new_size, "sign": new_sign, "price": price}
+            self.positions[market_id] = {
+                "size": new_size,
+                "sign": new_sign,
+                "price": price,
+            }
         return events
 
-    def _event(self, market_id: int, sign: int, is_increase: bool, size_delta: float, price: float, position_before: float) -> dict:
+    def _event(
+        self,
+        market_id: int,
+        sign: int,
+        is_increase: bool,
+        size_delta: float,
+        price: float,
+        position_before: float,
+    ) -> dict:
         return {
             "market_id": market_id,
             "side": "long" if sign > 0 else "short",

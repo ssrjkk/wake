@@ -17,7 +17,7 @@ MOMENTUM_THRESHOLD = 0.005  # 0.5% — ниже считаем шумом, не 
 
 @dataclass(frozen=True)
 class AgentDecision:
-    action: str        # "long" | "short" | "hold" | "close"
+    action: str  # "long" | "short" | "hold" | "close"
     confidence: float  # 0..1
     size_usd: float
     reasoning: str
@@ -37,8 +37,18 @@ def rule_based_decision(
 
     if abs(momentum) < MOMENTUM_THRESHOLD:
         if open_positions:
-            return AgentDecision("hold", 0.2, 0.0, f"momentum {momentum:.2%} слабый — держим открытую позицию без изменений")
-        return AgentDecision("hold", 0.0, 0.0, f"momentum {momentum:.2%} ниже порога {MOMENTUM_THRESHOLD:.2%} — сигнала нет")
+            return AgentDecision(
+                "hold",
+                0.2,
+                0.0,
+                f"momentum {momentum:.2%} слабый — держим открытую позицию без изменений",
+            )
+        return AgentDecision(
+            "hold",
+            0.0,
+            0.0,
+            f"momentum {momentum:.2%} ниже порога {MOMENTUM_THRESHOLD:.2%} — сигнала нет",
+        )
 
     direction = "long" if momentum > 0 else "short"
     confidence = min(abs(momentum) / (MOMENTUM_THRESHOLD * 4), 1.0)
@@ -46,8 +56,18 @@ def rule_based_decision(
     if open_positions:
         current_side = open_positions[0].side
         if current_side == direction:
-            return AgentDecision("hold", confidence, 0.0, f"уже в {direction}, момент {momentum:.2%} подтверждает — держим")
-        return AgentDecision("close", confidence, 0.0, f"момент {momentum:.2%} развернулся против открытой {current_side}-позиции")
+            return AgentDecision(
+                "hold",
+                confidence,
+                0.0,
+                f"уже в {direction}, момент {momentum:.2%} подтверждает — держим",
+            )
+        return AgentDecision(
+            "close",
+            confidence,
+            0.0,
+            f"момент {momentum:.2%} развернулся против открытой {current_side}-позиции",
+        )
 
     win_rate = memory.win_rate(market_id)
     # win_rate=None (нет истории) -> множитель 1.0 (нейтрально), win_rate=0 -> 0.5x, win_rate=1 -> 1.5x.
@@ -57,6 +77,8 @@ def rule_based_decision(
     size = base_size_usd * confidence_multiplier
 
     return AgentDecision(
-        direction, confidence, size,
+        direction,
+        confidence,
+        size,
         f"momentum {momentum:.2%}, winrate {'н/д' if win_rate is None else f'{win_rate:.0%}'} на этом рынке -> size ${size:.0f}",
     )

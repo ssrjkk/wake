@@ -11,6 +11,7 @@ import {
   deleteFollow,
   registerLeader,
   setNetwork as setLighterNetwork,
+  type LighterAccount,
   type LighterNetwork,
   type OrderBook,
 } from "./lib/lighter";
@@ -27,7 +28,8 @@ import { Predict } from "./components/Predict";
 import { Agent } from "./components/Agent";
 import { Risk } from "./components/Risk";
 import { Funding } from "./components/Funding";
-import { TelegramLogin, verifyTelegramLogin, type TelegramUser } from "./components/TelegramLogin";
+import { TelegramLogin } from "./components/TelegramLogin";
+import { verifyTelegramLogin, type TelegramUser } from "./lib/telegram";
 import { connectTelegramMiniApp, isTelegramWebView, type TelegramProfile } from "./lib/telegram";
 import { categorizeMarket, avatarColor, shortHandle, usd, fmt } from "./components/utils";
 import type { Leader, Following, Subscription } from "./components/types";
@@ -41,7 +43,7 @@ export default function App() {
   const [tab, setTab] = useState<Tab>("dashboard");
   const [walletMenuOpen, setWalletMenuOpen] = useState(false);
   const [connectPickerOpen, setConnectPickerOpen] = useState(false);
-  const [lighterAccount, setLighterAccount] = useState<any>(null);
+  const [lighterAccount, setLighterAccount] = useState<LighterAccount | null>(null);
   const [lighterChecked, setLighterChecked] = useState(false);
 
   const [asset, setAsset] = useState<string>("BTC");
@@ -97,7 +99,7 @@ export default function App() {
           rows.map((r) => ({
             followId: r.id,
             leaderId: r.leader_id,
-            handle: r.leader_handle,
+            handle: r.leader_handle ?? "",
             allocationUsd: r.allocation_usd,
             maxLeverage: r.max_leverage,
             mirroredSize: r.current_mirrored_size,
@@ -281,7 +283,7 @@ export default function App() {
     }
   }
 
-  const lighterAccountIndex: number | null = lighterAccount?.accounts?.[0]?.index ?? null;
+  const lighterAccountIndex: number | null = lighterAccount?.accountIndex ?? null;
 
   const [subscription, setSubscription] = useState<Subscription | null>(null);
 
@@ -439,7 +441,9 @@ export default function App() {
                       {isTelegramWebView() ? (
                         <>
                           <button
-                            onClick={() => loginFromMiniApp(false)}
+                            onClick={() => {
+                              void loginFromMiniApp(false);
+                            }}
                             disabled={miniAppBusy}
                             className="btn-action w-full bg-[#ff6b35] hover:bg-orange-500 text-[#0a0a0a]"
                           >
@@ -453,7 +457,7 @@ export default function App() {
                         </>
                       ) : (
                         <>
-                          <TelegramLogin onLogin={handleTelegramLogin} />
+                          <TelegramLogin onLogin={(u) => void handleTelegramLogin(u)} />
                           <p className="text-xs text-[#666] leading-relaxed font-mono">
                             Виджет отдаёт подпись HMAC-SHA256; её проверяет <code className="text-[#888]">POST /auth/telegram</code> на токене бота, а
                             не браузер. Без <code className="text-[#888]">TELEGRAM_BOT_TOKEN</code> на бэкенде кнопка сознательно не появляется.
@@ -563,7 +567,7 @@ export default function App() {
               dataError={dataError}
               setToast={setToast}
               isCopyable={isCopyable}
-              toggleCopyable={toggleCopyable}
+              toggleCopyable={() => void toggleCopyable()}
               setMarketPickerOpen={setMarketPickerOpen}
               network={network}
             />
@@ -605,7 +609,7 @@ export default function App() {
               subscription={subscription}
               currentMarket={currentMarket}
               setToast={setToast}
-              startTrial={startTrial}
+              startTrial={() => void startTrial()}
             />
           )}
 
@@ -752,7 +756,7 @@ export default function App() {
             </div>
 
             <button
-              onClick={confirmCopy}
+              onClick={() => void confirmCopy()}
               disabled={allocation <= 0}
               className="btn-action w-full bg-[#ff6b35] hover:bg-orange-500 disabled:opacity-50 text-[#0a0a0a] py-3 rounded"
             >

@@ -56,6 +56,7 @@ def cached(prefix: str, ttl: int = DEFAULT_TTL):
     get_funding_rate(2) возвращал ставку market 1, пока не истёк TTL. Точно так
     же order_books не различал сети — один тестнетовый ответ отдавался как
     mainnet-данные."""
+
     def decorator(func):
         def wrapper(*args, **kwargs):
             key = f"{prefix}:{_key_suffix(func, args, kwargs)}"
@@ -65,5 +66,7 @@ def cached(prefix: str, ttl: int = DEFAULT_TTL):
             result = func(*args, **kwargs)
             set(key, result, ttl)
             return result
+
         return wrapper
+
     return decorator

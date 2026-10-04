@@ -28,7 +28,7 @@ export function Discover({ setCopyModal }: DiscoverProps) {
         setLeaders([]);
       }
     }
-    load();
+    void load();
     const id = setInterval(load, 20000);
     return () => clearInterval(id);
   }, []);
@@ -36,11 +36,11 @@ export function Discover({ setCopyModal }: DiscoverProps) {
   return (
     <div className="animate-fade-in">
       <div className="mb-6">
-        <h2 className="text-white font-bold text-xl mb-2">Кого копируют</h2>
-        <p className="text-slate-400 text-sm">
-          Лидеры — из таблицы <code className="text-slate-300">leaders</code>, подписчики и AUM — из <code className="text-slate-300">follows</code>.
+        <h2 className="text-text-primary font-bold text-xl mb-2">Кого копируют</h2>
+        <p className="text-text-secondary text-sm">
+          Лидеры — из таблицы <code className="text-text-secondary">leaders</code>, подписчики и AUM — из <code className="text-text-secondary">follows</code>.
           Капитал, реализованный PnL и открытые позиции — публичный ответ Lighter{" "}
-          <code className="text-slate-300">GET /api/v1/account?by=index</code> по аккаунту лидера. Выдуманных цифр здесь нет: если Lighter не
+          <code className="text-text-secondary">GET /api/v1/account?by=index</code> по аккаунту лидера. Выдуманных цифр здесь нет: если Lighter не
           отвечает, карточка честно показывает прочерк. Handle лидер вписывает сам и подписи кошелька за ним пока нет — поэтому в карточке виден
           индекс аккаунта: по нему статика читается на самом Lighter.
         </p>
@@ -50,20 +50,20 @@ export function Discover({ setCopyModal }: DiscoverProps) {
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
           {[0, 1, 2].map((i) => (
             <div key={i} className="card animate-pulse">
-              <div className="h-4 bg-slate-800 rounded w-1/2 mb-3"></div>
-              <div className="h-8 bg-slate-800 rounded"></div>
+              <div className="h-4 bg-surface-200 rounded w-1/2 mb-3"></div>
+              <div className="h-8 bg-surface-200 rounded"></div>
             </div>
           ))}
         </div>
       ) : leaders.length === 0 ? (
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl py-16 flex flex-col items-center text-center px-6">
-          <Users className="w-8 h-8 text-slate-700 mb-3" />
-          <p className="text-slate-400 text-sm mb-1">В базе пока нет ни одного лидера</p>
-          <p className="text-slate-600 text-xs max-w-md">
+        <div className="bg-surface-100 border border-border rounded-2xl py-16 flex flex-col items-center text-center px-6">
+          <Users className="w-8 h-8 text-text-muted mb-3" />
+          <p className="text-text-secondary text-sm mb-1">В базе пока нет ни одного лидера</p>
+          <p className="text-text-tertiary text-xs max-w-md">
             Лидер появляется сам: в Терминале включи «Публиковать мои сделки» — переключатель пишет строку в{" "}
-            <code className="text-slate-300">leaders</code> через <code className="text-slate-300">POST /leaders</code>.
+            <code className="text-text-secondary">leaders</code> через <code className="text-text-secondary">POST /leaders</code>.
             Нужен кошелёк с аккаунтом Lighter: лидера публикуют по индексу его аккаунта, поэтому статика потом читается с биржи, а не из формы.
-            {error && <span className="text-amber-400 mt-2 block">Бэкенд ответил: {error}</span>}
+            {error && <span className="text-warning mt-2 block">Бэкенд ответил: {error}</span>}
           </p>
         </div>
       ) : (
@@ -80,41 +80,41 @@ export function Discover({ setCopyModal }: DiscoverProps) {
                       {shortHandle(t.handle)}
                     </div>
                     <div>
-                      <div className="text-slate-100 font-semibold">{t.handle}</div>
-                      <div className="text-slate-500 text-sm font-mono">Lighter #{t.lighterAccountIndex}</div>
+                      <div className="text-text-primary font-semibold">{t.handle}</div>
+                      <div className="text-text-tertiary text-sm font-mono">Lighter #{t.lighterAccountIndex}</div>
                     </div>
                   </div>
-                  <span className="text-xs text-slate-400 glass rounded-full px-3 py-1 shrink-0">{(t.feeBps / 100).toFixed(2)}% за сделку</span>
+                  <span className="text-xs text-text-secondary glass rounded-full px-3 py-1 shrink-0">{(t.feeBps / 100).toFixed(2)}% за сделку</span>
                 </div>
 
                 <div className="grid grid-cols-2 gap-3 mb-3">
                   <div>
-                    <div className="text-slate-500 text-xs flex items-center gap-1 mb-1">
+                    <div className="text-text-tertiary text-xs flex items-center gap-1 mb-1">
                       <Wallet className="w-3 h-3" /> Капитал на Lighter
                     </div>
-                    <div className="text-slate-100 font-mono">{pnl === null ? "—" : usd(t.exchange!.equityUsd, 0)}</div>
+                    <div className="text-text-primary font-mono">{pnl === null ? "—" : usd(t.exchange!.equityUsd, 0)}</div>
                   </div>
                   <div>
-                    <div className="text-slate-500 text-xs flex items-center gap-1 mb-1">
+                    <div className="text-text-tertiary text-xs flex items-center gap-1 mb-1">
                       {pnl != null && pnl >= 0 ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />} Реализованный PnL
                     </div>
-                    <div className={`font-mono ${pnl == null ? "text-slate-500" : pnl >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+                    <div className={`font-mono ${pnl == null ? "text-text-tertiary" : pnl >= 0 ? "text-success" : "text-danger"}`}>
                       {pnl === null ? "—" : `${pnl >= 0 ? "+" : ""}${usd(pnl, 0)}`}
                     </div>
                   </div>
                 </div>
 
                 <div className="flex justify-between text-sm font-mono mb-1">
-                  <span className="text-slate-400 flex items-center gap-1">
+                  <span className="text-text-secondary flex items-center gap-1">
                     <Users className="w-3.5 h-3.5" />
                     {fmt(t.followers)} подписчиков
                   </span>
-                  <span className="text-slate-400 flex items-center gap-1">
+                  <span className="text-text-secondary flex items-center gap-1">
                     <DollarSign className="w-3.5 h-3.5" />
                     {fmt(t.aumUsd)} в копиях
                   </span>
                 </div>
-                <div className="text-xs text-slate-600 mb-4">
+                <div className="text-xs text-text-muted mb-4">
                   {t.exchange ? `${t.exchange.openPositions.length} открытых позиций` : "Lighter не ответил"} · в сети с{" "}
                   {new Date(t.since * 1000).toLocaleDateString("ru-RU")}
                 </div>

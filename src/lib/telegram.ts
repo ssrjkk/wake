@@ -6,6 +6,16 @@
 // потому что любой, кто откроет консоль, может подменить initDataUnsafe.user.
 import { backendJson } from "./backend";
 
+export interface TelegramUser {
+  id: number;
+  first_name: string;
+  last_name?: string;
+  username?: string;
+  photo_url?: string;
+  auth_date: number;
+  hash: string;
+}
+
 export interface TelegramProfile {
   user_id: string;
   telegram_id: number;
@@ -69,5 +79,15 @@ export async function connectTelegramMiniApp(ua?: string): Promise<TelegramProfi
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ init_data: app.initData }),
+  });
+}
+
+export async function verifyTelegramLogin(user: TelegramUser): Promise<TelegramProfile> {
+  // Ответ бэкенда — единственное, что показывается в интерфейсе: до проверки подписи
+  // поля виджета это ещё данные браузера.
+  return backendJson<TelegramProfile>("/auth/telegram", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(user),
   });
 }

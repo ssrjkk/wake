@@ -7,6 +7,7 @@ Smoke-тест всего HTTP-слоя через FastAPI TestClient — реа
 """
 
 import os
+import asyncio
 import hashlib
 import hmac
 import json
@@ -19,6 +20,12 @@ from urllib.parse import urlencode
 _tmp = tempfile.mkdtemp()
 os.environ["WAKE_DB_PATH"] = os.path.join(_tmp, "wake.db")
 os.environ["WAKE_AUDIT_DB_PATH"] = os.path.join(_tmp, "audit.db")
+# Async-слой (api/auth.py → database.get_db) в продле нацелен на PostgreSQL, и
+# в CI он идёт через service-контейнер. Здесь тот же код должен выполняться без
+# внешнего сервера, поэтому подставляем aiosqlite: движок настоящий, путь
+# get_db тот же, просто файл во временном каталоге.
+_PG_DB_FILE = os.path.join(_tmp, "wake_pg.db")
+os.environ["WAKE_DATABASE_URL"] = f"sqlite+aiosqlite:///{_PG_DB_FILE}"
 os.environ["WAKE_CURATOR_TOKEN"] = "smoke-test-token"
 os.environ["TELEGRAM_BOT_TOKEN"] = "123456:smoke-test-bot-token"
 # Все запросы идут с одного test-client IP, поэтому несколько классов подряд
@@ -31,15 +38,50 @@ os.environ["WAKE_RATE_LIMIT_REFILL"] = "100000"
 from fastapi.testclient import TestClient
 import app  # noqa: E402
 import audit_log as al  # noqa: E402
-from rate_limiter import RateLimiter  # noqa: E402
+import database  # noqa: E402
+
+
+class NullRateLimiter:
+    """Всегда пропускает. Сам лимитер проверен в test_rate_limiter.py; здесь
+    он не предмет теста, а помеха — TestClient не стартует Redis."""
+
+    async def allow(self, key, cost=1.0):
+        return True
+
+    async def retry_after(self, key, cost=1.0):
+        return 0.0
+
+    async def ping(self):
+        return True
+
+    async def close(self):
+        pass
+
+
+app._rate_limiter = NullRateLimiter()
 
 # Инициализируем audit_log в временной БД
 al.init_audit_db(os.environ["WAKE_AUDIT_DB_PATH"])
 
+
+async def _create_pg_schema() -> None:
+    """Создаёт таблицы async-слоя во временной aiosqlite-БД и освоболяет пул.
+
+    dispose() важен: иначе соединение, открытое в этом event loop, попадёт в пул
+    и на первом запросе TestClient (другой loop) вылезет «attached to a
+    different loop». Файл БД остаётся — схемы переживают dispose."""
+    await database.init_db()
+    await database.close_db()
+
+
+asyncio.run(_create_pg_schema())
+
 client = TestClient(app.app)
 
 
-def telegram_login_payload(user_id: int = 4242, first_name: str = "Test", auth_date: int | None = None) -> dict:
+def telegram_login_payload(
+    user_id: int = 4242, first_name: str = "Test", auth_date: int | None = None
+) -> dict:
     """Подписывает данные так же, как это делает Telegram Login Widget (HMAC-SHA256 по
     отсортированным k=v строкам, ключ — sha256 от токена бота)."""
     payload = {
@@ -50,12 +92,18 @@ def telegram_login_payload(user_id: int = 4242, first_name: str = "Test", auth_d
     }
     check_string = "\n".join(f"{k}={payload[k]}" for k in sorted(payload))
     secret = hashlib.sha256(os.environ["TELEGRAM_BOT_TOKEN"].encode()).digest()
-    payload["hash"] = hmac.new(secret, check_string.encode(), hashlib.sha256).hexdigest()
+    payload["hash"] = hmac.new(
+        secret, check_string.encode(), hashlib.sha256
+    ).hexdigest()
     return payload
 
 
-def mini_app_init_data(user_id: int = 4343, first_name: str = "Mini",
-                       auth_date: int | None = None, token: str | None = None) -> str:
+def mini_app_init_data(
+    user_id: int = 4343,
+    first_name: str = "Mini",
+    auth_date: int | None = None,
+    token: str | None = None,
+) -> str:
     """Строка initData ровно так, как её подписывает Telegram внутри мини-аппа:
     HMAC-SHA256 по отсортированным k=v, ключ — HMAC-SHA256("WebAppData", токен бота).
     Ключ выводится иначе, чем у Login Widget, поэтому это отдельный хелпер."""
@@ -63,9 +111,15 @@ def mini_app_init_data(user_id: int = 4343, first_name: str = "Mini",
     params = {
         "auth_date": str(auth_date if auth_date is not None else int(time.time())),
         "query_id": "AAH-smoke",
-        "user": json.dumps({"id": user_id, "first_name": first_name,
-                            "username": f"smoke_mini_{user_id}", "language_code": "en"},
-                           ensure_ascii=False),
+        "user": json.dumps(
+            {
+                "id": user_id,
+                "first_name": first_name,
+                "username": f"smoke_mini_{user_id}",
+                "language_code": "en",
+            },
+            ensure_ascii=False,
+        ),
     }
     check_string = "\n".join(f"{k}={params[k]}" for k in sorted(params))
     secret = hmac.new(b"WebAppData", token.encode(), hashlib.sha256).digest()
@@ -78,14 +132,18 @@ class TestApiSmoke(unittest.TestCase):
     def setUpClass(cls):
         # фикстура: две строки leaders, чтобы GET /leaders отвечал непустым списком
         import db
+
         with db.connect(os.environ["WAKE_DB_PATH"]) as conn:
-            for id_, idx, handle, fee in [("t1", 101, "@northstar", 8), ("t2", 102, "@vega.eth", 6)]:
+            for id_, idx, handle, fee in [
+                ("t1", 101, "@northstar", 8),
+                ("t2", 102, "@vega.eth", 6),
+            ]:
                 db.upsert_leader(conn, id_, idx, handle, fee)
 
     def test_health_routes(self):
         health = client.get("/health").json()
         self.assertEqual(health["status"], "ok")
-        self.assertEqual(health["network"], app.LIGHTER_NETWORK)
+        self.assertEqual(health["network"], app.settings.wake_lighter_network)
         self.assertTrue(health["dry_run"])
         self.assertEqual(client.get("/docs").status_code, 200)
         self.assertEqual(client.get("/openapi.json").status_code, 200)
@@ -95,8 +153,23 @@ class TestApiSmoke(unittest.TestCase):
         запрос подряд обязан получить 429, а не результат роута. Без этой проверки
         завышенная ёмкость ведра в заголовке файла могла бы означать «лимитер
         вообще не подключён»."""
+
+        class FakeRateLimiter:
+            def __init__(self):
+                self._calls = 0
+
+            async def allow(self, key, cost=1.0):
+                self._calls += 1
+                return self._calls == 1
+
+            async def retry_after(self, key, cost=1.0):
+                return 1.0
+
+            async def close(self):
+                pass
+
         original = app._rate_limiter
-        app._rate_limiter = RateLimiter(capacity=1, refill_rate=1e-6)
+        app._rate_limiter = FakeRateLimiter()
         try:
             self.assertEqual(client.get("/predict/markets").status_code, 200)
             r = client.get("/predict/markets")
@@ -111,11 +184,21 @@ class TestApiSmoke(unittest.TestCase):
         self.assertEqual(r.status_code, 200)
         follower_id = r.json()["follower_id"]
 
-        r = client.post("/leaders", json={"lighter_account_index": 999, "handle": "@smoke", "fee_bps": 8})
+        r = client.post(
+            "/leaders",
+            json={"lighter_account_index": 999, "handle": "@smoke", "fee_bps": 8},
+        )
         self.assertEqual(r.status_code, 200)
         leader_id = r.json()["leader_id"]
 
-        r = client.post("/follows", json={"follower_id": follower_id, "leader_id": leader_id, "allocation_usd": 500})
+        r = client.post(
+            "/follows",
+            json={
+                "follower_id": follower_id,
+                "leader_id": leader_id,
+                "allocation_usd": 500,
+            },
+        )
         self.assertEqual(r.status_code, 200)
 
         r = client.get(f"/follows/by-follower/{follower_id}")
@@ -132,24 +215,51 @@ class TestApiSmoke(unittest.TestCase):
         r = client.post(f"/follows/{follow_id}/resume")
         self.assertEqual(r.status_code, 200)
 
-        r = client.post("/simulate-mirror", json={
-            "leader_id": leader_id, "market_id": 1, "side": "long", "is_increase": True,
-            "size_delta": 0.5, "price": 100000, "leader_equity_usd": 50000,
-        })
+        r = client.post(
+            "/simulate-mirror",
+            json={
+                "leader_id": leader_id,
+                "market_id": 1,
+                "side": "long",
+                "is_increase": True,
+                "size_delta": 0.5,
+                "price": 100000,
+                "leader_equity_usd": 50000,
+            },
+        )
         self.assertEqual(r.status_code, 200)
         self.assertEqual(len(r.json()["orders"]), 1)
 
     def test_predict_cycle(self):
-        r = client.post("/predict/markets/price", json={
-            "question": "BTC above 100k?", "lighter_market_id": 1,
-            "threshold": 100000, "comparator": ">=", "resolve_at": 1999999999, "b": 100,
-        })
-        self.assertEqual(r.status_code, 403, "создание price-рынка без куратора — прямой путь к рынку, который зарезолвят под свою позицию")
+        r = client.post(
+            "/predict/markets/price",
+            json={
+                "question": "BTC above 100k?",
+                "lighter_market_id": 1,
+                "threshold": 100000,
+                "comparator": ">=",
+                "resolve_at": 1999999999,
+                "b": 100,
+            },
+        )
+        self.assertEqual(
+            r.status_code,
+            403,
+            "создание price-рынка без куратора — прямой путь к рынку, который зарезолвят под свою позицию",
+        )
 
-        r = client.post("/predict/markets/price", json={
-            "question": "BTC above 100k?", "lighter_market_id": 1,
-            "threshold": 100000, "comparator": ">=", "resolve_at": 1999999999, "b": 100,
-        }, headers={"X-Curator-Token": "smoke-test-token"})
+        r = client.post(
+            "/predict/markets/price",
+            json={
+                "question": "BTC above 100k?",
+                "lighter_market_id": 1,
+                "threshold": 100000,
+                "comparator": ">=",
+                "resolve_at": 1999999999,
+                "b": 100,
+            },
+            headers={"X-Curator-Token": "smoke-test-token"},
+        )
         self.assertEqual(r.status_code, 200)
         market_id = r.json()["market_id"]
 
@@ -157,15 +267,31 @@ class TestApiSmoke(unittest.TestCase):
         # отказ, потому что дедлайн рынка (2033 год) ещё не наступил. Сетевой запрос
         # к Lighter при этом не делается: обе проверки идут до него.
         r = client.post(f"/predict/markets/{market_id}/resolve-price", json={})
-        self.assertEqual(r.status_code, 403, "цена берётся в момент вызова — иначе держатель позиции сам выбирает момент резолюции")
-        r = client.post(f"/predict/markets/{market_id}/resolve-price", json={}, headers={"X-Curator-Token": "smoke-test-token"})
+        self.assertEqual(
+            r.status_code,
+            403,
+            "цена берётся в момент вызова — иначе держатель позиции сам выбирает момент резолюции",
+        )
+        r = client.post(
+            f"/predict/markets/{market_id}/resolve-price",
+            json={},
+            headers={"X-Curator-Token": "smoke-test-token"},
+        )
         self.assertEqual(r.status_code, 409, "до resolve_at закрывать рынок нельзя")
 
-        r = client.post("/predict/markets/event", json={"question": "Will X win?", "resolve_at": 1999999999, "b": 100})
-        self.assertEqual(r.status_code, 403, "event-market без токена куратора должен быть запрещён")
+        r = client.post(
+            "/predict/markets/event",
+            json={"question": "Will X win?", "resolve_at": 1999999999, "b": 100},
+        )
+        self.assertEqual(
+            r.status_code, 403, "event-market без токена куратора должен быть запрещён"
+        )
 
-        r = client.post("/predict/markets/event", json={"question": "Will X win?", "resolve_at": 1999999999, "b": 100},
-                        headers={"X-Curator-Token": "smoke-test-token"})
+        r = client.post(
+            "/predict/markets/event",
+            json={"question": "Will X win?", "resolve_at": 1999999999, "b": 100},
+            headers={"X-Curator-Token": "smoke-test-token"},
+        )
         self.assertEqual(r.status_code, 200)
         event_id = r.json()["market_id"]
 
@@ -177,13 +303,19 @@ class TestApiSmoke(unittest.TestCase):
         self.assertEqual(r.status_code, 200)
         self.assertGreater(r.json()["cost_usd"], 0)
 
-        r = client.post(f"/predict/markets/{market_id}/trade", json={"user_id": "u1", "outcome": "yes", "shares": 10})
+        r = client.post(
+            f"/predict/markets/{market_id}/trade",
+            json={"user_id": "u1", "outcome": "yes", "shares": 10},
+        )
         self.assertEqual(r.status_code, 200)
         self.assertGreater(r.json()["cost_usd"], 0)
         buy_cost = r.json()["cost_usd"]
 
         # продажа половины позиции: cost отрицательный, юзеру возвращаются деньги
-        r = client.post(f"/predict/markets/{market_id}/trade", json={"user_id": "u1", "outcome": "yes", "shares": -4})
+        r = client.post(
+            f"/predict/markets/{market_id}/trade",
+            json={"user_id": "u1", "outcome": "yes", "shares": -4},
+        )
         self.assertEqual(r.status_code, 200)
         self.assertLess(r.json()["cost_usd"], 0)
         sell_cost = r.json()["cost_usd"]
@@ -195,26 +327,46 @@ class TestApiSmoke(unittest.TestCase):
         self.assertAlmostEqual(row["volume_usd"], buy_cost + abs(sell_cost), delta=1e-6)
 
         # позиции юзера: 6 shares YES, средняя входа = уплаченное минус возвращенное
-        r = client.get(f"/predict/positions?user_id=u1")
+        r = client.get("/predict/positions?user_id=u1")
         self.assertEqual(r.status_code, 200)
         pos = next(p for p in r.json() if p["market_id"] == market_id)
         self.assertEqual(pos["shares"], 6)
         self.assertEqual(pos["outcome"], "yes")
         self.assertFalse(pos["claimed"])
 
-        r = client.post(f"/predict/markets/{market_id}/resolve-event",
-                        json={"outcome": "yes", "resolved_by": "curator", "evidence_url": "https://example.com"})
-        self.assertEqual(r.status_code, 403, "resolve-event без токена куратора должен быть запрещён")
+        r = client.post(
+            f"/predict/markets/{market_id}/resolve-event",
+            json={
+                "outcome": "yes",
+                "resolved_by": "curator",
+                "evidence_url": "https://example.com",
+            },
+        )
+        self.assertEqual(
+            r.status_code, 403, "resolve-event без токена куратора должен быть запрещён"
+        )
 
-        r = client.post(f"/predict/markets/{market_id}/resolve-event",
-                        json={"outcome": "yes", "resolved_by": "curator", "evidence_url": "https://example.com"},
-                        headers={"X-Curator-Token": "smoke-test-token"})
+        r = client.post(
+            f"/predict/markets/{market_id}/resolve-event",
+            json={
+                "outcome": "yes",
+                "resolved_by": "curator",
+                "evidence_url": "https://example.com",
+            },
+            headers={"X-Curator-Token": "smoke-test-token"},
+        )
         self.assertEqual(r.status_code, 200)
 
         # исход выносится один раз: переписать его = переписать выплаты
-        r = client.post(f"/predict/markets/{market_id}/resolve-event",
-                        json={"outcome": "no", "resolved_by": "curator", "evidence_url": "https://example.com"},
-                        headers={"X-Curator-Token": "smoke-test-token"})
+        r = client.post(
+            f"/predict/markets/{market_id}/resolve-event",
+            json={
+                "outcome": "no",
+                "resolved_by": "curator",
+                "evidence_url": "https://example.com",
+            },
+            headers={"X-Curator-Token": "smoke-test-token"},
+        )
         self.assertEqual(r.status_code, 409)
 
         r = client.post(f"/predict/markets/{market_id}/claim?user_id=u1")
@@ -227,31 +379,56 @@ class TestApiSmoke(unittest.TestCase):
         r = client.get("/predict/markets?status=open")
         self.assertNotIn(market_id, [m["id"] for m in r.json()])
         r = client.get("/predict/markets?status=bogus")
-        self.assertEqual(r.status_code, 422, "неизвестный статус — не «пустой список», а явная ошибка")
+        self.assertEqual(
+            r.status_code,
+            422,
+            "неизвестный статус — не «пустой список», а явная ошибка",
+        )
 
         # после резолюции позиция остаётся видимой, но claimable становится 0 после выплаты
-        r = client.get(f"/predict/positions?user_id=u1")
+        r = client.get("/predict/positions?user_id=u1")
         pos = next(p for p in r.json() if p["market_id"] == market_id)
         self.assertTrue(pos["claimed"])
         self.assertEqual(pos["claimable_usd"], 0.0)
         self.assertEqual(pos["market_outcome"], "yes")
 
         # event-рынок резолвится тем же путём
-        r = client.post(f"/predict/markets/{event_id}/resolve-event",
-                        json={"outcome": "no", "resolved_by": "curator", "evidence_url": "https://example.com"},
-                        headers={"X-Curator-Token": "smoke-test-token"})
+        r = client.post(
+            f"/predict/markets/{event_id}/resolve-event",
+            json={
+                "outcome": "no",
+                "resolved_by": "curator",
+                "evidence_url": "https://example.com",
+            },
+            headers={"X-Curator-Token": "smoke-test-token"},
+        )
         self.assertEqual(r.status_code, 200)
 
     def test_funding_arb(self):
-        r = client.post("/funding-arb/check", json={"market_id": 1, "symbol": "BTC", "hourly_rate": 0.0001, "direction": "long"})
+        r = client.post(
+            "/funding-arb/check",
+            json={
+                "market_id": 1,
+                "symbol": "BTC",
+                "hourly_rate": 0.0001,
+                "direction": "long",
+            },
+        )
         self.assertEqual(r.status_code, 200)
         self.assertIsNotNone(r.json()["opportunity"])
         self.assertGreater(r.json()["opportunity"]["annualized_yield"], 0.8)
 
-        r = client.post("/funding-arb/size", json={
-            "capital_usd": 1000, "price": 100000, "perp_size_decimals": 3,
-            "spot_size_decimals": 3, "perp_min_base_amount": 0.001, "spot_min_base_amount": 0.001,
-        })
+        r = client.post(
+            "/funding-arb/size",
+            json={
+                "capital_usd": 1000,
+                "price": 100000,
+                "perp_size_decimals": 3,
+                "spot_size_decimals": 3,
+                "perp_min_base_amount": 0.001,
+                "spot_min_base_amount": 0.001,
+            },
+        )
         self.assertEqual(r.status_code, 200)
         self.assertIsNotNone(r.json()["position"])
 
@@ -271,16 +448,35 @@ class TestFundingLiveRoutes(unittest.TestCase):
         {"exchange": "bybit", "market_id": 1, "rate": -0.0000153, "symbol": "BTC"},
     ]
     BOOKS = [
-        {"market_id": 0, "symbol": "ETH", "market_type": "perp", "status": "active",
-         "min_base_amount": "0.0050", "supported_size_decimals": 3},
-        {"market_id": 2048, "symbol": "ETH/USDC", "market_type": "spot", "status": "active",
-         "min_base_amount": "0.0010", "supported_size_decimals": 4},
-        {"market_id": 1, "symbol": "BTC", "market_type": "perp", "status": "active",
-         "min_base_amount": "0.00007", "supported_size_decimals": 5},
+        {
+            "market_id": 0,
+            "symbol": "ETH",
+            "market_type": "perp",
+            "status": "active",
+            "min_base_amount": "0.0050",
+            "supported_size_decimals": 3,
+        },
+        {
+            "market_id": 2048,
+            "symbol": "ETH/USDC",
+            "market_type": "spot",
+            "status": "active",
+            "min_base_amount": "0.0010",
+            "supported_size_decimals": 4,
+        },
+        {
+            "market_id": 1,
+            "symbol": "BTC",
+            "market_type": "perp",
+            "status": "active",
+            "min_base_amount": "0.00007",
+            "supported_size_decimals": 5,
+        },
     ]
 
     def setUp(self):
         import lighter_rest
+
         self._rates = lighter_rest.get_funding_rates
         self._books = lighter_rest.get_order_books
         lighter_rest.get_funding_rates = lambda network=None: list(self.RATES)
@@ -292,11 +488,17 @@ class TestFundingLiveRoutes(unittest.TestCase):
         r = client.get("/funding/rates")
         self.assertEqual(r.status_code, 200)
         body = r.json()
-        self.assertEqual(body["epoch_hours"], 1, "годовая считается на часовой эпох, не на 8-часовой")
+        self.assertEqual(
+            body["epoch_hours"], 1, "годовая считается на часовой эпох, не на 8-часовой"
+        )
         got = body["rates"]
-        self.assertEqual([x["market_id"] for x in got], [0, 1], "по модулю 0.0003 > 0.00008")
+        self.assertEqual(
+            [x["market_id"] for x in got], [0, 1], "по модулю 0.0003 > 0.00008"
+        )
         self.assertAlmostEqual(got[0]["annualized"], 0.0003 * 24 * 365, places=9)
-        self.assertEqual(got[0]["direction"], "short", "отрицательная ставка — платят шорты")
+        self.assertEqual(
+            got[0]["direction"], "short", "отрицательная ставка — платят шорты"
+        )
         self.assertEqual(got[0]["signed_rate"], -0.0003)
         self.assertEqual(got[1]["signed_rate"], 0.00008)
         # Имя рынка берётся из строки той же площадки: поле symbol — то, что
@@ -319,12 +521,18 @@ class TestFundingLiveRoutes(unittest.TestCase):
         self.assertEqual(client.get("/funding/rates?limit=1000").status_code, 422)
 
         import lighter_rest
+
         def boom(network=None):
             raise RuntimeError("Lighter API недоступен")
+
         lighter_rest.get_funding_rates = boom
         r = client.get("/funding/rates")
-        self.assertEqual(r.status_code, 502, "мёртвый апстрим — явная ошибка, не пустой список ставок")
-        self.assertIn("Lighter", r.json()["detail"])
+        self.assertEqual(
+            r.status_code,
+            502,
+            "мёртвый апстрим — явная ошибка, не пустой список ставок",
+        )
+        self.assertIn("Lighter", r.json()["error"]["message"])
 
     def test_venues_group_by_asset_and_accept_typed_spelling(self):
         """/funding/venues полезен ровно одним: ставки одного актива рядом, по
@@ -332,18 +540,37 @@ class TestFundingLiveRoutes(unittest.TestCase):
         нормализация нужна для ВВОДА — юзер впишет "BTC-PERP" или "btcusdt" со
         сторонней биржи, и такой запрос обязан найти те же строки, что и "BTC"."""
         expected = [
-            {"venue": "bybit", "symbol": "BTC", "market_id": 1, "signed_rate": -0.0000153},
-            {"venue": "hyperliquid", "symbol": "BTC", "market_id": 1, "signed_rate": 0.0001},
-            {"venue": "lighter", "symbol": "BTC", "market_id": 1, "signed_rate": 0.00008},
+            {
+                "venue": "bybit",
+                "symbol": "BTC",
+                "market_id": 1,
+                "signed_rate": -0.0000153,
+            },
+            {
+                "venue": "hyperliquid",
+                "symbol": "BTC",
+                "market_id": 1,
+                "signed_rate": 0.0001,
+            },
+            {
+                "venue": "lighter",
+                "symbol": "BTC",
+                "market_id": 1,
+                "signed_rate": 0.00008,
+            },
         ]
         for typed in ("btc", "BTC-PERP", "btcusdt", "BTC/USDC"):
             r = client.get(f"/funding/venues?symbol={typed}")
             self.assertEqual(r.status_code, 200, typed)
             body = r.json()
             self.assertEqual(body["base"], "BTC", typed)
-            self.assertEqual(sorted(body["venues"], key=lambda v: v["venue"]), expected, typed)
+            self.assertEqual(
+                sorted(body["venues"], key=lambda v: v["venue"]), expected, typed
+            )
             rates = [v["signed_rate"] for v in body["venues"]]
-            self.assertEqual(rates, sorted(rates, reverse=True), "отсортировано по убыванию ставки")
+            self.assertEqual(
+                rates, sorted(rates, reverse=True), "отсортировано по убыванию ставки"
+            )
 
         r = client.get("/funding/venues?symbol=NOPE")
         self.assertEqual(r.status_code, 404)
@@ -356,7 +583,9 @@ class TestFundingLiveRoutes(unittest.TestCase):
         self.assertEqual(body["count"], 1, "только ETH имеет обе ноги в этой книге")
         eth = body["markets"][0]
         self.assertEqual((eth["perp_market_id"], eth["spot_market_id"]), (0, 2048))
-        self.assertEqual((eth["perp_min_base_amount"], eth["spot_min_base_amount"]), (0.005, 0.001))
+        self.assertEqual(
+            (eth["perp_min_base_amount"], eth["spot_min_base_amount"]), (0.005, 0.001)
+        )
         self.assertEqual((eth["perp_size_decimals"], eth["spot_size_decimals"]), (3, 4))
         self.assertEqual(eth["hourly_rate"], 0.0003)
         self.assertAlmostEqual(eth["annualized"], 0.0003 * 24 * 365, places=9)
@@ -365,6 +594,7 @@ class TestFundingLiveRoutes(unittest.TestCase):
         """Пара существует на книге независимо от того, есть ли по ней ставка:
         убрать её из списка — значит соврать про количество рынков."""
         import lighter_rest
+
         lighter_rest.get_funding_rates = lambda network=None: []
         body = client.get("/funding/carry-markets").json()
         self.assertEqual(body["count"], 1)
@@ -372,23 +602,42 @@ class TestFundingLiveRoutes(unittest.TestCase):
         self.assertIsNone(body["markets"][0]["annualized"])
 
     def test_portfolio_risk(self):
-        r = client.post("/portfolio/risk", json={
-            "positions": [
-                {"market_id": 1, "symbol": "BTC", "signed_notional_usd": 1000},
-                {"market_id": 2, "symbol": "ETH", "signed_notional_usd": -500},
-            ],
-            "returns_by_market": {"1": [0.01, -0.02, 0.015], "2": [0.005, -0.01, 0.02]},
-        })
+        r = client.post(
+            "/portfolio/risk",
+            json={
+                "positions": [
+                    {"market_id": 1, "symbol": "BTC", "signed_notional_usd": 1000},
+                    {"market_id": 2, "symbol": "ETH", "signed_notional_usd": -500},
+                ],
+                "returns_by_market": {
+                    "1": [0.01, -0.02, 0.015],
+                    "2": [0.005, -0.01, 0.02],
+                },
+            },
+        )
         self.assertEqual(r.status_code, 200)
         body = r.json()
-        self.assertLessEqual(body["portfolio_dollar_volatility"], body["naive_dollar_volatility"])
+        self.assertLessEqual(
+            body["portfolio_dollar_volatility"], body["naive_dollar_volatility"]
+        )
 
-        r = client.post("/portfolio/hedge", json={
-            "target": {"market_id": 1, "symbol": "BTC", "signed_notional_usd": 1000},
-            "candidates": [[2, "ETH"]],
-            "returns_by_market": {"1": [0.01, -0.02, 0.015], "2": [0.005, -0.01, 0.02]},
-        })
+        r = client.post(
+            "/portfolio/hedge",
+            json={
+                "target": {
+                    "market_id": 1,
+                    "symbol": "BTC",
+                    "signed_notional_usd": 1000,
+                },
+                "candidates": [[2, "ETH"]],
+                "returns_by_market": {
+                    "1": [0.01, -0.02, 0.015],
+                    "2": [0.005, -0.01, 0.02],
+                },
+            },
+        )
         self.assertEqual(r.status_code, 200)
+
 
 class TestMarketsOverview(unittest.TestCase):
     """Главный экран сайта и /markets в боте обязаны показывать ОДНИ числа,
@@ -397,18 +646,45 @@ class TestMarketsOverview(unittest.TestCase):
     funding-строки — голые базовые имена. Сеть не трогается."""
 
     ROWS = [
-        {"market_id": 1, "symbol": "BTC", "base": "BTC", "price": 84408.7,
-         "change_24h": -0.002, "quote_volume_24h": 847_800_000.0,
-         "open_interest_base": 370.84, "min_base_amount": 0.00007, "size_decimals": 5,
-         "taker_fee": 0.0, "maker_fee": 0.0},
-        {"market_id": 0, "symbol": "ETH", "base": "ETH", "price": 2660.34,
-         "change_24h": -0.0138, "quote_volume_24h": 350_500_000.0,
-         "open_interest_base": 152_300.0, "min_base_amount": 0.005, "size_decimals": 3,
-         "taker_fee": 0.0, "maker_fee": 0.0},
-        {"market_id": 120, "symbol": "LIT", "base": "LIT", "price": 3.11,
-         "change_24h": 0.05, "quote_volume_24h": 20_300_000.0,
-         "open_interest_base": 4_100_000.0, "min_base_amount": 1.0, "size_decimals": 0,
-         "taker_fee": 0.0, "maker_fee": 0.0},
+        {
+            "market_id": 1,
+            "symbol": "BTC",
+            "base": "BTC",
+            "price": 84408.7,
+            "change_24h": -0.002,
+            "quote_volume_24h": 847_800_000.0,
+            "open_interest_base": 370.84,
+            "min_base_amount": 0.00007,
+            "size_decimals": 5,
+            "taker_fee": 0.0,
+            "maker_fee": 0.0,
+        },
+        {
+            "market_id": 0,
+            "symbol": "ETH",
+            "base": "ETH",
+            "price": 2660.34,
+            "change_24h": -0.0138,
+            "quote_volume_24h": 350_500_000.0,
+            "open_interest_base": 152_300.0,
+            "min_base_amount": 0.005,
+            "size_decimals": 3,
+            "taker_fee": 0.0,
+            "maker_fee": 0.0,
+        },
+        {
+            "market_id": 120,
+            "symbol": "LIT",
+            "base": "LIT",
+            "price": 3.11,
+            "change_24h": 0.05,
+            "quote_volume_24h": 20_300_000.0,
+            "open_interest_base": 4_100_000.0,
+            "min_base_amount": 1.0,
+            "size_decimals": 0,
+            "taker_fee": 0.0,
+            "maker_fee": 0.0,
+        },
     ]
     # BTC и LIT пришли из ответа Lighter, ETH — нет: роут обязан показать отсутствие
     # ставки пустым полем, а не выкинуть рынок из обзора.
@@ -420,12 +696,16 @@ class TestMarketsOverview(unittest.TestCase):
 
     def setUp(self):
         import lighter_rest
+
         self._overview = lighter_rest.get_market_overview
         self._rates = lighter_rest.get_funding_rates
         lighter_rest.get_market_overview = lambda symbols=None, network=None: {
-            "network": network or "mainnet", "ranked_by": "quote_volume_24h",
-            "count": len(self.ROWS), "rows": [dict(r) for r in self.ROWS],
-            "no_market": ["TON"], "no_data": ["MATIC"],
+            "network": network or "mainnet",
+            "ranked_by": "quote_volume_24h",
+            "count": len(self.ROWS),
+            "rows": [dict(r) for r in self.ROWS],
+            "no_market": ["TON"],
+            "no_data": ["MATIC"],
         }
         lighter_rest.get_funding_rates = lambda network=None: list(self.RATES)
         self.addCleanup(setattr, lighter_rest, "get_market_overview", self._overview)
@@ -435,7 +715,9 @@ class TestMarketsOverview(unittest.TestCase):
         r = client.get("/markets/overview")
         self.assertEqual(r.status_code, 200)
         body = r.json()
-        self.assertEqual(body["epoch_hours"], 1, "годовая считается на часовой эпох, не на 8-часовой")
+        self.assertEqual(
+            body["epoch_hours"], 1, "годовая считается на часовой эпох, не на 8-часовой"
+        )
         self.assertEqual(body["ranked_by"], "quote_volume_24h")
         self.assertEqual(body["count"], 3)
         self.assertEqual(body["no_market"], ["TON"])
@@ -444,8 +726,12 @@ class TestMarketsOverview(unittest.TestCase):
         self.assertEqual([x["market_id"] for x in body["rows"]], [1, 0, 120])
 
         by_id = {x["market_id"]: x for x in body["rows"]}
-        self.assertAlmostEqual(by_id[1]["funding_annualized"], 0.00008 * 24 * 365, places=9)
-        self.assertEqual(by_id[1]["funding_payer"], "long", "положительная ставка — платят лонги")
+        self.assertAlmostEqual(
+            by_id[1]["funding_annualized"], 0.00008 * 24 * 365, places=9
+        )
+        self.assertEqual(
+            by_id[1]["funding_payer"], "long", "положительная ставка — платят лонги"
+        )
         # Отрицательная ставка остаётся беззнаковой в hourly и говорит, кто платит.
         self.assertEqual(by_id[120]["funding_hourly"], 0.00012)
         self.assertEqual(by_id[120]["funding_payer"], "short")
@@ -459,12 +745,14 @@ class TestMarketsOverview(unittest.TestCase):
 
     def test_dead_upstream_is_502_not_empty_overview(self):
         import lighter_rest
+
         def boom(symbols=None, network=None):
             raise RuntimeError("Lighter API недоступен")
+
         lighter_rest.get_market_overview = boom
         r = client.get("/markets/overview")
         self.assertEqual(r.status_code, 502)
-        self.assertIn("Lighter", r.json()["detail"])
+        self.assertIn("Lighter", r.json()["error"]["message"])
 
 
 class TestPortfolioAndAgent(unittest.TestCase):
@@ -475,10 +763,17 @@ class TestPortfolioAndAgent(unittest.TestCase):
         self.assertEqual(r.json()["tier"], "free_trial")
         self.assertTrue(r.json()["has_ai_agent"])
 
-        r = client.post("/agent/step", json={
-            "user_id": "u1", "market_id": 1, "recent_prices": [99000, 99500, 100000, 100500, 101000],
-            "size_decimals": 4, "price_decimals": 0, "base_size_usd": 100,
-        })
+        r = client.post(
+            "/agent/step",
+            json={
+                "user_id": "u1",
+                "market_id": 1,
+                "recent_prices": [99000, 99500, 100000, 100500, 101000],
+                "size_decimals": 4,
+                "price_decimals": 0,
+                "base_size_usd": 100,
+            },
+        )
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.json()["execution"]["status"], "dry_run")
 
@@ -491,9 +786,16 @@ class TestTelegramAuth(unittest.TestCase):
     поэтому проверяется и подпись, и запись в followers."""
 
     def _followers(self):
-        import db
-        with db.connect(os.environ["WAKE_DB_PATH"]) as conn:
-            return conn.execute("SELECT id, l1_address, telegram_id FROM followers").fetchall()
+        import sqlite3
+
+        conn = sqlite3.connect(_PG_DB_FILE)
+        conn.row_factory = sqlite3.Row
+        try:
+            return conn.execute(
+                "SELECT id, l1_address, telegram_id FROM followers"
+            ).fetchall()
+        finally:
+            conn.close()
 
     def test_valid_signature_creates_follower(self):
         r = client.post("/auth/telegram", json=telegram_login_payload())
@@ -518,10 +820,16 @@ class TestTelegramAuth(unittest.TestCase):
         self.assertEqual(r.status_code, 401)
 
     def test_stale_auth_date_rejected(self):
-        payload = telegram_login_payload(user_id=4245, auth_date=int(time.time()) - 90000)
+        payload = telegram_login_payload(
+            user_id=4245, auth_date=int(time.time()) - 90000
+        )
         r = client.post("/auth/telegram", json=payload)
-        self.assertEqual(r.status_code, 401, "старше суток — подписывать такой вход уже нельзя")
-        self.assertEqual([row for row in self._followers() if row["telegram_id"] == 4245], [])
+        self.assertEqual(
+            r.status_code, 401, "старше суток — подписывать такой вход уже нельзя"
+        )
+        self.assertEqual(
+            [row for row in self._followers() if row["telegram_id"] == 4245], []
+        )
 
 
 class TestTelegramMiniApp(unittest.TestCase):
@@ -530,12 +838,21 @@ class TestTelegramMiniApp(unittest.TestCase):
     зная этот токен, а не правкой ответа в браузере."""
 
     def _followers(self):
-        import db
-        with db.connect(os.environ["WAKE_DB_PATH"]) as conn:
-            return conn.execute("SELECT id, l1_address, telegram_id FROM followers").fetchall()
+        import sqlite3
+
+        conn = sqlite3.connect(_PG_DB_FILE)
+        conn.row_factory = sqlite3.Row
+        try:
+            return conn.execute(
+                "SELECT id, l1_address, telegram_id FROM followers"
+            ).fetchall()
+        finally:
+            conn.close()
 
     def test_valid_init_data_creates_follower(self):
-        r = client.post("/auth/telegram/init", json={"init_data": mini_app_init_data(user_id=4350)})
+        r = client.post(
+            "/auth/telegram/init", json={"init_data": mini_app_init_data(user_id=4350)}
+        )
         self.assertEqual(r.status_code, 200, r.text)
         body = r.json()
         self.assertEqual(body["user_id"], "tg_4350")
@@ -545,39 +862,132 @@ class TestTelegramMiniApp(unittest.TestCase):
 
     def test_widget_and_miniapp_login_share_one_follower(self):
         client.post("/auth/telegram", json=telegram_login_payload(user_id=4351))
-        r = client.post("/auth/telegram/init", json={"init_data": mini_app_init_data(user_id=4351)})
+        r = client.post(
+            "/auth/telegram/init", json={"init_data": mini_app_init_data(user_id=4351)}
+        )
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.json()["user_id"], "tg_4351")
         rows = [row for row in self._followers() if row["telegram_id"] == 4351]
-        self.assertEqual(len(rows), 1, "два входа одного человека не плодят два аккаунта")
+        self.assertEqual(
+            len(rows), 1, "два входа одного человека не плодят два аккаунта"
+        )
 
     def test_foreign_token_signature_rejected(self):
         init_data = mini_app_init_data(user_id=4352, token="999999:not-our-bot-token")
         r = client.post("/auth/telegram/init", json={"init_data": init_data})
         self.assertEqual(r.status_code, 401)
-        self.assertEqual([row for row in self._followers() if row["telegram_id"] == 4352], [])
+        self.assertEqual(
+            [row for row in self._followers() if row["telegram_id"] == 4352], []
+        )
 
     def test_tampered_user_field_rejected(self):
         # Подписанную строку пересобираем с чужим id, оставив старый hash: ровно то,
         # что делает правка initData в консоли браузера.
         from urllib.parse import parse_qsl
+
         pairs = dict(parse_qsl(mini_app_init_data(user_id=4353)))
         user = json.loads(pairs["user"])
         user["id"] = 1
         pairs["user"] = json.dumps(user, ensure_ascii=False)
         r = client.post("/auth/telegram/init", json={"init_data": urlencode(pairs)})
-        self.assertEqual(r.status_code, 401, "редакция initData в браузере не даёт вход")
-        self.assertEqual([row for row in self._followers() if row["telegram_id"] == 1], [])
+        self.assertEqual(
+            r.status_code, 401, "редакция initData в браузере не даёт вход"
+        )
+        self.assertEqual(
+            [row for row in self._followers() if row["telegram_id"] == 1], []
+        )
 
     def test_stale_init_data_rejected(self):
         init_data = mini_app_init_data(user_id=4354, auth_date=int(time.time()) - 90000)
         r = client.post("/auth/telegram/init", json={"init_data": init_data})
         self.assertEqual(r.status_code, 401)
-        self.assertEqual([row for row in self._followers() if row["telegram_id"] == 4354], [])
+        self.assertEqual(
+            [row for row in self._followers() if row["telegram_id"] == 4354], []
+        )
 
     def test_empty_init_data_rejected(self):
         r = client.post("/auth/telegram/init", json={"init_data": ""})
         self.assertEqual(r.status_code, 400)
+
+
+class TestHardening(unittest.TestCase):
+    """Шаг «Security & Core» проверяется по факту ответа, а не по чтению кода:
+    /ready обязан отличаться от /health, security-заголовки — стоять на каждом
+    ответе, CORS — эхом только свои origin'ы, любая ошибка — в едином формате."""
+
+    def test_ready_checks_real_dependencies(self):
+        r = client.get("/ready")
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertEqual(body["status"], "ready")
+        # aiosqlite — настоящий движок: SELECT 1 действительно выполняется.
+        self.assertEqual(body["checks"]["database"], "ok")
+        # NullRateLimiter.ping() подменяет Redis, но контракт ответа тот же.
+        self.assertEqual(body["checks"]["redis"], "ok")
+
+    def test_security_headers_on_every_response(self):
+        r = client.get("/health")
+        self.assertEqual(r.headers["x-content-type-options"], "nosniff")
+        self.assertEqual(r.headers["x-frame-options"], "DENY")
+        self.assertEqual(
+            r.headers["referrer-policy"], "strict-origin-when-cross-origin"
+        )
+        self.assertIn("default-src 'self'", r.headers["content-security-policy"])
+
+    def test_cors_echoes_allowed_origin_and_silences_foreign(self):
+        r = client.options(
+            "/health",
+            headers={
+                "Origin": app.settings.cors_origins_list[0],
+                "Access-Control-Request-Method": "GET",
+            },
+        )
+        self.assertEqual(
+            r.headers.get("access-control-allow-origin"),
+            app.settings.cors_origins_list[0],
+            "свой origin получает эхо и право на запрос",
+        )
+
+        r = client.options(
+            "/health",
+            headers={
+                "Origin": "https://evil.example",
+                "Access-Control-Request-Method": "GET",
+            },
+        )
+        self.assertNotIn(
+            "access-control-allow-origin",
+            r.headers,
+            "чужой origin не получает разрешение",
+        )
+
+    def test_validation_error_in_unified_format(self):
+        r = client.post("/auth/telegram", json={"id": "not-an-int"})
+        self.assertEqual(r.status_code, 422)
+        err = r.json()["error"]
+        self.assertEqual(err["code"], "VALIDATION_ERROR")
+        self.assertTrue(err["details"], "422 без details бесполезен для отладки")
+
+    def test_unknown_error_format_uses_status_phrase_code(self):
+        """HTTPException со строковым detail (наш собственный код вне auth) тоже
+        обязан попасть в единый формат: {error: {code, message}}, а не FastAPI
+        дефолтный {"detail": ...}."""
+        r = client.post(
+            "/predict/markets/price",
+            json={
+                "question": "BTC above 100k?",
+                "lighter_market_id": 1,
+                "threshold": 100000,
+                "comparator": ">=",
+                "resolve_at": 1999999999,
+                "b": 100,
+            },
+            headers={"X-Curator-Token": "wrong"},
+        )
+        self.assertEqual(r.status_code, 403)
+        err = r.json()["error"]
+        self.assertTrue(err["code"])
+        self.assertNotIn("detail", r.json())
 
 
 if __name__ == "__main__":

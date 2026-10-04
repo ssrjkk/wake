@@ -19,11 +19,11 @@ from subscription import start_trial, upgrade_to_pro
 
 router = APIRouter()
 
-_agent_memories: dict = {}      # user_id -> AgentMemoryStore
-_subscriptions: dict = {}       # user_id -> Subscription
+_agent_memories: dict = {}  # user_id -> AgentMemoryStore
+_subscriptions: dict = {}  # user_id -> Subscription
 # Состояние лимитов риска живёт столько же, сколько процесс: без него run_agent_step
 # каждый раз получает пустой UserRiskState, и дневной объём не накапливался бы вовсе.
-_risk_states: dict = {}         # user_id -> UserRiskState
+_risk_states: dict = {}  # user_id -> UserRiskState
 
 
 def _get_memory(user_id: str) -> AgentMemoryStore:
@@ -52,12 +52,19 @@ def agent_step(req: AgentStepRequest):
     memory = _get_memory(req.user_id)
     risk_state = _get_risk_state(req.user_id)
     decision, execution = run_agent_step(
-        memory, req.market_id, req.recent_prices, req.size_decimals, req.price_decimals,
-        req.base_size_usd, risk_state=risk_state,
+        memory,
+        req.market_id,
+        req.recent_prices,
+        req.size_decimals,
+        req.price_decimals,
+        req.base_size_usd,
+        risk_state=risk_state,
     )
     return {
-        "action": decision.action, "confidence": decision.confidence,
-        "size_usd": decision.size_usd, "reasoning": decision.reasoning,
+        "action": decision.action,
+        "confidence": decision.confidence,
+        "size_usd": decision.size_usd,
+        "reasoning": decision.reasoning,
         "execution": execution,
         "volume_today_usd": risk_state.volume_today_usd,
     }
@@ -78,7 +85,9 @@ def agent_memory_view(user_id: str):
 @router.post("/subscription/{user_id}/start-trial")
 def subscription_start_trial(user_id: str):
     if user_id in _subscriptions:
-        raise HTTPException(status_code=400, detail="подписка уже существует для этого пользователя")
+        raise HTTPException(
+            status_code=400, detail="подписка уже существует для этого пользователя"
+        )
     sub = start_trial(user_id)
     _subscriptions[user_id] = sub
     return {"tier": sub.tier.value, "trial_started_at": sub.trial_started_at}
@@ -88,7 +97,9 @@ def subscription_start_trial(user_id: str):
 def subscription_upgrade(user_id: str):
     sub = _subscriptions.get(user_id)
     if sub is None:
-        raise HTTPException(status_code=404, detail="нет подписки — сначала /start-trial")
+        raise HTTPException(
+            status_code=404, detail="нет подписки — сначала /start-trial"
+        )
     upgraded = upgrade_to_pro(sub)
     _subscriptions[user_id] = upgraded
     return {"tier": upgraded.tier.value}
@@ -98,7 +109,12 @@ def subscription_upgrade(user_id: str):
 def subscription_status(user_id: str):
     sub = _subscriptions.get(user_id)
     if sub is None:
-        return {"tier": "none", "has_ai_agent": False, "has_copy_trading": False, "has_predict_markets": False}
+        return {
+            "tier": "none",
+            "has_ai_agent": False,
+            "has_copy_trading": False,
+            "has_predict_markets": False,
+        }
     return {
         "tier": sub.effective_tier().value,
         "days_left_in_trial": sub.days_left_in_trial(),

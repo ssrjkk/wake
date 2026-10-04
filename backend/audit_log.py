@@ -8,7 +8,7 @@ import json
 import time
 import sqlite3
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS audit_log (
@@ -63,12 +63,20 @@ class AuditEntry:
 def log_action(conn, entry: AuditEntry):
     conn.execute(
         "INSERT INTO audit_log (timestamp, actor, action, resource, details, success) VALUES (?,?,?,?,?,?)",
-        (time.time(), entry.actor, entry.action, entry.resource,
-         json.dumps(entry.details) if entry.details else None, 1 if entry.success else 0),
+        (
+            time.time(),
+            entry.actor,
+            entry.action,
+            entry.resource,
+            json.dumps(entry.details) if entry.details else None,
+            1 if entry.success else 0,
+        ),
     )
 
 
-def recent_actions(conn, actor: str | None = None, action: str | None = None, limit: int = 100):
+def recent_actions(
+    conn, actor: str | None = None, action: str | None = None, limit: int = 100
+):
     query = "SELECT * FROM audit_log WHERE 1=1"
     params = []
     if actor:
