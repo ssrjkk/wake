@@ -18,12 +18,12 @@ interface PortfolioProps {
   markets: OrderBook[];
 }
 
-const STATUS_STYLE: Record<MirrorLogRow["status"], string> = {
-  planned: "bg-surface-200 text-text-secondary",
-  skipped: "bg-amber-950 text-amber-400 border border-amber-900",
-  dry_run: "bg-sky-950 text-sky-400 border border-sky-900",
-  sent: "bg-emerald-950 text-success border border-emerald-900",
-  failed: "bg-red-950 text-danger border border-red-900",
+const STATUS_STYLE: Record<MirrorLogRow["status"], { bg: string; color: string; border?: string }> = {
+  planned: { bg: "#1a1a1a", color: "#a0a0a0" },
+  skipped: { bg: "#2a2000", color: "#fbbf24", border: "#3d3000" },
+  dry_run: { bg: "#0a1a2a", color: "#3b82f6", border: "#1a3050" },
+  sent: { bg: "#0a2a1a", color: "#10b981", border: "#1a3d2a" },
+  failed: { bg: "#2a0a0a", color: "#ef4444", border: "#3d1a1a" },
 };
 
 export function Portfolio({ following, setTab, togglePause, unfollow, followerId, lighterAccountIndex, hasWallet, markets }: PortfolioProps) {
@@ -91,70 +91,68 @@ export function Portfolio({ following, setTab, togglePause, unfollow, followerId
   }
 
   return (
-    <div className="space-y-5">
+    <div className="terminal-layout" style={{ gridTemplateColumns: "1fr", height: "auto", gap: "16px" }}>
       <section>
-        <div className="flex items-baseline justify-between mb-3">
-          <h2 className="text-text-primary font-bold text-lg">Мои подписки</h2>
-          <span className="text-xs text-text-tertiary font-mono">таблица follows</span>
+        <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: "12px" }}>
+          <h2 style={{ fontSize: "16px", fontWeight: 600, color: "#fafafa", margin: 0 }}>Мои подписки</h2>
+          <span style={{ fontSize: "11px", color: "#666", fontFamily: "JetBrains Mono, monospace" }}>таблица follows</span>
         </div>
         {following.length === 0 ? (
-          <div className="bg-surface-100 border border-border rounded-2xl py-14 flex flex-col items-center text-center px-6">
-            <p className="text-text-secondary text-sm mb-1">
+          <div style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", padding: "40px 20px", display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center" }}>
+            <p style={{ fontSize: "14px", color: "#a0a0a0", marginBottom: "4px" }}>
               {followerId ? "Ты пока никого не копируешь" : "Войди через Telegram или кошелёк — подписки привязаны к follower_id"}
             </p>
-            <p className="text-text-muted text-xs mb-4 max-w-md">
-              Подписка — это строка в <code className="text-text-tertiary">follows</code> с аллокацией и потолком плеча. Её читает копи-движок из{" "}
-              <code className="text-text-tertiary">mirror_engine.py</code>.
+            <p style={{ fontSize: "12px", color: "#666", marginBottom: "16px", maxWidth: "400px" }}>
+              Подписка — это строка в <code style={{ color: "#a0a0a0" }}>follows</code> с аллокацией и потолком плеча. Её читает копи-движок из{" "}
+              <code style={{ color: "#a0a0a0" }}>mirror_engine.py</code>.
             </p>
-            <button onClick={() => setTab("discover")} className="text-cyan-400 text-sm font-medium flex items-center gap-1">
-              Найти трейдера <ChevronRight className="w-4 h-4" />
+            <button onClick={() => setTab("discover")} style={{ color: "#3b82f6", fontSize: "14px", fontWeight: 500, display: "flex", alignItems: "center", gap: "4px", background: "none", border: "none", cursor: "pointer" }}>
+              Найти трейдера <ChevronRight style={{ width: "16px", height: "16px" }} />
             </button>
           </div>
         ) : (
-          <div className="bg-surface-100 border border-border rounded-2xl p-4 overflow-x-auto">
-            <table className="w-full text-sm">
+          <div style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", padding: "16px", overflowX: "auto" }}>
+            <table style={{ width: "100%", fontSize: "13px" }}>
               <thead>
-                <tr className="text-left text-xs text-text-tertiary border-b border-border">
-                  <th className="pb-2 font-normal">Лидер</th>
-                  <th className="pb-2 font-normal">Аллокация</th>
-                  <th className="pb-2 font-normal">Плечо</th>
-                  <th className="pb-2 font-normal">Зеркальный размер</th>
-                  <th className="pb-2 font-normal">Статус</th>
-                  <th className="pb-2 font-normal"></th>
+                <tr style={{ textAlign: "left", fontSize: "11px", color: "#666", borderBottom: "1px solid #1e1e1e" }}>
+                  <th style={{ paddingBottom: "8px", fontWeight: 400 }}>Лидер</th>
+                  <th style={{ paddingBottom: "8px", fontWeight: 400 }}>Аллокация</th>
+                  <th style={{ paddingBottom: "8px", fontWeight: 400 }}>Плечо</th>
+                  <th style={{ paddingBottom: "8px", fontWeight: 400 }}>Зеркальный размер</th>
+                  <th style={{ paddingBottom: "8px", fontWeight: 400 }}>Статус</th>
+                  <th style={{ paddingBottom: "8px", fontWeight: 400 }}></th>
                 </tr>
               </thead>
               <tbody>
                 {following.map((t) => (
-                  <tr key={t.followId} className="border-b border-border last:border-0">
-                    <td className="py-3">
-                      <div className="flex items-center gap-2">
-                        <div className={`w-7 h-7 rounded-full ${avatarColor(t.handle)} flex items-center justify-center text-xs font-bold text-text-primary`}>
+                  <tr key={t.followId} style={{ borderBottom: "1px solid #1e1e1e" }}>
+                    <td style={{ padding: "12px 0" }}>
+                      <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                        <div style={{ width: "28px", height: "28px", borderRadius: "50%", background: avatarColor(t.handle), display: "flex", alignItems: "center", justifyContent: "center", fontSize: "11px", fontWeight: 600, color: "#fff" }}>
                           {shortHandle(t.handle)}
                         </div>
-                        <span className="text-text-primary font-medium">{t.handle}</span>
+                        <span style={{ color: "#fafafa", fontWeight: 500 }}>{t.handle}</span>
                       </div>
                     </td>
-                    <td className="py-3 font-mono text-text-secondary">{usd(t.allocationUsd)}</td>
-                    <td className="py-3 font-mono text-text-secondary">{t.maxLeverage}x</td>
-                    <td className="py-3 font-mono text-text-secondary">{fmt(t.mirroredSize, 4)}</td>
-                    <td className="py-3">
+                    <td style={{ padding: "12px 0", fontFamily: "JetBrains Mono, monospace", color: "#a0a0a0" }}>{usd(t.allocationUsd)}</td>
+                    <td style={{ padding: "12px 0", fontFamily: "JetBrains Mono, monospace", color: "#a0a0a0" }}>{t.maxLeverage}x</td>
+                    <td style={{ padding: "12px 0", fontFamily: "JetBrains Mono, monospace", color: "#a0a0a0" }}>{fmt(t.mirroredSize, 4)}</td>
+                    <td style={{ padding: "12px 0" }}>
                       <button
                         onClick={() => togglePause(t.followId)}
-                        className={`flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full transition-colors ${
-                          t.paused ? "bg-surface-200 text-text-tertiary hover:text-text-secondary" : "bg-emerald-950 text-success hover:text-emerald-300"
-                        }`}
+                        style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11px", padding: "4px 10px", borderRadius: "4px", border: "none", cursor: "pointer", background: t.paused ? "#1a1a1a" : "#0a2a1a", color: t.paused ? "#666" : "#10b981" }}
                       >
-                        {t.paused ? <Play className="w-3 h-3" /> : <Pause className="w-3 h-3" />}
+                        {t.paused ? <Play style={{ width: "12px", height: "12px" }} /> : <Pause style={{ width: "12px", height: "12px" }} />}
                         {t.paused ? "На паузе" : "Копирует"}
                       </button>
                     </td>
-                    <td className="py-3 text-right">
+                    <td style={{ padding: "12px 0", textAlign: "right" }}>
                       <button
                         onClick={() => unfollow(t.followId)}
-                        className="text-text-muted hover:text-danger transition-colors"
+                        style={{ color: "#666", background: "none", border: "none", cursor: "pointer", padding: 0, display: "flex" }}
                         title="Удалить подписку из follows"
                       >
-                        <X className="w-4 h-4" />
+                        <X style={{ width: "16px", height: "16px" }} />
                       </button>
                     </td>
                   </tr>
@@ -166,85 +164,87 @@ export function Portfolio({ following, setTab, togglePause, unfollow, followerId
       </section>
 
       <section>
-        <div className="flex items-baseline justify-between mb-3">
-          <h2 className="text-text-primary font-bold text-lg">Счёт на Lighter</h2>
-          <span className="text-xs text-text-tertiary font-mono">GET /api/v1/account?by=index</span>
+        <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: "12px" }}>
+          <h2 style={{ fontSize: "16px", fontWeight: 600, color: "#fafafa", margin: 0 }}>Счёт на Lighter</h2>
+          <span style={{ fontSize: "11px", color: "#666", fontFamily: "JetBrains Mono, monospace" }}>GET /api/v1/account?by=index</span>
         </div>
         {!hasWallet ? (
-          <div className="bg-surface-100 border border-border rounded-2xl py-10 flex flex-col items-center text-center px-6">
-            <Wallet className="w-7 h-7 text-text-muted mb-3" />
-            <p className="text-text-secondary text-sm">Кошелёк не подключён — позиции по адресу не видны</p>
-            <p className="text-text-muted text-xs mt-1 max-w-md">
+          <div style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", padding: "32px 20px", display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center" }}>
+            <div style={{ width: "28px", height: "28px", borderRadius: "50%", background: "#1a1a1a", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: "12px" }}>
+              <Wallet style={{ width: "20px", height: "20px", color: "#666" }} />
+            </div>
+            <p style={{ fontSize: "14px", color: "#a0a0a0", margin: 0 }}>Кошелёк не подключён — позиции по адресу не видны</p>
+            <p style={{ fontSize: "12px", color: "#666", marginTop: "4px", maxWidth: "400px" }}>
               Вход через Telegram даёт подписки и журнал, но сам счёт на Lighter привязан к адресу. Подключи кошелёк в шапке.
             </p>
           </div>
         ) : lighterAccountIndex == null ? (
-          <div className="bg-surface-100 border border-border rounded-2xl py-10 flex flex-col items-center text-center px-6">
-            <p className="text-text-secondary text-sm">Аккаунт на Lighter не найден</p>
-            <p className="text-text-muted text-xs mt-1 max-w-md">
+          <div style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", padding: "32px 20px", display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center" }}>
+            <p style={{ fontSize: "14px", color: "#a0a0a0", margin: 0 }}>Аккаунт на Lighter не найден</p>
+            <p style={{ fontSize: "12px", color: "#666", marginTop: "4px", maxWidth: "400px" }}>
               Регистрация — на app.lighter.xyz. Wake читает только публичные данные счёта и никогда не просит приватный ключ.
             </p>
           </div>
         ) : accountError ? (
-          <div className="bg-surface-100 border border-amber-900 rounded-2xl p-4 text-sm text-amber-300">
-            Lighter не ответил: <span className="font-mono text-xs">{accountError}</span>
+          <div style={{ background: "#1a1500", border: "1px solid #3d3000", borderRadius: "6px", padding: "12px 16px", fontSize: "13px", color: "#fbbf24" }}>
+            Lighter не ответил: <span style={{ fontFamily: "JetBrains Mono, monospace", fontSize: "12px" }}>{accountError}</span>
           </div>
         ) : account ? (
-          <div className="bg-surface-100 border border-border rounded-2xl p-4">
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-4">
+          <div style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", padding: "16px" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "16px", marginBottom: "16px" }}>
               <div>
-                <div className="text-xs text-text-tertiary mb-1">Капитал</div>
-                <div className="text-lg font-mono text-text-primary">{usd(account.equityUsd, 2)}</div>
+                <div style={{ fontSize: "12px", color: "#666", marginBottom: "4px" }}>Капитал</div>
+                <div style={{ fontSize: "18px", fontFamily: "JetBrains Mono, monospace", color: "#fafafa" }}>{usd(account.equityUsd, 2)}</div>
               </div>
               <div>
-                <div className="text-xs text-text-tertiary mb-1">Нереализованный PnL</div>
-                <div className={`text-lg font-mono ${unrealized >= 0 ? "text-success" : "text-danger"}`}>
+                <div style={{ fontSize: "12px", color: "#666", marginBottom: "4px" }}>Нереализованный PnL</div>
+                <div style={{ fontSize: "18px", fontFamily: "JetBrains Mono, monospace", color: unrealized >= 0 ? "#10b981" : "#ef4444" }}>
                   {unrealized >= 0 ? "+" : ""}
                   {usd(unrealized, 2)}
                 </div>
               </div>
               <div>
-                <div className="text-xs text-text-tertiary mb-1">Реализованный PnL</div>
-                <div className={`text-lg font-mono ${account.realizedPnlUsd >= 0 ? "text-success" : "text-danger"}`}>
+                <div style={{ fontSize: "12px", color: "#666", marginBottom: "4px" }}>Реализованный PnL</div>
+                <div style={{ fontSize: "18px", fontFamily: "JetBrains Mono, monospace", color: account.realizedPnlUsd >= 0 ? "#10b981" : "#ef4444" }}>
                   {account.realizedPnlUsd >= 0 ? "+" : ""}
                   {usd(account.realizedPnlUsd, 2)}
                 </div>
               </div>
               <div>
-                <div className="text-xs text-text-tertiary mb-1">Открытых позиций</div>
-                <div className="text-lg font-mono text-text-primary">{fmt(openPositions.length)}</div>
+                <div style={{ fontSize: "12px", color: "#666", marginBottom: "4px" }}>Открытых позиций</div>
+                <div style={{ fontSize: "18px", fontFamily: "JetBrains Mono, monospace", color: "#fafafa" }}>{fmt(openPositions.length)}</div>
               </div>
             </div>
 
             {openPositions.length === 0 ? (
-              <p className="text-text-muted text-sm">Открытых позиций нет — lighter возвращает строку на каждый рынок, который счёт когда-либо трогал.</p>
+              <p style={{ fontSize: "13px", color: "#666", margin: 0 }}>Открытых позиций нет — lighter возвращает строку на каждый рынок, который счёт когда-либо трогал.</p>
             ) : (
-              <table className="w-full text-sm">
+              <table style={{ width: "100%", fontSize: "13px" }}>
                 <thead>
-                  <tr className="text-left text-xs text-text-tertiary border-b border-border">
-                    <th className="pb-2 font-normal">Рынок</th>
-                    <th className="pb-2 font-normal">Размер</th>
-                    <th className="pb-2 font-normal">Средняя входа</th>
-                    <th className="pb-2 font-normal">Номинал</th>
-                    <th className="pb-2 font-normal">PnL</th>
-                    <th className="pb-2 font-normal">Ликв.</th>
+                  <tr style={{ textAlign: "left", fontSize: "11px", color: "#666", borderBottom: "1px solid #1e1e1e" }}>
+                    <th style={{ paddingBottom: "8px", fontWeight: 400 }}>Рынок</th>
+                    <th style={{ paddingBottom: "8px", fontWeight: 400 }}>Размер</th>
+                    <th style={{ paddingBottom: "8px", fontWeight: 400 }}>Средняя входа</th>
+                    <th style={{ paddingBottom: "8px", fontWeight: 400 }}>Номинал</th>
+                    <th style={{ paddingBottom: "8px", fontWeight: 400 }}>PnL</th>
+                    <th style={{ paddingBottom: "8px", fontWeight: 400 }}>Ликв.</th>
                   </tr>
                 </thead>
                 <tbody>
                   {openPositions.map((p) => (
-                    <tr key={p.marketId} className="border-b border-border last:border-0">
-                      <td className="py-2.5">
-                        <span className="text-text-primary font-medium">{p.symbol}</span>
-                        <span className={`ml-2 text-xs ${p.size >= 0 ? "text-success" : "text-danger"}`}>{p.size >= 0 ? "LONG" : "SHORT"}</span>
+                    <tr key={p.marketId} style={{ borderBottom: "1px solid #1e1e1e" }}>
+                      <td style={{ padding: "10px 0" }}>
+                        <span style={{ color: "#fafafa", fontWeight: 500 }}>{p.symbol}</span>
+                        <span style={{ marginLeft: "8px", fontSize: "11px", color: p.size >= 0 ? "#10b981" : "#ef4444" }}>{p.size >= 0 ? "LONG" : "SHORT"}</span>
                       </td>
-                      <td className="py-2.5 font-mono text-text-secondary">{fmt(p.size, 4)}</td>
-                      <td className="py-2.5 font-mono text-text-secondary">{fmt(p.avgEntry, decimalsOf(p.marketId))}</td>
-                      <td className="py-2.5 font-mono text-text-secondary">{usd(Math.abs(p.value), 0)}</td>
-                      <td className={`py-2.5 font-mono ${p.unrealizedPnl >= 0 ? "text-success" : "text-danger"}`}>
+                      <td style={{ padding: "10px 0", fontFamily: "JetBrains Mono, monospace", color: "#a0a0a0" }}>{fmt(p.size, 4)}</td>
+                      <td style={{ padding: "10px 0", fontFamily: "JetBrains Mono, monospace", color: "#a0a0a0" }}>{fmt(p.avgEntry, decimalsOf(p.marketId))}</td>
+                      <td style={{ padding: "10px 0", fontFamily: "JetBrains Mono, monospace", color: "#a0a0a0" }}>{usd(Math.abs(p.value), 0)}</td>
+                      <td style={{ padding: "10px 0", fontFamily: "JetBrains Mono, monospace", color: p.unrealizedPnl >= 0 ? "#10b981" : "#ef4444" }}>
                         {p.unrealizedPnl >= 0 ? "+" : ""}
                         {usd(p.unrealizedPnl, 2)}
                       </td>
-                      <td className="py-2.5 font-mono text-text-tertiary">{p.liquidationPrice > 0 ? `$${fmt(p.liquidationPrice, decimalsOf(p.marketId))}` : "—"}</td>
+                      <td style={{ padding: "10px 0", fontFamily: "JetBrains Mono, monospace", color: "#666" }}>{p.liquidationPrice > 0 ? `$${fmt(p.liquidationPrice, decimalsOf(p.marketId))}` : "—"}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -252,55 +252,55 @@ export function Portfolio({ following, setTab, togglePause, unfollow, followerId
             )}
           </div>
         ) : (
-          <div className="bg-surface-100 border border-border rounded-2xl p-6 text-sm text-text-tertiary">Загружаю счёт…</div>
+          <div style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", padding: "24px", fontSize: "13px", color: "#666" }}>Загружаю счёт…</div>
         )}
       </section>
 
       {followerId && (
         <section>
-          <div className="flex items-baseline justify-between mb-3">
-            <h2 className="text-text-primary font-bold text-lg">Журнал копи-движка</h2>
-            <span className="text-xs text-text-tertiary font-mono">таблица mirror_log</span>
+          <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: "12px" }}>
+            <h2 style={{ fontSize: "16px", fontWeight: 600, color: "#fafafa", margin: 0 }}>Журнал копи-движка</h2>
+            <span style={{ fontSize: "11px", color: "#666", fontFamily: "JetBrains Mono, monospace" }}>таблица mirror_log</span>
           </div>
-          <div className="bg-surface-100 border border-border rounded-2xl p-4">
+          <div style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", padding: "16px" }}>
             {mirrorLog === null ? (
-              <p className="text-text-tertiary text-sm">Читаю журнал…</p>
+              <p style={{ fontSize: "13px", color: "#666", margin: 0 }}>Читаю журнал…</p>
             ) : mirrorLog.length === 0 ? (
-              <p className="text-text-tertiary text-sm leading-relaxed">
-                Пусто. Строки появляются, когда <code className="text-text-secondary">leader_listener.py</code> видит изменение позиции лидера по одной из
-                твоих подписок. С <code className="text-text-secondary">WAKE_DRY_RUN=true</code> (значение по умолчанию) исход пишется как{" "}
-                <code className="text-text-secondary">dry_run</code>, ордер на Lighter не уходит. Проверить расчёт без листенера можно запросом{" "}
-                <code className="text-text-secondary">POST /simulate-mirror</code>.
+              <p style={{ fontSize: "13px", color: "#666", lineHeight: 1.6, margin: 0 }}>
+                Пусто. Строки появляются, когда <code style={{ color: "#a0a0a0" }}>leader_listener.py</code> видит изменение позиции лидера по одной из
+                твоих подписок. С <code style={{ color: "#a0a0a0" }}>WAKE_DRY_RUN=true</code> (значение по умолчанию) исход пишется как{" "}
+                <code style={{ color: "#a0a0a0" }}>dry_run</code>, ордер на Lighter не уходит. Проверить расчёт без листенера можно запросом{" "}
+                <code style={{ color: "#a0a0a0" }}>POST /simulate-mirror</code>.
               </p>
             ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
+              <div style={{ overflowX: "auto" }}>
+                <table style={{ width: "100%", fontSize: "13px" }}>
                   <thead>
-                    <tr className="text-left text-xs text-text-tertiary border-b border-border">
-                      <th className="pb-2 font-normal">Время</th>
-                      <th className="pb-2 font-normal">Лидер</th>
-                      <th className="pb-2 font-normal">Рынок</th>
-                      <th className="pb-2 font-normal">Сторона</th>
-                      <th className="pb-2 font-normal">Размер</th>
-                      <th className="pb-2 font-normal">Исход</th>
+                    <tr style={{ textAlign: "left", fontSize: "11px", color: "#666", borderBottom: "1px solid #1e1e1e" }}>
+                      <th style={{ paddingBottom: "8px", fontWeight: 400 }}>Время</th>
+                      <th style={{ paddingBottom: "8px", fontWeight: 400 }}>Лидер</th>
+                      <th style={{ paddingBottom: "8px", fontWeight: 400 }}>Рынок</th>
+                      <th style={{ paddingBottom: "8px", fontWeight: 400 }}>Сторона</th>
+                      <th style={{ paddingBottom: "8px", fontWeight: 400 }}>Размер</th>
+                      <th style={{ paddingBottom: "8px", fontWeight: 400 }}>Исход</th>
                     </tr>
                   </thead>
                   <tbody>
                     {mirrorLog.map((r) => (
-                      <tr key={r.id} className="border-b border-border last:border-0">
-                        <td className="py-2.5 text-text-tertiary font-mono text-xs whitespace-nowrap">{new Date(r.created_at * 1000).toLocaleString("ru-RU")}</td>
-                        <td className="py-2.5 text-text-secondary">{r.leader_handle}</td>
-                        <td className="py-2.5 text-text-primary">
+                      <tr key={r.id} style={{ borderBottom: "1px solid #1e1e1e" }}>
+                        <td style={{ padding: "10px 0", color: "#666", fontFamily: "JetBrains Mono, monospace", fontSize: "12px", whiteSpace: "nowrap" }}>{new Date(r.created_at * 1000).toLocaleString("ru-RU")}</td>
+                        <td style={{ padding: "10px 0", color: "#a0a0a0" }}>{r.leader_handle}</td>
+                        <td style={{ padding: "10px 0", color: "#fafafa" }}>
                           {symbolOf(r.market_id)}
-                          {r.reduce_only === 1 && <span className="ml-1.5 text-xs text-text-tertiary">закрытие</span>}
+                          {r.reduce_only === 1 && <span style={{ marginLeft: "6px", fontSize: "11px", color: "#666" }}>закрытие</span>}
                         </td>
-                        <td className={`py-2.5 font-mono text-xs ${r.side === "long" ? "text-success" : "text-danger"}`}>{r.side.toUpperCase()}</td>
-                        <td className="py-2.5 font-mono text-text-secondary">{fmt(r.base_amount, 4)}</td>
-                        <td className="py-2.5">
-                          <span className={`text-xs px-2 py-0.5 rounded-full font-mono ${STATUS_STYLE[r.status]}`}>{r.status}</span>
-                          {r.reason && <span className="ml-2 text-xs text-text-tertiary">{r.reason}</span>}
+                        <td style={{ padding: "10px 0", fontFamily: "JetBrains Mono, monospace", fontSize: "12px", color: r.side === "long" ? "#10b981" : "#ef4444" }}>{r.side.toUpperCase()}</td>
+                        <td style={{ padding: "10px 0", fontFamily: "JetBrains Mono, monospace", color: "#a0a0a0" }}>{fmt(r.base_amount, 4)}</td>
+                        <td style={{ padding: "10px 0" }}>
+                          <span style={{ fontSize: "11px", padding: "2px 8px", borderRadius: "3px", fontFamily: "JetBrains Mono, monospace", background: STATUS_STYLE[r.status].bg, color: STATUS_STYLE[r.status].color, border: STATUS_STYLE[r.status].border ? `1px solid ${STATUS_STYLE[r.status].border}` : "none" }}>{r.status}</span>
+                          {r.reason && <span style={{ marginLeft: "8px", fontSize: "12px", color: "#666" }}>{r.reason}</span>}
                           {r.tx_hash && (
-                            <span className="ml-2 text-xs text-text-muted font-mono" title={r.tx_hash}>
+                            <span style={{ marginLeft: "8px", fontSize: "12px", color: "#666", fontFamily: "JetBrains Mono, monospace" }} title={r.tx_hash}>
                               {r.tx_hash.slice(0, 10)}…
                             </span>
                           )}
