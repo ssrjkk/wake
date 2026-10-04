@@ -20,7 +20,7 @@ def _fake_init(self, capacity, refill_rate, redis_url=None):
 
 rate_limiter.RedisRateLimiter.__init__ = _fake_init
 
-import uvicorn
+import uvicorn  # noqa: E402  (импорт после патча — патч должен примениться первым)
 
 import app  # noqa: E402  (импорт после патча — патч должен примениться первым)
 
