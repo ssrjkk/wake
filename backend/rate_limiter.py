@@ -61,12 +61,19 @@ class RedisRateLimiter:
         await pipe.execute()
 
     async def allow(self, key: str, cost: float = 1.0) -> bool:
-        """Try to consume tokens. Returns True if allowed, False if rate limited."""
-        tokens, now = await self._get_bucket(key)
-        if tokens < cost:
-            return False
-        await self._update_bucket(key, tokens - cost, now)
-        return True
+        """Try to consume tokens. Returns True if allowed, False if rate limited.
+
+        When Redis is unavailable, falls back to allowing the request
+        (rate limiting is not critical for functionality).
+        """
+        try:
+            tokens, now = await self._get_bucket(key)
+            if tokens < cost:
+                return False
+            await self._update_bucket(key, tokens - cost, now)
+            return True
+        except Exception:
+            return True
 
     async def retry_after(self, key: str, cost: float = 1.0) -> float:
         """Return seconds until cost tokens are available."""

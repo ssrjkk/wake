@@ -208,9 +208,9 @@ export function Terminal({ asset, setAsset, markets, dataError, setToast, isCopy
               <span className="text-[#666] ml-2">→ {((fundingRate * 24 * 365) * 100).toFixed(1)}% годовых</span>
             </div>
           )}
-          <div className="h-48">
+          <div className="h-48 relative">
             {chartData.length > 1 ? (
-              <ResponsiveContainer width="100%" height="100%">
+              <ResponsiveContainer width="100%" height="100%" minWidth={200} minHeight={150}>
                 <AreaChart data={chartData}>
                   <defs>
                     <linearGradient id="wakeGrad" x1="0" y1="0" x2="0" y2="1">
