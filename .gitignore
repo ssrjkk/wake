@@ -6,6 +6,7 @@ test-results/
 playwright-report/
 blob-report/
 .wrangler/
+.env
 
 # Backend / Python
 __pycache__/
