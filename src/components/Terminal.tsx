@@ -1,11 +1,11 @@
 import { useState, useEffect, useMemo } from "react";
-import { TrendingUp, TrendingDown, Radio, Search } from "lucide-react";
+import { Radio, Search } from "lucide-react";
 import { AreaChart, Area, ResponsiveContainer } from "recharts";
 import { getCandles, getRecentTrades, getFundingRates, placeOrderViaSigningService, type LighterNetwork, type OrderBook, type Candle, type Trade } from "../lib/lighter";
 import { SIGNING_SERVICE_URL } from "../lib/config";
 import { errorText } from "../lib/backend";
 import { fmt, usd } from "./utils";
-import { Ripple, Skeleton } from "./ui";
+import { Skeleton } from "./ui";
 
 interface TerminalProps {
   asset: string;
@@ -111,46 +111,39 @@ export function Terminal({ asset, setAsset, markets, dataError, setToast, isCopy
     }
   }
 
+  const decimals = currentMarket?.supported_price_decimals ?? 2;
+
   return (
     <div className="terminal-layout">
-      {dataError && (
-        <div className="terminal-main" style={{ gridColumn: "1 / -1" }}>
-          <div className="terminal-header" style={{ flexDirection: "column", alignItems: "flex-start", gap: "8px" }}>
-            <div className="text-sm text-[#ff6b35] font-medium">Lighter API не отвечает</div>
-            <div className="text-xs text-[#888]">
-              Стакан, свечи и лента сделок тянутся напрямую с <code className="text-[#ccc]">{network}.zklighter.elliot.ai</code>. Ошибка: {dataError}
-            </div>
-          </div>
-        </div>
-      )}
-
       <div className="terminal-main">
-        <div className="terminal-header">
-          <button onClick={() => setMarketPickerOpen(true)} className="asset-selector">
-            <span className="asset-symbol">{asset}</span>
-            <span className="asset-type">{currentMarket?.market_type ?? "—"}</span>
-          </button>
-          <div className="price-block">
+        <div className="asset-header">
+          <div className="asset-info">
+            <button onClick={() => setMarketPickerOpen(true)} className="flex items-center gap-2 hover:opacity-80 transition-opacity">
+              <span className="asset-symbol">{asset}</span>
+              <span className="asset-type">{currentMarket?.market_type ?? "PERP"}</span>
+            </button>
+          </div>
+          <div className="flex items-center gap-4">
             {price != null ? (
-              <div className="price-current">${fmt(price, currentMarket?.supported_price_decimals ?? 2)}</div>
+              <span className="price-display">${fmt(price, decimals)}</span>
             ) : (
-              <Skeleton className="h-7 w-32" />
+              <Skeleton className="h-6 w-32" />
             )}
             {change != null && (
-              <div className={`price-change ${change >= 0 ? "up" : "down"}`}>
+              <span className={`price-change ${change >= 0 ? "up" : "down"}`}>
                 {change >= 0 ? "+" : ""}{change.toFixed(2)}%
-              </div>
+              </span>
             )}
           </div>
           {stats24h && (
             <div className="stats-row">
               <div className="stat">
                 <span className="stat-label">24h High</span>
-                <span className="stat-value">${fmt(stats24h.high, currentMarket?.supported_price_decimals ?? 2)}</span>
+                <span className="stat-value">${fmt(stats24h.high, decimals)}</span>
               </div>
               <div className="stat">
                 <span className="stat-label">24h Low</span>
-                <span className="stat-value">${fmt(stats24h.low, currentMarket?.supported_price_decimals ?? 2)}</span>
+                <span className="stat-value">${fmt(stats24h.low, decimals)}</span>
               </div>
               <div className="stat">
                 <span className="stat-label">24h Vol</span>
@@ -159,23 +152,33 @@ export function Terminal({ asset, setAsset, markets, dataError, setToast, isCopy
             </div>
           )}
           {fundingRate != null && (
-            <div className="funding-badge">
-              Funding {(fundingRate * 100).toFixed(4)}%/ч
+            <div className="stat">
+              <span className="stat-label">Funding</span>
+              <span className="stat-value">{(fundingRate * 100).toFixed(4)}%/h</span>
             </div>
           )}
         </div>
 
         <div className="chart-container">
-          {chartData.length > 1 ? (
+          {dataError ? (
+            <div className="flex items-center justify-center h-full text-sm" style={{ color: "var(--text-tertiary)" }}>
+              <div className="text-center">
+                <div className="mb-2">Lighter API не отвечает</div>
+                <div className="text-xs" style={{ color: "var(--text-muted)" }}>
+                  {network}.zklighter.elliot.ai — {dataError}
+                </div>
+              </div>
+            </div>
+          ) : chartData.length > 1 ? (
             <ResponsiveContainer width="100%" height="100%" minWidth={200} minHeight={150}>
               <AreaChart data={chartData}>
                 <defs>
-                  <linearGradient id="wakeGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor={(change ?? 0) >= 0 ? "#10b981" : "#ef4444"} stopOpacity={0.15} />
-                    <stop offset="100%" stopColor={(change ?? 0) >= 0 ? "#10b981" : "#ef4444"} stopOpacity={0} />
+                  <linearGradient id="chartGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor={(change ?? 0) >= 0 ? "var(--green)" : "var(--red)"} stopOpacity={0.12} />
+                    <stop offset="100%" stopColor={(change ?? 0) >= 0 ? "var(--green)" : "var(--red)"} stopOpacity={0} />
                   </linearGradient>
                 </defs>
-                <Area type="monotone" dataKey="v" stroke={(change ?? 0) >= 0 ? "#10b981" : "#ef4444"} strokeWidth={1.5} fill="url(#wakeGrad)" />
+                <Area type="monotone" dataKey="v" stroke={(change ?? 0) >= 0 ? "var(--green)" : "var(--red)"} strokeWidth={1.5} fill="url(#chartGrad)" />
               </AreaChart>
             </ResponsiveContainer>
           ) : (
@@ -184,24 +187,27 @@ export function Terminal({ asset, setAsset, markets, dataError, setToast, isCopy
         </div>
 
         <div className="trades-section">
-          <div className="section-header">
-            <Radio className="w-3 h-3" />
-            <span>Recent Trades</span>
+          <div className="trades-header">
+            <span className="trades-title">Recent Trades</span>
+            <Radio className="w-3 h-3 live-indicator" style={{ color: trades.length ? "var(--green)" : "var(--text-muted)" }} />
           </div>
-          <div className="trades-list">
+          <div className="trades-list scrollbar-thin">
             {trades.length === 0 ? (
-              <div className="trades-empty">
+              <div className="p-3">
                 {[...Array(8)].map((_, i) => (
-                  <Skeleton key={i} className="h-6 w-full" />
+                  <Skeleton key={i} className="h-5 w-full mb-1" />
                 ))}
               </div>
             ) : (
-              trades.slice(0, 14).map((t) => (
+              trades.slice(0, 20).map((t) => (
                 <div key={t.id} className="trade-row">
-                  <span className={`trade-side ${t.isAsk ? "sell" : "buy"}`}>{t.isAsk ? "SELL" : "BUY"}</span>
-                  <span className="trade-price">{fmt(t.price, currentMarket?.supported_price_decimals ?? 2)}</span>
+                  <span className={`trade-price ${t.isAsk ? "sell" : "buy"}`}>
+                    {fmt(t.price, decimals)}
+                  </span>
                   <span className="trade-size">{t.size}</span>
-                  <span className="trade-time">{t.timestamp ? new Date(t.timestamp).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "—"}</span>
+                  <span className="trade-time">
+                    {t.timestamp ? new Date(t.timestamp).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "—"}
+                  </span>
                 </div>
               ))
             )}
@@ -212,10 +218,16 @@ export function Terminal({ asset, setAsset, markets, dataError, setToast, isCopy
       <div className="terminal-sidebar">
         <div className="order-form">
           <div className="order-tabs">
-            <button className={`order-tab ${side === "long" ? "active long" : ""}`} onClick={() => setSide("long")}>
+            <button
+              className={`order-tab ${side === "long" ? "active buy" : ""}`}
+              onClick={() => setSide("long")}
+            >
               {isSpot ? "Buy" : "Long"}
             </button>
-            <button className={`order-tab ${side === "short" ? "active short" : ""}`} onClick={() => setSide("short")}>
+            <button
+              className={`order-tab ${side === "short" ? "active sell" : ""}`}
+              onClick={() => setSide("short")}
+            >
               {isSpot ? "Sell" : "Short"}
             </button>
           </div>
@@ -228,7 +240,7 @@ export function Terminal({ asset, setAsset, markets, dataError, setToast, isCopy
                 value={size}
                 onChange={(e) => setSize(Number(e.target.value))}
                 min={10}
-                className="order-input"
+                className="input-mono"
               />
             </div>
 
@@ -249,39 +261,48 @@ export function Terminal({ asset, setAsset, markets, dataError, setToast, isCopy
               </div>
             )}
 
-            {liqPrice != null && !isSpot && (
-              <div className="liq-warning">
+            {!isSpot && liqPrice != null && (
+              <div className="order-info">
                 <span>Liq. Price</span>
                 <span>${fmt(liqPrice, 0)}</span>
               </div>
             )}
 
+            {!isSpot && (
+              <div className="order-info">
+                <span>Margin</span>
+                <span>${fmt(size / leverage, 0)}</span>
+              </div>
+            )}
+
             <button
               onClick={() => void placeOrder()}
-              className={`order-submit ${side}`}
+              disabled={!currentMarket || price == null}
+              className={`btn-action ${side === "long" ? "buy" : "sell"}`}
             >
               {isSpot ? (side === "long" ? "Buy" : "Sell") : side === "long" ? "Open Long" : "Open Short"}
             </button>
 
             <div className="order-hint">
-              Ордер уходит на <code className="text-[#888]">signing_service.py</code> с ценой последней свечи. Плечо определяет только оценку ликвидационной цены.
+              Ордер уходит на signing_service.py с ценой последней свечи. Плечо определяет только оценку ликвидационной цены.
             </div>
           </div>
         </div>
 
         <div className="markets-panel">
-          <div className="section-header">
-            <Search className="w-3 h-3" />
-            <span>Markets</span>
+          <div className="markets-header">
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5" style={{ color: "var(--text-muted)" }} />
+              <input
+                type="text"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search markets..."
+                className="markets-search pl-9"
+              />
+            </div>
           </div>
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search..."
-            className="markets-search"
-          />
-          <div className="markets-list">
+          <div className="markets-list scrollbar-thin">
             {filteredMarkets.slice(0, 50).map((m) => (
               <button
                 key={m.market_id}

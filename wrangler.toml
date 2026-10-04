@@ -1,0 +1,21 @@
+name = "wake-backend"
+main = "backend/app.py"
+compatibility_date = "2024-10-01"
+compatibility_flags = ["python_workers"]
+
+[vars]
+WAKE_ENV = "production"
+WAKE_DRY_RUN = "true"
+WAKE_LIGHTER_NETWORK = "mainnet"
+
+# PostgreSQL - requires a managed database (Neon, Supabase, or Cloudflare D1 with PostgreSQL compatibility)
+# Set via wrangler secret set WAKE_DATABASE_URL
+
+# Redis - requires Upstash or similar
+# Set via wrangler secret set WAKE_REDIS_URL
+
+[triggers]
+crons = []
+
+[placement]
+mode = "smart"

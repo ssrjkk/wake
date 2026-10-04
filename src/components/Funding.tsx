@@ -151,111 +151,114 @@ export function Funding({ markets, setToast }: FundingProps) {
   }
 
   return (
-    <div>
-      <div className="mb-4 flex items-start justify-between gap-4">
-        <div>
-          <h2 className="text-text-primary font-semibold">Funding Arbitrage</h2>
-          <p className="text-text-tertiary text-sm">
-            Реальные ставки funding со всех площадок одним запросом — GET /api/v1/funding-rates. Шорт перпа + лонг спота
-            того же актива: дельта-нейтрально, доход идёт от ставки, а не от направления цены.
+    <div className="terminal-layout" style={{ gridTemplateColumns: "1fr", height: "auto" }}>
+      <div className="terminal-main">
+        <div className="terminal-header" style={{ flexDirection: "column", alignItems: "flex-start" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "12px", width: "100%" }}>
+            <h2 style={{ fontSize: "16px", fontWeight: 600, color: "#fafafa", margin: 0 }}>Funding Arbitrage</h2>
+            <button
+              onClick={() => {
+                void getFundingRates().then(setRates).catch((e) => setLoadError(errorText(e)));
+              }}
+              style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: "6px", fontSize: "11px", color: "#888", background: "transparent", border: "1px solid #2a2a2a", borderRadius: "4px", padding: "6px 10px", cursor: "pointer" }}
+            >
+              <RefreshCw style={{ width: "12px", height: "12px" }} /> обновить
+            </button>
+          </div>
+          <p style={{ fontSize: "12px", color: "#666", margin: "8px 0 0 0", maxWidth: "800px" }}>
+            Реальные ставки funding со всех площадок — GET /api/v1/funding-rates. Шорт перпа + лонг спота того же актива: дельта-нейтрально, доход от ставки.
           </p>
         </div>
-        <button
-          onClick={() => {
-            void getFundingRates().then(setRates).catch((e) => setLoadError(errorText(e)));
-          }}
-          className="shrink-0 flex items-center gap-1.5 text-xs text-text-secondary hover:text-text-primary border border-border rounded-full px-3 py-1.5 transition-colors"
-        >
-          <RefreshCw className="w-3.5 h-3.5" /> обновить
-        </button>
-      </div>
 
-      <div className="flex flex-wrap items-center gap-3 mb-3">
-        <label className="flex items-center gap-2 text-xs text-text-secondary">
+      <div className="terminal-header" style={{ gap: "16px", flexWrap: "wrap" }}>
+        <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "11px", color: "#ccc", cursor: "pointer" }}>
           <input
             type="checkbox"
             checked={onlyDeltaNeutral}
             onChange={(e) => setOnlyDeltaNeutral(e.target.checked)}
-            className="accent-cyan-500"
+            style={{ accentColor: "#3b82f6" }}
           />
-          только там, где на Lighter есть и перп, и спот
+          только там, где есть и перп, и спот
         </label>
-        <label className="flex items-center gap-2 text-xs text-text-secondary">
-          <Percent className="w-3.5 h-3.5" />
+        <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "11px", color: "#ccc" }}>
+          <Percent style={{ width: "12px", height: "12px" }} />
           порог APR
           <input
             type="number"
             value={minApy}
             onChange={(e) => setMinApy(Number(e.target.value))}
-            className="w-16 bg-surface-50 border border-border-hover rounded-lg px-2 py-1 text-text-primary font-mono text-xs outline-none"
+            style={{ width: "60px", background: "#0a0a0a", border: "1px solid #1e1e1e", borderRadius: "4px", padding: "4px 8px", color: "#fafafa", fontFamily: "'JetBrains Mono', monospace", fontSize: "11px" }}
           />
           %
         </label>
-        <span className="text-xs text-text-muted">
-          ставок в ответе: {rates ? rates.length : "—"}, перпов Lighter с funding: {rows.length}
+        <span style={{ fontSize: "11px", color: "#666", marginLeft: "auto" }}>
+          ставок: {rates ? rates.length : "—"}, перпов Lighter: {rows.length}
         </span>
       </div>
 
       {loadError && (
-        <div className="bg-surface-100 border border-amber-800 rounded-2xl p-3 mb-3 text-xs text-amber-300">
+        <div className="terminal-header" style={{ color: "#fbbf24", fontSize: "12px" }}>
           funding-rates не ответили: {loadError}
         </div>
       )}
 
-      <div className="bg-surface-100 border border-border rounded-2xl overflow-hidden mb-4">
-        <table className="w-full text-sm">
+      <div style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", overflow: "hidden" }}>
+        <table style={{ width: "100%", fontSize: "12px", borderCollapse: "collapse" }}>
           <thead>
-            <tr className="text-left text-xs text-text-tertiary border-b border-border">
-              <th className="px-4 py-2 font-normal">Актив</th>
-              <th className="px-2 py-2 font-normal text-right">Lighter, %/час</th>
-              <th className="px-2 py-2 font-normal text-right">APR</th>
-              <th className="px-2 py-2 font-normal text-right">Binance</th>
-              <th className="px-2 py-2 font-normal text-right">Bybit</th>
-              <th className="px-2 py-2 font-normal text-right">Hyperliquid</th>
-              <th className="px-2 py-2 font-normal text-right">Arcus</th>
-              <th className="px-2 py-2 font-normal">Спот-нога</th>
-              <th className="px-2 py-2"></th>
+            <tr style={{ textAlign: "left", fontSize: "11px", color: "#666", borderBottom: "1px solid #1e1e1e" }}>
+              <th style={{ padding: "10px 16px", fontWeight: 500 }}>Актив</th>
+              <th style={{ padding: "10px 8px", fontWeight: 500, textAlign: "right" }}>Lighter, %/час</th>
+              <th style={{ padding: "10px 8px", fontWeight: 500, textAlign: "right" }}>APR</th>
+              <th style={{ padding: "10px 8px", fontWeight: 500, textAlign: "right" }}>Binance</th>
+              <th style={{ padding: "10px 8px", fontWeight: 500, textAlign: "right" }}>Bybit</th>
+              <th style={{ padding: "10px 8px", fontWeight: 500, textAlign: "right" }}>Hyperliquid</th>
+              <th style={{ padding: "10px 8px", fontWeight: 500, textAlign: "right" }}>Arcus</th>
+              <th style={{ padding: "10px 8px", fontWeight: 500 }}>Спот-нога</th>
+              <th style={{ padding: "10px 8px" }}></th>
             </tr>
           </thead>
           <tbody>
             {visible.map((r) => {
               const ref = (name: string) => r.reference.find((x) => x.exchange === name)?.rate;
               return (
-                <tr key={r.marketId} className="border-b border-border/60 last:border-0 hover:bg-surface-200/40 transition-colors">
-                  <td className="px-4 py-2 text-text-primary font-medium">
+                <tr key={r.marketId} style={{ borderBottom: "1px solid #1a1a1a", transition: "background 0.1s" }}
+                  onMouseEnter={(e) => e.currentTarget.style.background = "#1a1a1a"}
+                  onMouseLeave={(e) => e.currentTarget.style.background = "transparent"}
+                >
+                  <td style={{ padding: "8px 16px", color: "#fafafa", fontWeight: 500 }}>
                     {r.symbol}
-                    {r.perp == null && <span className="text-text-muted text-xs ml-1.5">нет перпа в /orderBooks</span>}
+                    {r.perp == null && <span style={{ color: "#666", fontSize: "10px", marginLeft: "6px" }}>нет перпа</span>}
                   </td>
-                  <td className={`px-2 py-2 text-right font-mono ${r.rate >= 0 ? "text-emerald-400" : "text-red-400"}`}>
+                  <td style={{ padding: "8px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: r.rate >= 0 ? "#10b981" : "#ef4444" }}>
                     {(r.rate * 100).toFixed(4)}
                   </td>
-                  <td className="px-2 py-2 text-right font-mono text-text-primary">{r.apy >= 0 ? "+" : ""}{r.apy.toFixed(1)}%</td>
+                  <td style={{ padding: "8px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: "#fafafa" }}>{r.apy >= 0 ? "+" : ""}{r.apy.toFixed(1)}%</td>
                   {["binance", "bybit", "hyperliquid"].map((exch) => (
-                    <td key={exch} className="px-2 py-2 text-right font-mono text-text-tertiary">
+                    <td key={exch} style={{ padding: "8px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: "#888" }}>
                       {ref(exch) != null ? `${(ref(exch)! * 100).toFixed(4)}` : "—"}
                     </td>
                   ))}
-                  <td className="px-2 py-2 text-right">
+                  <td style={{ padding: "8px", textAlign: "right" }}>
                     {arcusPerps.some((p) => p.baseAsset === r.symbol) ? (
-                      <span className="text-xs text-[#10b981]">есть перп</span>
+                      <span style={{ fontSize: "10px", color: "#10b981" }}>есть перп</span>
                     ) : (
-                      <span className="text-xs text-text-muted">—</span>
+                      <span style={{ fontSize: "10px", color: "#666" }}>—</span>
                     )}
                   </td>
-                  <td className="px-2 py-2">
+                  <td style={{ padding: "8px" }}>
                     {r.spot ? (
-                      <span className="text-xs text-cyan-400">{r.spot.symbol}</span>
+                      <span style={{ fontSize: "10px", color: "#3b82f6" }}>{r.spot.symbol}</span>
                     ) : (
-                      <span className="text-xs text-text-muted">—</span>
+                      <span style={{ fontSize: "10px", color: "#666" }}>—</span>
                     )}
                   </td>
-                  <td className="px-2 py-2 text-right">
+                  <td style={{ padding: "8px", textAlign: "right" }}>
                     <button
                       onClick={() => void runCheck(r)}
                       disabled={r.perp == null || busy}
-                      className="text-xs text-cyan-400 hover:text-cyan-300 disabled:text-text-muted flex items-center gap-1 ml-auto transition-colors"
+                      style={{ fontSize: "11px", color: r.perp == null || busy ? "#666" : "#3b82f6", background: "transparent", border: "none", cursor: r.perp == null || busy ? "default" : "pointer", display: "flex", alignItems: "center", gap: "4px", marginLeft: "auto" }}
                     >
-                      проверить <ArrowUpRight className="w-3.5 h-3.5" />
+                      проверить <ArrowUpRight style={{ width: "12px", height: "12px" }} />
                     </button>
                   </td>
                 </tr>
@@ -263,16 +266,16 @@ export function Funding({ markets, setToast }: FundingProps) {
             })}
             {rates != null && visible.length === 0 && (
               <tr>
-                <td colSpan={9} className="px-4 py-8 text-center text-text-muted text-sm">
-                  Под текущий порог ({minApy}% APR) ничего не подходит — понизь порог или сними фильтр по спот-ноге.
+                <td colSpan={9} style={{ padding: "16px", textAlign: "center", color: "#666", fontSize: "12px" }}>
+                  Под текущий порог ({minApy}% APR) ничего не подходит.
                 </td>
               </tr>
             )}
             {rates == null &&
               [0, 1, 2, 3, 4].map((i) => (
-                <tr key={i} className="border-b border-border/60">
-                  <td colSpan={9} className="px-4 py-2">
-                    <div className="h-4 bg-surface-200 rounded animate-pulse" />
+                <tr key={i} style={{ borderBottom: "1px solid #1a1a1a" }}>
+                  <td colSpan={9} style={{ padding: "8px" }}>
+                    <div style={{ height: "16px", background: "#1a1a1a", borderRadius: "3px", animation: "wakeShimmer 1.6s ease-in-out infinite" }} />
                   </td>
                 </tr>
               ))}
@@ -281,119 +284,114 @@ export function Funding({ markets, setToast }: FundingProps) {
       </div>
 
       {selected && (
-        <div className="bg-surface-100 border border-border rounded-2xl p-4 mb-4">
-          <div className="flex items-center justify-between mb-3">
-            <span className="text-xs text-text-tertiary uppercase tracking-wide">
+        <div className="terminal-header" style={{ flexDirection: "column", alignItems: "flex-start" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "12px", width: "100%", marginBottom: "12px" }}>
+            <span style={{ fontSize: "10px", color: "#666", textTransform: "uppercase", letterSpacing: "0.05em" }}>
               {selected.symbol} · market_id {selected.marketId}
             </span>
-            <span className="text-xs text-text-muted">POST /funding-arb/check · /funding-arb/size</span>
+            <span style={{ fontSize: "10px", color: "#666", marginLeft: "auto" }}>POST /funding-arb/check · /funding-arb/size</span>
           </div>
 
           {check?.opportunity ? (
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: "12px", marginBottom: "16px" }}>
               <div>
-                <div className="text-text-tertiary text-xs mb-1">Нога перпа</div>
-                <div className="text-red-400 font-mono text-sm uppercase">{check.opportunity.perp_side}</div>
+                <div style={{ color: "#666", fontSize: "11px", marginBottom: "4px" }}>Нога перпа</div>
+                <div style={{ color: "#ef4444", fontFamily: "'JetBrains Mono', monospace", fontSize: "12px", textTransform: "uppercase" }}>{check.opportunity.perp_side}</div>
               </div>
               <div>
-                <div className="text-text-tertiary text-xs mb-1">Нога спота</div>
-                <div className="text-emerald-400 font-mono text-sm">{check.opportunity.spot_needed ? "buy" : "не нужна"}</div>
+                <div style={{ color: "#666", fontSize: "11px", marginBottom: "4px" }}>Нога спота</div>
+                <div style={{ color: "#10b981", fontFamily: "'JetBrains Mono', monospace", fontSize: "12px" }}>{check.opportunity.spot_needed ? "buy" : "не нужна"}</div>
               </div>
               <div>
-                <div className="text-text-tertiary text-xs mb-1">APR простая</div>
-                <div className="text-text-primary font-mono text-sm">{(check.opportunity.annualized_yield * 100).toFixed(1)}%</div>
+                <div style={{ color: "#666", fontSize: "11px", marginBottom: "4px" }}>APR простая</div>
+                <div style={{ color: "#fafafa", fontFamily: "'JetBrains Mono', monospace", fontSize: "12px" }}>{(check.opportunity.annualized_yield * 100).toFixed(1)}%</div>
               </div>
               <div>
-                <div className="text-text-tertiary text-xs mb-1">Ставка за час</div>
-                <div className="text-text-primary font-mono text-sm">{(check.opportunity.hourly_rate * 100).toFixed(4)}%</div>
+                <div style={{ color: "#666", fontSize: "11px", marginBottom: "4px" }}>Ставка за час</div>
+                <div style={{ color: "#fafafa", fontFamily: "'JetBrains Mono', monospace", fontSize: "12px" }}>{(check.opportunity.hourly_rate * 100).toFixed(4)}%</div>
               </div>
             </div>
           ) : (
             !busy && (
-              <p className="text-text-tertiary text-sm mb-4">
+              <p style={{ color: "#888", fontSize: "12px", marginBottom: "16px" }}>
                 {selected.rate < 0
-                  ? `Отрицательный funding: платят шорты, а лонгам. Симметричная нога требовала бы займа базового актива, а его на Lighter нет — бэкенд не притворяется, что он есть.`
-                  : `APR ${(Math.abs(selected.apy)).toFixed(1)}% ниже порога ${minApy}% — связка двух ног не окупает операционную сложность.`}
+                  ? `Отрицательный funding: платят шорты, а лонгам. Симметричная нога требовала бы займа базового актива.`
+                  : `APR ${(Math.abs(selected.apy)).toFixed(1)}% ниже порога ${minApy}%.`}
               </p>
             )
           )}
 
-          <div className="border-t border-border pt-3">
-            <div className="flex flex-wrap items-end gap-3">
+          <div style={{ borderTop: "1px solid #1e1e1e", paddingTop: "12px", width: "100%" }}>
+            <div style={{ display: "flex", flexWrap: "wrap", alignItems: "flex-end", gap: "12px" }}>
               <div>
-                <label className="text-xs text-text-secondary mb-1 block">Капитал на обе ноги, USD</label>
-                <div className="flex items-center bg-surface-50 border border-border-hover rounded-xl px-3 py-2">
-                  <span className="text-text-tertiary mr-1">$</span>
+                <label style={{ fontSize: "11px", color: "#ccc", marginBottom: "4px", display: "block" }}>Капитал на обе ноги, USD</label>
+                <div style={{ display: "flex", alignItems: "center", background: "#0a0a0a", border: "1px solid #1e1e1e", borderRadius: "4px", padding: "8px 12px" }}>
+                  <span style={{ color: "#666", marginRight: "4px" }}>$</span>
                   <input
                     type="number"
                     value={capital}
                     onChange={(e) => setCapital(Number(e.target.value))}
-                    className="bg-transparent text-text-primary font-mono outline-none w-28"
+                    style={{ background: "transparent", color: "#fafafa", fontFamily: "'JetBrains Mono', monospace", border: "none", outline: "none", width: "100px" }}
                   />
                 </div>
               </div>
               <button
                 onClick={() => void runSizing(selected)}
                 disabled={busy || !selected.spot}
-                className="bg-cyan-500 hover:bg-cyan-400 disabled:opacity-40 disabled:hover:bg-cyan-500 text-surface-50 text-sm font-semibold px-4 py-2 rounded-xl transition-colors"
+                style={{ background: busy || !selected.spot ? "#333" : "#3b82f6", color: "#fafafa", fontSize: "12px", fontWeight: 600, padding: "8px 16px", border: "none", borderRadius: "4px", cursor: busy || !selected.spot ? "default" : "pointer" }}
               >
                 {busy ? "Считаю…" : "Разложить по ногам"}
               </button>
-              {!selected.spot && <span className="text-xs text-amber-400">нет спот-двойника — дельта-нейтральность построить нечем</span>}
+              {!selected.spot && <span style={{ fontSize: "11px", color: "#fbbf24" }}>нет спот-двойника</span>}
             </div>
 
             {sizing?.position && (
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-4">
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: "12px", marginTop: "16px" }}>
                 <div>
-                  <div className="text-text-tertiary text-xs mb-1">Перп, notional</div>
-                  <div className="text-text-primary font-mono text-sm">${fmt(sizing.position.perp_notional_usd, 2)}</div>
+                  <div style={{ color: "#666", fontSize: "11px", marginBottom: "4px" }}>Перп, notional</div>
+                  <div style={{ color: "#fafafa", fontFamily: "'JetBrains Mono', monospace", fontSize: "12px" }}>${fmt(sizing.position.perp_notional_usd, 2)}</div>
                 </div>
                 <div>
-                  <div className="text-text-tertiary text-xs mb-1">Спот, notional</div>
-                  <div className="text-text-primary font-mono text-sm">${fmt(sizing.position.spot_notional_usd, 2)}</div>
+                  <div style={{ color: "#666", fontSize: "11px", marginBottom: "4px" }}>Спот, notional</div>
+                  <div style={{ color: "#fafafa", fontFamily: "'JetBrains Mono', monospace", fontSize: "12px" }}>${fmt(sizing.position.spot_notional_usd, 2)}</div>
                 </div>
                 <div>
-                  <div className="text-text-tertiary text-xs mb-1">Перп, базовая</div>
-                  <div className="text-text-primary font-mono text-sm">{sizing.position.perp_base_amount}</div>
+                  <div style={{ color: "#666", fontSize: "11px", marginBottom: "4px" }}>Перп, базовая</div>
+                  <div style={{ color: "#fafafa", fontFamily: "'JetBrains Mono', monospace", fontSize: "12px" }}>{sizing.position.perp_base_amount}</div>
                 </div>
                 <div>
-                  <div className="text-text-tertiary text-xs mb-1">Спот, базовая</div>
-                  <div className="text-text-primary font-mono text-sm">{sizing.position.spot_base_amount}</div>
+                  <div style={{ color: "#666", fontSize: "11px", marginBottom: "4px" }}>Спот, базовая</div>
+                  <div style={{ color: "#fafafa", fontFamily: "'JetBrains Mono', monospace", fontSize: "12px" }}>{sizing.position.spot_base_amount}</div>
                 </div>
-                <div className="col-span-2 md:col-span-4 text-xs text-text-muted">
+                <div style={{ gridColumn: "1 / -1", fontSize: "11px", color: "#666" }}>
                   Округление вниз по supported_size_decimals обеих ног, цена — последняя 1h-свеча: ${fmt(sizing.price ?? 0, 4)}
                 </div>
               </div>
             )}
             {sizing && !sizing.position && (
-              <p className="text-xs text-amber-400 mt-3">{sizing.reason}</p>
+              <p style={{ fontSize: "11px", color: "#fbbf24", marginTop: "12px" }}>{sizing.reason}</p>
             )}
           </div>
         </div>
       )}
 
-      <div className="bg-surface-100 border border-border rounded-2xl p-4">
-        <div className="text-xs text-text-tertiary uppercase tracking-wide mb-3">Откуда цифры</div>
-        <div className="space-y-2 text-sm text-text-secondary">
-          <p>
-            <span className="text-text-primary">Ставки</span> — GET /api/v1/funding-rates: строки {`{market_id, exchange, symbol, rate}`}
-            для binance, bybit, hyperliquid и lighter по одному market_id. Колонки площадок рядом с Lighter — это тот же market_id,
-            так что сравнивать ставки корректно.
+      <div className="terminal-header" style={{ flexDirection: "column", alignItems: "flex-start" }}>
+        <div style={{ fontSize: "10px", color: "#666", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "12px" }}>Откуда цифры</div>
+        <div style={{ display: "flex", flexDirection: "column", gap: "8px", fontSize: "12px", color: "#ccc" }}>
+          <p style={{ margin: 0 }}>
+            <span style={{ color: "#fafafa" }}>Ставки</span> — GET /api/v1/funding-rates: строки {`{market_id, exchange, symbol, rate}`} для binance, bybit, hyperliquid и lighter по одному market_id.
           </p>
-          <p>
-            <span className="text-text-primary">APR</span> — ставка × 24 × 365. Эпоха funding у Lighter — 1 час, а не 8, как у
-            большей части бирж; перепутать это значит занижать доходность в восемь раз (считает backend/funding_arb.py).
+          <p style={{ margin: 0 }}>
+            <span style={{ color: "#fafafa" }}>APR</span> — ставка × 24 × 365. Эпоха funding у Lighter — 1 час, а не 8, как у большей части бирж.
           </p>
-          <p>
-            <span className="text-text-primary">Размер ног</span> — минимальные base-суммы и decimals берутся из /orderBooks по
-            конкретной паре, а не из головы: capital/2 на ногу, округление вниз, и если на минималки обеих ног не хватает —
-            бэкенд отвечает причиной, а не красивым нулём.
+          <p style={{ margin: 0 }}>
+            <span style={{ color: "#fafafa" }}>Размер ног</span> — минимальные base-суммы и decimals берутся из /orderBooks, capital/2 на ногу, округление вниз.
           </p>
-          <p>
-            <span className="text-text-primary">Что это не даёт</span> ни гарантии, что ставка продержится час, ни защиты от
-            деpeg спота, ни ликвидности в нужный момент. Funding меняется — поэтому данные обновляются раз в минуту.
+          <p style={{ margin: 0 }}>
+            <span style={{ color: "#fafafa" }}>Что это не даёт</span> ни гарантии, что ставка продержится час, ни защиты от деpeg спота. Funding меняется — данные обновляются раз в минуту.
           </p>
         </div>
+      </div>
       </div>
     </div>
   );

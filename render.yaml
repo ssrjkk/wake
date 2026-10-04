@@ -1,0 +1,38 @@
+services:
+  - type: web
+    name: wake-backend
+    runtime: python
+    buildCommand: cd backend && pip install -r ../requirements.txt
+    startCommand: cd backend && uvicorn app:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: WAKE_ENV
+        value: production
+      - key: WAKE_DRY_RUN
+        value: "true"
+      - key: WAKE_LIGHTER_NETWORK
+        value: mainnet
+      - key: WAKE_DATABASE_URL
+        sync: false
+      - key: WAKE_REDIS_URL
+        sync: false
+      - key: WAKE_CORS_ORIGINS
+        value: https://wake-7k6.pages.dev
+      - key: PORT
+        value: 10000
+
+  - type: pserv
+    name: wake-postgres
+    runtime: docker
+    dockerfilePath: ./Dockerfile.postgres
+    envVars:
+      - key: POSTGRES_USER
+        value: wake
+      - key: POSTGRES_PASSWORD
+        sync: false
+      - key: POSTGRES_DB
+        value: wake
+
+  - type: pserv
+    name: wake-redis
+    runtime: docker
+    dockerfilePath: ./Dockerfile.redis

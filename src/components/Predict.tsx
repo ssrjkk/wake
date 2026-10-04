@@ -13,7 +13,6 @@ import {
   type PredictStatus,
 } from "../lib/predict";
 import { fmtUsdCompact, usd } from "./utils";
-import { Skeleton } from "./ui";
 import { errorText } from "../lib/backend";
 
 interface PredictProps {
@@ -192,94 +191,98 @@ export function Predict({ followerId, setToast, onConnect }: PredictProps) {
   }
 
   return (
-    <div>
-      <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
-        <div>
-          <h2 className="text-text-primary font-semibold">Predict</h2>
-          <p className="text-text-tertiary text-sm mt-0.5 max-w-2xl">
-            Бинарные рынки на LMSR-пуле. Ценовые закрываются автоматически по mark-цене Lighter после дедлайна,
-            событийные — куратором с указанием источника.
+    <div className="terminal-layout" style={{ gridTemplateColumns: "1fr", height: "auto" }}>
+      <div className="terminal-main">
+        <div className="terminal-header" style={{ flexDirection: "column", alignItems: "flex-start" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "12px", width: "100%" }}>
+            <h2 style={{ fontSize: "16px", fontWeight: 600, color: "#fafafa", margin: 0 }}>Predict</h2>
+            <button
+              onClick={() => setNonce((n) => n + 1)}
+              style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: "6px", fontSize: "11px", color: "#888", background: "transparent", border: "1px solid #2a2a2a", borderRadius: "4px", padding: "6px 10px", cursor: "pointer" }}
+            >
+              <RefreshCw style={{ width: "12px", height: "12px" }} /> Обновить
+            </button>
+          </div>
+          <p style={{ fontSize: "12px", color: "#666", margin: "8px 0 0 0", maxWidth: "800px" }}>
+            Бинарные рынки на LMSR-пуле. Ценовые закрываются автоматически по mark-цене Lighter, событийные — куратором.
           </p>
         </div>
-        <button
-          onClick={() => setNonce((n) => n + 1)}
-          className="flex items-center gap-1.5 text-xs text-text-secondary hover:text-text-primary glass-hover rounded-xl px-3 py-2"
-        >
-          <RefreshCw className="w-3.5 h-3.5" />
-          Обновить
-        </button>
-      </div>
 
-      <div className="flex flex-wrap items-center gap-2 mb-4">
+      <div className="terminal-header" style={{ gap: "8px", flexWrap: "wrap" }}>
         {FILTERS.map((f) => (
           <button
             key={f.id}
             onClick={() => setStatus(f.id)}
-            className={`px-3 py-1.5 rounded-xl text-xs font-medium transition-colors ${
-              status === f.id ? "glass text-info" : "text-text-secondary hover:text-text-primary border border-border"
-            }`}
+            style={{
+              padding: "6px 12px",
+              borderRadius: "4px",
+              fontSize: "11px",
+              fontWeight: 500,
+              background: status === f.id ? "#1a1a1a" : "transparent",
+              color: status === f.id ? "#3b82f6" : "#ccc",
+              border: status === f.id ? "1px solid #3b82f6" : "1px solid #2a2a2a",
+              cursor: "pointer",
+              transition: "all 0.15s"
+            }}
           >
             {f.label}
           </button>
         ))}
-        <span className="text-xs text-text-muted ml-auto">
+        <span style={{ fontSize: "11px", color: "#666", marginLeft: "auto" }}>
           {positions ? `позиций: ${positions.length}` : followerId ? "позиции грузятся…" : "позиции — после входа"}
-          {claimable.length > 0 && <span className="text-success"> · доступно к выплате {claimable.length}</span>}
+          {claimable.length > 0 && <span style={{ color: "#10b981" }}> · доступно к выплате {claimable.length}</span>}
         </span>
       </div>
 
       {positions && positions.length > 0 && (
-        <div className="mb-5 bg-surface-100 border border-border rounded-2xl overflow-hidden">
-          <div className="px-4 py-2.5 border-b border-border text-xs uppercase tracking-wide text-text-tertiary">
+        <div style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", overflow: "hidden" }}>
+          <div style={{ padding: "10px 16px", borderBottom: "1px solid #1e1e1e", fontSize: "10px", textTransform: "uppercase", letterSpacing: "0.05em", color: "#666" }}>
             Мои позиции
           </div>
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead className="text-text-tertiary text-xs uppercase tracking-wide">
-                <tr>
-                  <th className="text-left font-medium px-4 py-2">Рынок</th>
-                  <th className="text-right font-medium px-3 py-2">Доля</th>
-                  <th className="text-right font-medium px-3 py-2">shares</th>
-                  <th className="text-right font-medium px-3 py-2">Средняя</th>
-                  <th className="text-right font-medium px-3 py-2">Стоит сейчас</th>
-                  <th className="text-right font-medium px-3 py-2">P&amp;L</th>
-                  <th className="text-right font-medium px-4 py-2"> </th>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", fontSize: "12px", borderCollapse: "collapse" }}>
+              <thead>
+                <tr style={{ textAlign: "left", fontSize: "10px", textTransform: "uppercase", letterSpacing: "0.05em", color: "#666" }}>
+                  <th style={{ padding: "8px 16px", fontWeight: 500 }}>Рынок</th>
+                  <th style={{ padding: "8px 12px", fontWeight: 500, textAlign: "right" }}>Доля</th>
+                  <th style={{ padding: "8px 12px", fontWeight: 500, textAlign: "right" }}>shares</th>
+                  <th style={{ padding: "8px 12px", fontWeight: 500, textAlign: "right" }}>Средняя</th>
+                  <th style={{ padding: "8px 12px", fontWeight: 500, textAlign: "right" }}>Стоит сейчас</th>
+                  <th style={{ padding: "8px 12px", fontWeight: 500, textAlign: "right" }}>P&L</th>
+                  <th style={{ padding: "8px 16px", fontWeight: 500, textAlign: "right" }}> </th>
                 </tr>
               </thead>
               <tbody>
                 {positions.map((p) => {
-                  // Для резолвленного рынка берём номинал победившей доли ($1), а не
-                  // claimable_usd: после «Забрать» бэкенд обнуляет claimable, и P&L
-                  // иначе превратился бы в убыток ровно у того, кто деньги получил.
                   const pnl =
                     p.market_status === "resolved"
                       ? predictOutcomeWorth(p.market_outcome, p.outcome) * p.shares - p.net_cost_usd
                       : p.mark_value_usd - p.net_cost_usd;
                   return (
-                    <tr key={`${p.market_id}:${p.outcome}`} className="border-t border-border/70">
-                      <td className="px-4 py-2.5 text-text-primary">
-                        <div className="max-w-[22rem] truncate">{p.question}</div>
-                        <div className="text-xs text-text-muted">
+                    <tr key={`${p.market_id}:${p.outcome}`} style={{ borderTop: "1px solid #1a1a1a" }}>
+                      <td style={{ padding: "10px 16px", color: "#fafafa" }}>
+                        <div style={{ maxWidth: "350px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.question}</div>
+                        <div style={{ fontSize: "10px", color: "#666", marginTop: "2px" }}>
                           {p.outcome.toUpperCase()} ·{" "}
                           {p.market_status === "open" ? predictTimeLeft(p.resolve_at, now) : `исход ${p.market_outcome ?? "не указан"}`}
                           {p.claimed && " · забрано"}
                         </div>
                       </td>
-                      <td className="px-3 py-2.5 text-right font-mono text-text-secondary">{cents(p.mark_price)}</td>
-                      <td className="px-3 py-2.5 text-right font-mono text-text-secondary">{p.shares}</td>
-                      <td className="px-3 py-2.5 text-right font-mono text-text-secondary">{money(p.avg_entry_usd)}</td>
-                      <td className="px-3 py-2.5 text-right font-mono text-text-secondary">
+                      <td style={{ padding: "10px 12px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: "#ccc" }}>{cents(p.mark_price)}</td>
+                      <td style={{ padding: "10px 12px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: "#ccc" }}>{p.shares}</td>
+                      <td style={{ padding: "10px 12px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: "#ccc" }}>{money(p.avg_entry_usd)}</td>
+                      <td style={{ padding: "10px 12px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: "#ccc" }}>
                         {p.market_status === "resolved" ? money(p.claimable_usd) : money(p.mark_value_usd)}
                       </td>
-                      <td className={`px-3 py-2.5 text-right font-mono ${pnl >= 0 ? "text-success" : "text-danger"}`}>
+                      <td style={{ padding: "10px 12px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: pnl >= 0 ? "#10b981" : "#ef4444" }}>
                         {pnl >= 0 ? "+" : "−"}
                         {money(Math.abs(pnl))}
                       </td>
-                      <td className="px-4 py-2.5 text-right">
+                      <td style={{ padding: "10px 16px", textAlign: "right" }}>
                         {p.claimable_usd > 0 && !p.claimed && (
                           <button
                             onClick={() => void claim(p)}
-                            className="bg-success hover:bg-success text-surface text-xs font-semibold px-3 py-1.5 rounded-lg transition-colors"
+                            style={{ background: "#10b981", color: "#0a0a0a", fontSize: "11px", fontWeight: 600, padding: "6px 12px", border: "none", borderRadius: "4px", cursor: "pointer" }}
                           >
                             Забрать {money(p.claimable_usd)}
                           </button>
@@ -295,111 +298,110 @@ export function Predict({ followerId, setToast, onConnect }: PredictProps) {
       )}
 
       {marketsError && (
-        <div className="mb-4 bg-rose-950/40 border border-rose-900 rounded-2xl px-4 py-3 flex items-start gap-3">
-          <AlertTriangle className="w-4 h-4 text-danger mt-0.5 shrink-0" />
-          <div className="text-sm">
-            <p className="text-rose-200">Список рынков не загрузился</p>
-            <p className="text-danger/80 text-xs font-mono mt-0.5">{marketsError}</p>
+        <div style={{ background: "#1a0a0a", border: "1px solid #5c1a1a", borderRadius: "6px", padding: "12px 16px", display: "flex", alignItems: "flex-start", gap: "10px" }}>
+          <AlertTriangle style={{ width: "14px", height: "14px", color: "#ef4444", marginTop: "2px", flexShrink: 0 }} />
+          <div>
+            <p style={{ fontSize: "12px", color: "#fca5a5", margin: 0 }}>Список рынков не загрузился</p>
+            <p style={{ fontSize: "10px", color: "#ef4444", fontFamily: "'JetBrains Mono', monospace", marginTop: "4px" }}>{marketsError}</p>
           </div>
         </div>
       )}
 
       {!markets && !marketsError && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: "8px" }}>
           {[0, 1, 2, 3].map((i) => (
-            <div key={i} className="bg-surface-100 border border-border rounded-2xl p-4">
-              <Skeleton className="h-3 w-24 mb-3" />
-              <Skeleton className="h-4 w-full mb-2" />
-              <Skeleton className="h-2 w-full mb-4" />
-              <Skeleton className="h-9 w-full" />
+            <div key={i} style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", padding: "16px" }}>
+              <div style={{ height: "10px", background: "#1a1a1a", borderRadius: "3px", width: "80px", marginBottom: "12px" }} />
+              <div style={{ height: "12px", background: "#1a1a1a", borderRadius: "3px", width: "100%", marginBottom: "8px" }} />
+              <div style={{ height: "6px", background: "#1a1a1a", borderRadius: "3px", width: "100%", marginBottom: "16px" }} />
+              <div style={{ height: "32px", background: "#1a1a1a", borderRadius: "3px", width: "100%" }} />
             </div>
           ))}
         </div>
       )}
 
       {markets && markets.length === 0 && !marketsError && (
-        <div className="bg-surface-100 border border-border rounded-2xl py-16 flex flex-col items-center text-center px-6">
-          <p className="text-text-secondary text-sm mb-1">
+        <div style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", padding: "48px 24px", textAlign: "center" }}>
+          <p style={{ fontSize: "12px", color: "#ccc", margin: "0 0 4px 0" }}>
             {status === "open" ? "Открытых рынков нет" : status === "resolved" ? "Резолвленных рынков пока нет" : "Рынков нет"}
           </p>
-          <p className="text-text-muted text-xs">
-            Создать может только куратор: POST /predict/markets/price или /predict/markets/event с заголовком
-            X-Curator-Token.
+          <p style={{ fontSize: "10px", color: "#666", margin: 0 }}>
+            Создать может только куратор: POST /predict/markets/price или /predict/markets/event с заголовком X-Curator-Token.
           </p>
         </div>
       )}
 
       {markets && markets.length > 0 && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: "8px" }}>
           {markets.map((m) => {
             const yes = heldByKey.get(`${m.id}:yes`);
             const no = heldByKey.get(`${m.id}:no`);
             const resolved = m.status === "resolved";
             return (
-              <div key={m.id} className="bg-surface-100 border border-border rounded-2xl p-4 flex flex-col">
-                <div className="flex items-center justify-between mb-2 gap-2">
-                  <span className="text-xs text-text-tertiary uppercase tracking-wide">
+              <div key={m.id} style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", padding: "16px", display: "flex", flexDirection: "column" }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px", gap: "8px" }}>
+                  <span style={{ fontSize: "10px", color: "#666", textTransform: "uppercase", letterSpacing: "0.05em" }}>
                     {m.kind === "price" ? "Цена на Lighter" : "Событие"}
                   </span>
-                  <span className="text-xs text-text-muted">
+                  <span style={{ fontSize: "10px", color: "#666" }}>
                     {resolved ? "закрыт" : predictTimeLeft(m.resolve_at, now)}
                   </span>
                 </div>
-                <div className="text-text-primary text-sm font-medium mb-1">{m.question}</div>
-                {conditionOf(m) && <div className="text-xs text-text-tertiary font-mono mb-3">{conditionOf(m)}</div>}
+                <div style={{ fontSize: "12px", color: "#fafafa", fontWeight: 500, marginBottom: "4px" }}>{m.question}</div>
+                {conditionOf(m) && <div style={{ fontSize: "10px", color: "#666", fontFamily: "'JetBrains Mono', monospace", marginBottom: "12px" }}>{conditionOf(m)}</div>}
 
                 {resolved ? (
-                  <div className="bg-surface-50/60 border border-border rounded-xl px-3 py-2.5 mb-3 text-xs">
-                    <span className="text-text-tertiary">исход </span>
-                    <span className="text-text-primary font-semibold uppercase">{m.outcome ?? "не указан"}</span>
-                    <span className="text-text-muted"> · </span>
-                    <span className="text-text-tertiary">победившая доля — $1, проигравшая — $0</span>
-                    {m.resolved_by && <div className="text-text-muted mt-1 font-mono">закрыл: {m.resolved_by}</div>}
+                  <div style={{ background: "#0a0a0a", border: "1px solid #1e1e1e", borderRadius: "4px", padding: "10px 12px", fontSize: "11px", marginBottom: "12px" }}>
+                    <span style={{ color: "#666" }}>исход </span>
+                    <span style={{ color: "#fafafa", fontWeight: 600, textTransform: "uppercase" }}>{m.outcome ?? "не указан"}</span>
+                    <span style={{ color: "#666" }}> · </span>
+                    <span style={{ color: "#666" }}>победившая доля — $1, проигравшая — $0</span>
+                    {m.resolved_by && <div style={{ color: "#666", marginTop: "4px", fontFamily: "'JetBrains Mono', monospace" }}>закрыл: {m.resolved_by}</div>}
                     {m.evidence_url && (
                       <a
                         href={m.evidence_url}
                         target="_blank"
                         rel="noreferrer noopener"
-                        className="text-info hover:text-info inline-flex items-center gap-1 mt-1"
+                        style={{ color: "#3b82f6", display: "inline-flex", alignItems: "center", gap: "4px", marginTop: "4px", fontSize: "10px" }}
                       >
-                        Источник <ExternalLink className="w-3 h-3" />
+                        Источник <ExternalLink style={{ width: "10px", height: "10px" }} />
                       </a>
                     )}
                   </div>
                 ) : (
-                  <div className="flex items-center gap-3 mb-3">
-                    <div className="flex-1 h-2 bg-rose-950 rounded-full overflow-hidden">
-                      <div className="h-full bg-success" style={{ width: `${m.price_yes * 100}%` }} />
+                  <div style={{ display: "flex", alignItems: "center", gap: "10px", marginBottom: "12px" }}>
+                    <div style={{ flex: 1, height: "4px", background: "#1a1a1a", borderRadius: "2px", overflow: "hidden" }}>
+                      <div style={{ height: "100%", background: "#10b981", width: `${m.price_yes * 100}%` }} />
                     </div>
-                    <span className="text-xs font-mono text-text-secondary w-16 text-right">
+                    <span style={{ fontSize: "10px", fontFamily: "'JetBrains Mono', monospace", color: "#ccc", width: "56px", textAlign: "right" }}>
                       {(m.price_yes * 100).toFixed(0)}% YES
                     </span>
                   </div>
                 )}
 
-                <div className="flex gap-2 mt-auto">
+                <div style={{ display: "flex", gap: "6px", marginTop: "auto" }}>
                   <button
                     onClick={() => openTrade(m, "yes")}
                     disabled={resolved}
-                    className="flex-1 bg-success hover:bg-success disabled:bg-surface-200 disabled:text-text-muted text-surface text-sm font-semibold py-2 rounded-xl transition-colors"
+                    style={{ flex: 1, background: resolved ? "#1a1a1a" : "#10b981", color: resolved ? "#666" : "#0a0a0a", fontSize: "11px", fontWeight: 600, padding: "8px 0", border: "none", borderRadius: "4px", cursor: resolved ? "default" : "pointer" }}
                   >
                     {resolved ? "YES" : `Купить YES ${cents(m.price_yes)}`}
                   </button>
                   <button
                     onClick={() => openTrade(m, "no")}
                     disabled={resolved}
-                    className="flex-1 bg-danger hover:bg-danger disabled:bg-surface-200 disabled:text-text-muted text-surface text-sm font-semibold py-2 rounded-xl transition-colors"
+                    style={{ flex: 1, background: resolved ? "#1a1a1a" : "#ef4444", color: resolved ? "#666" : "#fff", fontSize: "11px", fontWeight: 600, padding: "8px 0", border: "none", borderRadius: "4px", cursor: resolved ? "default" : "pointer" }}
                   >
                     {resolved ? "NO" : `Купить NO ${cents(m.price_no)}`}
                   </button>
                 </div>
 
-                <div className="flex items-center justify-between gap-2 mt-3 text-xs text-text-muted">
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", marginTop: "10px", fontSize: "10px", color: "#666" }}>
                   <span>
                     объём {fmtUsdCompact(m.volume_usd)} · сделок {m.trade_count}
                   </span>
                   {(yes || no) && (
-                    <span className="text-text-secondary">
+                    <span style={{ color: "#ccc" }}>
                       держишь {yes ? `YES ${yes.shares}` : ""}
                       {yes && no ? " + " : ""}
                       {no ? `NO ${no.shares}` : ""}
@@ -412,65 +414,64 @@ export function Predict({ followerId, setToast, onConnect }: PredictProps) {
         </div>
       )}
 
-      <p className="text-text-muted text-xs mt-4">
+      <p style={{ fontSize: "10px", color: "#666", marginTop: "12px" }}>
         Объём и число сделок — сделки через Wake, а не глубина пула: прямого доступа к книге LMSR у сайта нет.
         Рынок с нулевым объёмом ещё никто не торговал, и это не значит, что он пустой.
       </p>
 
       {trade && (
         <div
-          className="fixed inset-0 flex items-center justify-center z-50 p-4"
-          style={{ backgroundColor: "rgba(0,0,0,0.6)" }}
+          style={{ position: "fixed", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50, padding: "16px", backgroundColor: "rgba(0,0,0,0.6)" }}
           onClick={() => setTrade(null)}
         >
           <div
-            className="w-full max-w-sm bg-surface-100 border border-border-hover rounded-2xl p-5"
+            style={{ width: "100%", maxWidth: "380px", background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", padding: "20px" }}
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-center justify-between mb-4 gap-3">
-              <h3 className="text-text-primary font-semibold text-sm">
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px", gap: "12px" }}>
+              <h3 style={{ fontSize: "13px", color: "#fafafa", fontWeight: 600, margin: 0 }}>
                 {sellMode ? "Продать" : "Купить"} {trade.outcome.toUpperCase()} — {trade.market.question}
               </h3>
-              <button onClick={() => setTrade(null)} className="text-text-tertiary hover:text-text-secondary shrink-0">
-                <X className="w-5 h-5" />
+              <button onClick={() => setTrade(null)} style={{ color: "#666", background: "none", border: "none", cursor: "pointer", padding: 0, flexShrink: 0 }}>
+                <X style={{ width: "16px", height: "16px" }} />
               </button>
             </div>
 
             {trade.held > 0 && (
-              <div className="flex gap-1.5 mb-3">
+              <div style={{ display: "flex", gap: "4px", marginBottom: "12px" }}>
                 <button
                   onClick={() => setSellMode(false)}
-                  className={`flex-1 text-xs py-1.5 rounded-lg transition-colors ${!sellMode ? "glass text-info" : "text-text-secondary border border-border"}`}
+                  style={{ flex: 1, fontSize: "11px", padding: "6px 0", borderRadius: "4px", background: !sellMode ? "#1a1a1a" : "transparent", color: !sellMode ? "#3b82f6" : "#ccc", border: !sellMode ? "1px solid #3b82f6" : "1px solid #2a2a2a", cursor: "pointer" }}
                 >
                   Покупка
                 </button>
                 <button
                   onClick={() => setSellMode(true)}
-                  className={`flex-1 text-xs py-1.5 rounded-lg transition-colors ${sellMode ? "glass text-info" : "text-text-secondary border border-border"}`}
+                  style={{ flex: 1, fontSize: "11px", padding: "6px 0", borderRadius: "4px", background: sellMode ? "#1a1a1a" : "transparent", color: sellMode ? "#3b82f6" : "#ccc", border: sellMode ? "1px solid #3b82f6" : "1px solid #2a2a2a", cursor: "pointer" }}
                 >
                   Продажа (держишь {trade.held})
                 </button>
               </div>
             )}
 
-            <label className="text-xs text-text-secondary mb-1 block">Количество shares</label>
+            <label style={{ fontSize: "11px", color: "#888", marginBottom: "4px", display: "block" }}>Количество shares</label>
             <input
               type="number"
               min={1}
               max={sellMode ? trade.held : undefined}
               value={shares}
               onChange={(e) => setShares(Math.max(0, Number(e.target.value)))}
-              className="bg-surface-50 border border-border rounded-xl px-3 py-2 mb-1 text-text-primary font-mono outline-none w-full"
+              style={{ background: "#0a0a0a", border: "1px solid #1e1e1e", borderRadius: "4px", padding: "8px 12px", marginBottom: "4px", color: "#fafafa", fontFamily: "'JetBrains Mono', monospace", fontSize: "12px", outline: "none", width: "100%", boxSizing: "border-box" }}
             />
             {sellMode && (
-              <p className="text-xs text-text-muted mb-2">Продать можно не больше {trade.held} shares.</p>
+              <p style={{ fontSize: "10px", color: "#666", marginBottom: "8px" }}>Продать можно не больше {trade.held} shares.</p>
             )}
 
-            <div className="flex justify-between text-xs text-text-tertiary mt-3 mb-1">
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11px", color: "#666", marginTop: "12px", marginBottom: "4px" }}>
               <span>{sellMode ? "Вернётся на счёт" : "Стоимость сейчас"}</span>
-              <span className="font-mono text-text-secondary">
+              <span style={{ fontFamily: "'JetBrains Mono', monospace", color: "#ccc" }}>
                 {previewError ? (
-                  <span className="text-danger">{previewError}</span>
+                  <span style={{ color: "#ef4444" }}>{previewError}</span>
                 ) : preview == null ? (
                   "…"
                 ) : (
@@ -478,16 +479,16 @@ export function Predict({ followerId, setToast, onConnect }: PredictProps) {
                 )}
               </span>
             </div>
-            <div className="flex justify-between text-xs text-text-tertiary mb-4">
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11px", color: "#666", marginBottom: "16px" }}>
               {sellMode ? (
                 <>
                   <span>Останется shares</span>
-                  <span className="font-mono text-text-secondary">{Math.max(0, trade.held - shares)}</span>
+                  <span style={{ fontFamily: "'JetBrains Mono', monospace", color: "#ccc" }}>{Math.max(0, trade.held - shares)}</span>
                 </>
               ) : (
                 <>
                   <span>Номинал при победе</span>
-                  <span className="font-mono text-text-secondary">{money(shares)}</span>
+                  <span style={{ fontFamily: "'JetBrains Mono', monospace", color: "#ccc" }}>{money(shares)}</span>
                 </>
               )}
             </div>
@@ -495,7 +496,7 @@ export function Predict({ followerId, setToast, onConnect }: PredictProps) {
             <button
               onClick={() => void confirmTrade()}
               disabled={sending || preview == null || shares <= 0 || (sellMode && shares > trade.held)}
-              className="w-full bg-info hover:bg-info disabled:bg-surface-200 disabled:text-text-muted text-surface font-semibold rounded-xl py-3 transition-colors"
+              style={{ width: "100%", background: sending || preview == null || shares <= 0 || (sellMode && shares > trade.held) ? "#1a1a1a" : "#3b82f6", color: sending || preview == null || shares <= 0 || (sellMode && shares > trade.held) ? "#666" : "#fff", fontWeight: 600, borderRadius: "4px", padding: "10px 0", border: "none", cursor: "pointer", fontSize: "12px" }}
             >
               {sending
                 ? "Отправка…"
@@ -505,7 +506,7 @@ export function Predict({ followerId, setToast, onConnect }: PredictProps) {
                     ? `Продать ${shares}`
                     : `Купить ${shares} за ${money(preview)}`}
             </button>
-            <p className="text-xs text-text-muted mt-3 text-center">
+            <p style={{ fontSize: "10px", color: "#666", marginTop: "12px", textAlign: "center", lineHeight: 1.5 }}>
               Номинал — это не прибыль: share победившего исхода после резолюции стоит $1, проигравшего — $0,
               а вход по LMSR-кривой обычно дороже {cents(0.5)} и двигается против тебя с каждой покупкой.
               Верхнюю границу продажи и запрет торговать по закрытому рынку держит бэкенд, а не эта форма.
@@ -515,24 +516,25 @@ export function Predict({ followerId, setToast, onConnect }: PredictProps) {
       )}
 
       {!followerId && (
-        <div className="mt-5 bg-surface-100 border border-border rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-start gap-2.5">
-            <CheckCircle2 className="w-4 h-4 text-text-muted mt-0.5" />
+        <div style={{ marginTop: "16px", background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", padding: "16px", display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: "12px" }}>
+          <div style={{ display: "flex", alignItems: "flex-start", gap: "10px" }}>
+            <CheckCircle2 style={{ width: "14px", height: "14px", color: "#666", marginTop: "2px" }} />
             <div>
-              <p className="text-text-secondary text-sm">Рынки видны без входа, а позиция и выплаты — нет.</p>
-              <p className="text-text-muted text-xs mt-0.5">
+              <p style={{ fontSize: "12px", color: "#ccc", margin: 0 }}>Рынки видны без входа, а позиция и выплаты — нет.</p>
+              <p style={{ fontSize: "10px", color: "#666", marginTop: "4px" }}>
                 Вход через Telegram или кошелёк: трейды пишутся на твой follower_id, выигрыш начисляется на него же.
               </p>
             </div>
           </div>
           <button
             onClick={onConnect}
-            className="bg-info hover:bg-info text-surface text-sm font-semibold px-4 py-2 rounded-xl transition-colors"
+            style={{ background: "#3b82f6", color: "#fff", fontSize: "12px", fontWeight: 600, padding: "8px 16px", border: "none", borderRadius: "4px", cursor: "pointer" }}
           >
             Войти
           </button>
         </div>
       )}
+      </div>
     </div>
   );
 }
