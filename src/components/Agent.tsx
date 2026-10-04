@@ -36,12 +36,12 @@ const RESOLUTIONS: Resolution[] = ["5m", "15m", "1h", "4h", "1d"];
 // но в бэкенд уходит больше точек, чтобы память LLM-ветки видела контекст.
 const POINTS_SENT = 40;
 
-const EXECUTION_STYLE: Record<string, string> = {
-  dry_run: "bg-sky-950 text-sky-400 border border-sky-900",
-  sent: "bg-emerald-950 text-emerald-400 border border-emerald-900",
-  blocked_by_risk_limit: "bg-amber-950 text-amber-400 border border-amber-900",
-  skipped: "bg-surface-200 text-text-secondary",
-  failed: "bg-red-950 text-red-400 border border-red-900",
+const EXECUTION_STYLE: Record<string, { bg: string; color: string; border?: string }> = {
+  dry_run: { bg: "#0a1a2a", color: "#3b82f6", border: "#1a3050" },
+  sent: { bg: "#0a2a1a", color: "#10b981", border: "#1a3d2a" },
+  blocked_by_risk_limit: { bg: "#2a2000", color: "#fbbf24", border: "#3d3000" },
+  skipped: { bg: "#1a1a1a", color: "#a0a0a0" },
+  failed: { bg: "#2a0a0a", color: "#ef4444", border: "#3d1a1a" },
 };
 
 export function Agent({ followerId, subscription, currentMarket, setToast, startTrial }: AgentProps) {
@@ -225,7 +225,7 @@ export function Agent({ followerId, subscription, currentMarket, setToast, start
                   </span>
                   {lastDecision.size_usd > 0 && <span style={{ fontSize: "12px", color: "#666", fontFamily: "JetBrains Mono, monospace" }}>{usd(lastDecision.size_usd, 0)}</span>}
                   {lastDecision.execution && (
-                    <span style={{ fontSize: "11px", padding: "2px 8px", borderRadius: "3px", background: EXECUTION_STYLE[lastDecision.execution.status]?.split(" ")[0] ?? "#1a1a1a", color: EXECUTION_STYLE[lastDecision.execution.status]?.split(" ")[1] ?? "#a0a0a0" }}>
+                    <span style={{ fontSize: "11px", padding: "2px 8px", borderRadius: "3px", background: EXECUTION_STYLE[lastDecision.execution.status]?.bg ?? "#1a1a1a", color: EXECUTION_STYLE[lastDecision.execution.status]?.color ?? "#a0a0a0", border: EXECUTION_STYLE[lastDecision.execution.status]?.border ? `1px solid ${EXECUTION_STYLE[lastDecision.execution.status].border}` : "none" }}>
                       {lastDecision.execution.status}
                     </span>
                   )}

@@ -44,7 +44,7 @@
 }
 
 @layer components {
-  /* Layout */
+  /* Layout — used by every tab component */
   .terminal-layout {
     display: grid;
     grid-template-columns: 1fr 340px;
@@ -61,91 +61,14 @@
     overflow: hidden;
   }
 
-  .terminal-sidebar {
-    display: grid;
-    grid-template-rows: auto 1fr;
-    gap: 1px;
-    background: var(--border-subtle);
-    overflow: hidden;
+  @media (max-width: 1024px) {
+    .terminal-layout {
+      grid-template-columns: 1fr;
+      height: auto;
+    }
   }
 
-  /* Panels */
-  .panel {
-    background: var(--bg-secondary);
-    padding: 12px;
-  }
-
-  .panel-header {
-    background: var(--bg-secondary);
-    padding: 10px 12px;
-    border-bottom: 1px solid var(--border-subtle);
-  }
-
-  /* Asset header */
-  .asset-header {
-    display: flex;
-    align-items: center;
-    gap: 24px;
-    padding: 12px 16px;
-    background: var(--bg-secondary);
-  }
-
-  .asset-info {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-  }
-
-  .asset-symbol {
-    font-size: 16px;
-    font-weight: 600;
-    color: var(--text-primary);
-  }
-
-  .asset-type {
-    font-size: 10px;
-    font-weight: 500;
-    color: var(--text-tertiary);
-    text-transform: uppercase;
-    padding: 2px 6px;
-    background: var(--bg-tertiary);
-    border-radius: 3px;
-  }
-
-  .price-display {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 24px;
-    font-weight: 600;
-    color: var(--text-primary);
-    letter-spacing: -0.02em;
-  }
-
-  .price-change {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 13px;
-    font-weight: 500;
-  }
-
-  .price-change.up {
-    color: var(--green);
-  }
-
-  .price-change.down {
-    color: var(--red);
-  }
-
-  .stats-row {
-    display: flex;
-    gap: 24px;
-    margin-left: auto;
-  }
-
-  .stat {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
-
+  /* Stat labels/values — used in App.tsx copy modal */
   .stat-label {
     font-size: 10px;
     font-weight: 500;
@@ -161,136 +84,7 @@
     color: var(--text-secondary);
   }
 
-  /* Chart */
-  .chart-container {
-    background: var(--bg-secondary);
-    padding: 16px;
-    min-height: 300px;
-  }
-
-  /* Trades */
-  .trades-section {
-    background: var(--bg-secondary);
-    max-height: 240px;
-    display: flex;
-    flex-direction: column;
-  }
-
-  .trades-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 8px 12px;
-    border-bottom: 1px solid var(--border-subtle);
-  }
-
-  .trades-title {
-    font-size: 11px;
-    font-weight: 600;
-    color: var(--text-tertiary);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-  }
-
-  .trades-list {
-    flex: 1;
-    overflow-y: auto;
-    padding: 4px 0;
-  }
-
-  .trade-row {
-    display: grid;
-    grid-template-columns: 80px 1fr 80px;
-    gap: 8px;
-    padding: 4px 12px;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 12px;
-  }
-
-  .trade-price {
-    font-weight: 500;
-  }
-
-  .trade-price.buy {
-    color: var(--green);
-  }
-
-  .trade-price.sell {
-    color: var(--red);
-  }
-
-  .trade-size {
-    color: var(--text-tertiary);
-    text-align: right;
-  }
-
-  .trade-time {
-    color: var(--text-muted);
-    text-align: right;
-  }
-
-  /* Order form */
-  .order-form {
-    background: var(--bg-secondary);
-    padding: 16px;
-  }
-
-  .order-tabs {
-    display: flex;
-    gap: 4px;
-    margin-bottom: 16px;
-    padding: 3px;
-    background: var(--bg-primary);
-    border-radius: 6px;
-  }
-
-  .order-tab {
-    flex: 1;
-    padding: 8px;
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--text-tertiary);
-    background: transparent;
-    border: none;
-    border-radius: 4px;
-    cursor: pointer;
-    transition: all 0.15s;
-  }
-
-  .order-tab:hover {
-    color: var(--text-secondary);
-  }
-
-  .order-tab.active.buy {
-    background: var(--green);
-    color: var(--bg-primary);
-  }
-
-  .order-tab.active.sell {
-    background: var(--red);
-    color: var(--bg-primary);
-  }
-
-  .order-fields {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-  }
-
-  .field {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-
-  .field label {
-    font-size: 11px;
-    font-weight: 500;
-    color: var(--text-tertiary);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-  }
-
+  /* Input — used in App.tsx market picker and copy modal */
   .input-mono {
     font-family: 'JetBrains Mono', monospace;
     font-size: 14px;
@@ -307,193 +101,7 @@
     border-color: var(--blue);
   }
 
-  .leverage-control {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-  }
-
-  .leverage-slider {
-    flex: 1;
-    accent-color: var(--blue);
-  }
-
-  .leverage-value {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 14px;
-    font-weight: 600;
-    color: var(--blue);
-    min-width: 40px;
-    text-align: right;
-  }
-
-  .order-info {
-    display: flex;
-    justify-content: space-between;
-    padding: 8px 12px;
-    background: var(--bg-primary);
-    border-radius: 4px;
-    font-size: 12px;
-  }
-
-  .order-info span:first-child {
-    color: var(--text-tertiary);
-  }
-
-  .order-info span:last-child {
-    font-family: 'JetBrains Mono', monospace;
-    font-weight: 500;
-    color: var(--text-secondary);
-  }
-
-  .btn-action {
-    padding: 12px;
-    font-size: 14px;
-    font-weight: 600;
-    border: none;
-    border-radius: 6px;
-    cursor: pointer;
-    transition: all 0.15s;
-  }
-
-  .btn-action.buy {
-    background: var(--green);
-    color: var(--bg-primary);
-  }
-
-  .btn-action.buy:hover:not(:disabled) {
-    background: #00b894;
-  }
-
-  .btn-action.sell {
-    background: var(--red);
-    color: var(--bg-primary);
-  }
-
-  .btn-action.sell:hover:not(:disabled) {
-    background: #e8324d;
-  }
-
-  .btn-action:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
-
-  .order-hint {
-    font-size: 11px;
-    color: var(--text-muted);
-    line-height: 1.5;
-    padding: 8px;
-    background: var(--bg-primary);
-    border-radius: 4px;
-  }
-
-  /* Markets panel */
-  .markets-panel {
-    background: var(--bg-secondary);
-    display: flex;
-    flex-direction: column;
-    overflow: hidden;
-  }
-
-  .markets-header {
-    padding: 12px;
-    border-bottom: 1px solid var(--border-subtle);
-  }
-
-  .markets-search {
-    width: 100%;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 12px;
-    color: var(--text-primary);
-    background: var(--bg-primary);
-    border: 1px solid var(--border-default);
-    border-radius: 4px;
-    padding: 8px 12px;
-    outline: none;
-  }
-
-  .markets-search:focus {
-    border-color: var(--blue);
-  }
-
-  .markets-list {
-    flex: 1;
-    overflow-y: auto;
-    padding: 4px 0;
-  }
-
-  .market-row {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 10px 12px;
-    font-size: 12px;
-    cursor: pointer;
-    transition: background 0.1s;
-    border: none;
-    background: transparent;
-    color: var(--text-primary);
-    text-align: left;
-    width: 100%;
-  }
-
-  .market-row:hover {
-    background: var(--bg-tertiary);
-  }
-
-  .market-row.active {
-    background: var(--bg-tertiary);
-    border-left: 2px solid var(--blue);
-  }
-
-  .market-symbol {
-    font-family: 'JetBrains Mono', monospace;
-    font-weight: 600;
-  }
-
-  .market-type {
-    font-size: 10px;
-    color: var(--text-muted);
-    text-transform: uppercase;
-  }
-
-  /* Responsive */
-  @media (max-width: 1024px) {
-    .terminal-layout {
-      grid-template-columns: 1fr;
-      height: auto;
-    }
-
-    .terminal-sidebar {
-      grid-template-rows: none;
-      grid-template-columns: 1fr 1fr;
-    }
-  }
-
-  /* Cards */
-  .card {
-    background: var(--bg-secondary);
-    border: 1px solid var(--border-default);
-    border-radius: 8px;
-    padding: 16px;
-  }
-
-  .card-hover {
-    background: var(--bg-secondary);
-    border: 1px solid var(--border-default);
-    border-radius: 8px;
-    padding: 16px;
-    cursor: pointer;
-    transition: all 0.15s;
-  }
-
-  .card-hover:hover {
-    border-color: var(--border-strong);
-    background: var(--bg-tertiary);
-  }
-
-  /* Buttons */
+  /* Buttons — used in App.tsx header and modals */
   .btn-primary {
     background: var(--blue);
     color: white;
@@ -507,45 +115,23 @@
     background: #2563eb;
   }
 
-  /* Utilities */
+  .btn-action {
+    padding: 12px;
+    font-size: 14px;
+    font-weight: 600;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+
+  /* Color utilities — used in App.tsx copy modal */
   .text-positive {
     color: var(--green);
   }
 
   .text-negative {
     color: var(--red);
-  }
-
-  .text-accent {
-    color: var(--blue);
-  }
-
-  .bg-surface {
-    background: var(--bg-secondary);
-  }
-
-  .bg-deep {
-    background: var(--bg-primary);
-  }
-}
-
-@layer utilities {
-  .scrollbar-thin::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
-  }
-
-  .scrollbar-thin::-webkit-scrollbar-track {
-    background: var(--bg-primary);
-  }
-
-  .scrollbar-thin::-webkit-scrollbar-thumb {
-    background: var(--border-strong);
-    border-radius: 3px;
-  }
-
-  .scrollbar-thin::-webkit-scrollbar-thumb:hover {
-    background: var(--text-muted);
   }
 }
 

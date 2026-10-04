@@ -57,12 +57,12 @@ export function TelegramLogin({ onLogin, onMissingConfig }: TelegramLoginProps) 
 
   if (missingConfig) {
     return (
-      <div className="text-xs text-text-tertiary text-center py-3 px-4 bg-surface-50 border border-border rounded-xl">
-        Вход через Telegram выключен: собери фронт с <code className="text-text-secondary">VITE_TELEGRAM_BOT_NAME</code> (имя бота без «@») и задай{" "}
-        <code className="text-text-secondary">TELEGRAM_BOT_TOKEN</code> на бэкенде — иначе подпись пользователя нечем проверить.
+      <div style={{ fontSize: "11px", color: "#666", textAlign: "center", padding: "12px 16px", background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px" }}>
+        Вход через Telegram выключен: собери фронт с <code style={{ color: "#a0a0a0" }}>VITE_TELEGRAM_BOT_NAME</code> (имя бота без «@») и задай{" "}
+        <code style={{ color: "#a0a0a0" }}>TELEGRAM_BOT_TOKEN</code> на бэкенде — иначе подпись пользователя нечем проверить.
       </div>
     );
   }
 
-  return <div ref={containerRef} className="flex justify-center" />;
+  return <div ref={containerRef} style={{ display: "flex", justifyContent: "center" }} />;
 }

@@ -3,7 +3,7 @@ import { Users, DollarSign, Copy as CopyIcon, Wallet, TrendingUp, TrendingDown }
 import { listLeaders } from "../lib/lighter";
 import { errorText } from "../lib/backend";
 import { buildLeader } from "../lib/leaders";
-import { fmt, avatarColor, shortHandle, usd } from "./utils";
+import { fmt, shortHandle, usd } from "./utils";
 import type { Leader } from "./types";
 
 interface DiscoverProps {

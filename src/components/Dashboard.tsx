@@ -148,7 +148,7 @@ export function Dashboard({ setTab, setAsset }: DashboardProps) {
       {!overview && !marketsError ? (
         <div className="terminal-header" style={{ flexDirection: "column", gap: "8px" }}>
           {[0, 1, 2, 3, 4, 5].map((i) => (
-            <Skeleton key={i} className="h-5 w-full" />
+            <Skeleton key={i} height="20px" />
           ))}
         </div>
       ) : !overview ? (
@@ -262,7 +262,7 @@ export function Dashboard({ setTab, setAsset }: DashboardProps) {
       {arcusMarkets.length === 0 && !arcusError ? (
         <div className="terminal-header" style={{ flexDirection: "column", gap: "8px" }}>
           {[0, 1, 2, 3].map((i) => (
-            <Skeleton key={i} className="h-5 w-full" />
+            <Skeleton key={i} height="20px" />
           ))}
         </div>
       ) : arcusMarkets.length === 0 ? (
@@ -345,45 +345,47 @@ export function Dashboard({ setTab, setAsset }: DashboardProps) {
         </div>
       </div>
         {predictError ? (
-          <div className="bg-surface-100 border border-amber-800 rounded-2xl p-3 text-xs text-amber-300">
+          <div style={{ background: "#1a1a1a", border: "1px solid #5c3a1a", borderRadius: "6px", padding: "12px 16px", fontSize: "12px", color: "#fbbf24" }}>
             Открытые рынки Predict не загрузились — {predictError}
           </div>
         ) : predict === null ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: "8px" }}>
             {[0, 1].map((i) => (
-              <div key={i} className="bg-surface-100 border border-border rounded-2xl p-4 space-y-2">
-                <Skeleton className="h-3 w-24" />
-                <Skeleton className="h-4 w-full" />
-                <Skeleton className="h-1.5 w-full" />
+              <div key={i} style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", padding: "16px" }}>
+                <div style={{ height: "12px", width: "96px", background: "#1a1a1a", borderRadius: "3px", animation: "wakeShimmer 1.6s ease-in-out infinite" }} />
+                <div style={{ marginTop: "12px", height: "16px", background: "#1a1a1a", borderRadius: "3px", animation: "wakeShimmer 1.6s ease-in-out infinite" }} />
+                <div style={{ marginTop: "8px", height: "6px", background: "#1a1a1a", borderRadius: "3px", animation: "wakeShimmer 1.6s ease-in-out infinite" }} />
               </div>
             ))}
           </div>
         ) : predict.length === 0 ? (
-          <div className="bg-surface-100 border border-border rounded-2xl p-4 text-sm text-text-tertiary">
+          <div style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", padding: "16px", fontSize: "12px", color: "#666" }}>
             Открытых рынков нет. Резолвленные с исходами — во вкладке Predict; создать рынок может только куратор
             (POST /predict/markets/price или /predict/markets/event с X-Curator-Token).
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: "8px" }}>
             {predict.slice(0, 4).map((m) => (
               <button
                 key={m.id}
                 onClick={() => setTab("predict")}
-                className="bg-surface-100 border border-border hover:border-border-hover rounded-2xl p-4 text-left transition-colors"
+                style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", padding: "16px", textAlign: "left", cursor: "pointer", transition: "border-color 0.15s" }}
+                onMouseEnter={(e) => e.currentTarget.style.borderColor = "#333"}
+                onMouseLeave={(e) => e.currentTarget.style.borderColor = "#1e1e1e"}
               >
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-xs text-text-tertiary uppercase tracking-wide">
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px" }}>
+                  <span style={{ fontSize: "10px", color: "#666", textTransform: "uppercase", letterSpacing: "0.05em" }}>
                     {m.kind === "price" ? "цена на Lighter" : "событие"}
                   </span>
-                  <span className="text-xs text-text-muted">{predictTimeLeft(m.resolve_at)}</span>
+                  <span style={{ fontSize: "10px", color: "#525252" }}>{predictTimeLeft(m.resolve_at)}</span>
                 </div>
-                <div className="text-text-primary text-sm mb-3">{m.question}</div>
-                <div className="flex items-center gap-3">
-                  <div className="flex-1 h-1.5 bg-red-950 rounded-full overflow-hidden">
-                    <div className="h-full bg-emerald-500" style={{ width: `${m.price_yes * 100}%` }} />
+                <div style={{ color: "#fafafa", fontSize: "13px", marginBottom: "12px" }}>{m.question}</div>
+                <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                  <div style={{ flex: 1, height: "6px", background: "#1a1a1a", borderRadius: "3px", overflow: "hidden" }}>
+                    <div style={{ height: "100%", background: "#10b981", width: `${m.price_yes * 100}%` }} />
                   </div>
-                  <span className="text-xs font-mono text-text-secondary">{(m.price_yes * 100).toFixed(0)}% YES</span>
-                  <span className="text-xs font-mono text-text-tertiary">
+                  <span style={{ fontSize: "10px", fontFamily: "'JetBrains Mono', monospace", color: "#a0a0a0" }}>{(m.price_yes * 100).toFixed(0)}% YES</span>
+                  <span style={{ fontSize: "10px", fontFamily: "'JetBrains Mono', monospace", color: "#666" }}>
                     {fmtUsdCompact(m.volume_usd)} · {m.trade_count} сдел.
                   </span>
                 </div>
