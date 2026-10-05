@@ -18,6 +18,8 @@ BTC прилетает ставка LIT с чужой биржи.
 Перенесено из app.py при рефакторинге — см. api/copy_trading.py.
 """
 
+from typing import Literal
+
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
@@ -42,7 +44,7 @@ class FundingCheckRequest(BaseModel):
     market_id: int
     symbol: str
     hourly_rate: float
-    direction: str
+    direction: Literal["long", "short"]
     min_annualized_yield: float = 0.05
 
 

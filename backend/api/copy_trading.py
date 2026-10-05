@@ -8,7 +8,7 @@ HTTP (/simulate-mirror). Логика в db.py + mirror_engine.py, протес�
 """
 
 import uuid
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel
 
 import db
@@ -93,8 +93,14 @@ def list_follows_for_follower(follower_id: str):
 
 
 @router.delete("/follows/{follow_id}")
-def delete_follow(follow_id: str):
+def delete_follow(follow_id: str, follower_id: str = Query(...)):
     with db.connect(DB_PATH) as conn:
+        follow = conn.execute(
+            "SELECT * FROM follows WHERE id = ? AND follower_id = ?",
+            (follow_id, follower_id),
+        ).fetchone()
+        if not follow:
+            raise HTTPException(status_code=404, detail="follow not found or not owned by user")
         conn.execute("DELETE FROM follows WHERE id = ?", (follow_id,))
     return {"status": "deleted"}
 
@@ -208,22 +214,37 @@ def create_follow(req: CreateFollow):
                 req.allocation_usd,
                 req.max_leverage,
             )
-    except Exception as e:
+    except Exception:
         # Скорее всего UNIQUE(follower_id, leader_id) — уже подписан на этого лидера.
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(
+            status_code=400,
+            detail="Подписка уже существует или невалидны данные",
+        )
     return {"follow_id": follow_id}
 
 
 @router.post("/follows/{follow_id}/pause")
-def pause_follow(follow_id: str):
+def pause_follow(follow_id: str, follower_id: str = Query(...)):
     with db.connect(DB_PATH) as conn:
+        follow = conn.execute(
+            "SELECT * FROM follows WHERE id = ? AND follower_id = ?",
+            (follow_id, follower_id),
+        ).fetchone()
+        if not follow:
+            raise HTTPException(status_code=404, detail="follow not found or not owned by user")
         db.set_paused(conn, follow_id, True)
     return {"status": "paused"}
 
 
 @router.post("/follows/{follow_id}/resume")
-def resume_follow(follow_id: str):
+def resume_follow(follow_id: str, follower_id: str = Query(...)):
     with db.connect(DB_PATH) as conn:
+        follow = conn.execute(
+            "SELECT * FROM follows WHERE id = ? AND follower_id = ?",
+            (follow_id, follower_id),
+        ).fetchone()
+        if not follow:
+            raise HTTPException(status_code=404, detail="follow not found or not owned by user")
         db.set_paused(conn, follow_id, False)
     return {"status": "active"}
 

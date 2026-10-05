@@ -1,6 +1,6 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, lazy, Suspense } from "react";
 import { useAccount, useConnect, useDisconnect, useEnsName } from "wagmi";
-import { Zap, ChevronDown, ChevronRight, X, Check, ServerOff, RefreshCw } from "lucide-react";
+import { Zap, ChevronDown, ChevronRight, X, Check, ServerOff, RefreshCw, AlertTriangle, Info } from "lucide-react";
 import {
   getOrderBooks,
   getAccountByL1Address,
@@ -18,21 +18,23 @@ import {
 import { BACKEND_URL, LIGHTER_NETWORK } from "./lib/config";
 import { backendJson, errorText, probeBackend, type BackendHealth } from "./lib/backend";
 import { NavTab } from "./components/ui";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 import type { Tab } from "./components/types";
-import { Dashboard } from "./components/Dashboard";
-import { Terminal } from "./components/Terminal";
-import { Discover } from "./components/Discover";
-import { Portfolio } from "./components/Portfolio";
-import { Earn } from "./components/Earn";
-import { Predict } from "./components/Predict";
-import { Agent } from "./components/Agent";
-import { Risk } from "./components/Risk";
-import { Funding } from "./components/Funding";
 import { TelegramLogin } from "./components/TelegramLogin";
 import { verifyTelegramLogin, type TelegramUser } from "./lib/telegram";
 import { connectTelegramMiniApp, isTelegramWebView, type TelegramProfile } from "./lib/telegram";
 import { categorizeMarket, avatarColor, shortHandle, usd, fmt } from "./components/utils";
 import type { Leader, Following, Subscription } from "./components/types";
+
+const Dashboard = lazy(() => import("./components/Dashboard"));
+const Terminal = lazy(() => import("./components/Terminal"));
+const Discover = lazy(() => import("./components/Discover"));
+const Portfolio = lazy(() => import("./components/Portfolio"));
+const Earn = lazy(() => import("./components/Earn"));
+const Predict = lazy(() => import("./components/Predict"));
+const Agent = lazy(() => import("./components/Agent"));
+const Risk = lazy(() => import("./components/Risk"));
+const Funding = lazy(() => import("./components/Funding"));
 
 export default function App() {
   const { address, isConnected } = useAccount();
@@ -112,7 +114,20 @@ export default function App() {
       .catch(() => setFollowing([]));
   }, [followerId]);
 
-  const [toast, setToast] = useState<string | null>(null);
+  const [toast, setToastState] = useState<{ msg: string; variant: "success" | "error" | "info"; ts: number } | null>(null);
+
+  function setToast(msg: string | null) {
+    if (msg === null) {
+      setToastState(null);
+      return;
+    }
+    const variant = msg.includes("не удалось") || msg.includes("не отправлен") || msg.includes("ошибка") || msg.includes("error")
+      ? "error"
+      : msg.includes("отправлен") || msg.includes("успешно") || msg.includes("добавлен")
+      ? "success"
+      : "info";
+    setToastState({ msg, variant, ts: Date.now() });
+  }
 
   useEffect(() => {
     if (!address) {
@@ -136,6 +151,37 @@ export default function App() {
     const id = setInterval(load, 15000);
     return () => clearInterval(id);
   }, [network]);
+
+  useEffect(() => {
+    function handleKey(e: KeyboardEvent) {
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
+      if (e.key === "Escape") {
+        setConnectPickerOpen(false);
+        setMarketPickerOpen(false);
+        setWalletMenuOpen(false);
+        setCopyModal(null);
+      }
+      if (e.altKey && !e.ctrlKey && !e.metaKey) {
+        const tabMap: Record<string, Tab> = {
+          "1": "dashboard",
+          "2": "terminal",
+          "3": "discover",
+          "4": "portfolio",
+          "5": "earn",
+          "6": "predict",
+          "7": "agent",
+          "8": "risk",
+          "9": "funding",
+        };
+        if (tabMap[e.key]) {
+          e.preventDefault();
+          setTab(tabMap[e.key]);
+        }
+      }
+    }
+    window.addEventListener("keydown", handleKey);
+    return () => window.removeEventListener("keydown", handleKey);
+  }, []);
 
   function switchNetwork(next: LighterNetwork) {
     setLighterNetwork(next);
@@ -245,15 +291,16 @@ export default function App() {
 
   function togglePause(followId: string) {
     const target = following.find((t) => t.followId === followId);
-    if (!target) return;
+    if (!target || !followerId) return;
     const next = !target.paused;
     setFollowing((f) => f.map((t) => (t.followId === followId ? { ...t, paused: next } : t)));
-    setFollowPaused(followId, next).catch((e) => setToast(`Пауза не записана в базу: ${errorText(e)}`));
+    setFollowPaused(followId, next, followerId).catch((e) => setToast(`Пауза не записана в базу: ${errorText(e)}`));
   }
 
   function unfollow(followId: string) {
+    if (!followerId) return;
     setFollowing((f) => f.filter((t) => t.followId !== followId));
-    deleteFollow(followId).catch((e) => setToast(`Не удалось отписать: ${errorText(e)}`));
+    deleteFollow(followId, followerId).catch((e) => setToast(`Не удалось отписать: ${errorText(e)}`));
   }
 
   const [leaderId, setLeaderId] = useState<string | null>(null);
@@ -323,28 +370,30 @@ export default function App() {
         <div className="mb-6">
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-3">
-              <div className="w-9 h-9 rounded-lg bg-[#ff6b35] flex items-center justify-center glow-logo">
+              <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-[#ff6b35] to-[#ff8c5a] flex items-center justify-center glow-logo shadow-lg shadow-[#ff6b35]/20">
                 <Zap className="w-5 h-5 text-[#0a0a0a]" strokeWidth={2.5} />
               </div>
               <span className="text-white font-bold tracking-tight text-xl" style={{ fontFamily: "Space Grotesk" }}>Wake</span>
               <div className="flex items-center gap-1.5 ml-2">
-                <div className="flex items-center gap-1 px-2 py-1 rounded-md bg-[#141414] border border-[#2a2a2a]">
+                <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[#141414] border border-[#2a2a2a] hover:border-[#3a3a3a] transition-colors">
                   <div className="w-1.5 h-1.5 rounded-full bg-[#ff6b35] live-indicator"></div>
                   <span className="text-[10px] font-mono text-[#888] uppercase tracking-wide">Lighter</span>
                 </div>
-                <div className="flex items-center gap-1 px-2 py-1 rounded-md bg-[#141414] border border-[#2a2a2a]">
+                <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[#141414] border border-[#2a2a2a] hover:border-[#3a3a3a] transition-colors">
                   <div className="w-1.5 h-1.5 rounded-full bg-[#10b981] live-indicator"></div>
                   <span className="text-[10px] font-mono text-[#888] uppercase tracking-wide">Arcus</span>
                 </div>
               </div>
-              <div className="flex rounded border border-[#2a2a2a] overflow-hidden ml-2">
+              <div className="flex rounded-lg border border-[#2a2a2a] overflow-hidden ml-2 bg-[#0a0a0a]">
                 {(["mainnet", "testnet"] as const).map((n) => (
                   <button
                     key={n}
                     onClick={() => switchNetwork(n)}
                     title={n === "mainnet" ? "Реальные рынки Lighter и Arcus, реальные цены" : "Тестовая сеть — тот же код, другие market ids"}
-                    className={`px-2 py-0.5 text-[10px] font-mono uppercase tracking-wide transition-colors ${
-                      network === n ? "bg-[#1a1a1a] text-[#ff6b35]" : "text-[#666] hover:text-[#888]"
+                    className={`px-3 py-1 text-[10px] font-mono uppercase tracking-wide transition-all ${
+                      network === n
+                        ? "bg-[#1a1a1a] text-[#ff6b35] font-semibold shadow-inner"
+                        : "text-[#666] hover:text-[#888] hover:bg-[#141414]"
                     }`}
                   >
                     {n}
@@ -357,12 +406,12 @@ export default function App() {
               {address || followerId ? (
                 <button
                   onClick={() => setWalletMenuOpen((v) => !v)}
-                  className="flex items-center gap-2 bg-[#1a1a1a] border border-[#2a2a2a] hover:border-[#3a3a3a] rounded-full pl-1.5 pr-3 py-1.5 text-sm text-[#ccc] font-mono transition-colors"
+                  className="flex items-center gap-2 bg-gradient-to-r from-[#1a1a1a] to-[#141414] border border-[#2a2a2a] hover:border-[#3a3a3a] hover:shadow-lg hover:shadow-black/20 rounded-full pl-1.5 pr-3 py-1.5 text-sm text-[#ccc] font-mono transition-all"
                 >
                   <span
                     className={`w-6 h-6 rounded-full ${
-                      authSource === "telegram" ? "bg-[#ff6b35]" : "bg-[#10b981]"
-                    } flex items-center justify-center text-[#0a0a0a] text-xs font-bold`}
+                      authSource === "telegram" ? "bg-gradient-to-br from-[#ff6b35] to-[#ff8c5a]" : "bg-gradient-to-br from-[#10b981] to-[#34d399]"
+                    } flex items-center justify-center text-[#0a0a0a] text-xs font-bold shadow-sm`}
                   >
                     {(identityLabel ?? "?").replace(/^@/, "").slice(0, 1).toUpperCase()}
                   </span>
@@ -370,7 +419,7 @@ export default function App() {
                   <ChevronDown className="w-3.5 h-3.5 text-[#666]" />
                 </button>
               ) : (
-                <button onClick={() => setConnectPickerOpen(true)} className="btn-primary">
+                <button onClick={() => setConnectPickerOpen(true)} className="btn-primary shadow-lg shadow-[#3b82f6]/20 hover:shadow-[#3b82f6]/30 hover:scale-[1.02] transition-all">
                   Войти через TG или кошелёк
                 </button>
               )}
@@ -431,7 +480,7 @@ export default function App() {
                   <div className="w-full max-w-sm bg-[#1a1a1a] border border-[#2a2a2a] rounded-lg p-6 animate-scale-in" onClick={(e) => e.stopPropagation()}>
                     <div className="flex items-center justify-between mb-5">
                       <h3 className="text-white font-semibold text-lg">Войти в Wake</h3>
-                      <button onClick={() => setConnectPickerOpen(false)} className="text-[#666] hover:text-[#888] transition-colors">
+                      <button onClick={() => setConnectPickerOpen(false)} className="text-[#666] hover:text-[#888] transition-colors" aria-label="Закрыть">
                         <X className="w-5 h-5" />
                       </button>
                     </div>
@@ -505,7 +554,7 @@ export default function App() {
           </div>
 
           <div className="relative -mx-6 px-6 sm:mx-0 sm:px-0">
-            <nav className="glass-panel flex items-center gap-1 overflow-x-auto pb-0.5 rounded-lg px-2 py-1">
+            <nav className="glass-panel flex items-center gap-1 overflow-x-auto pb-0.5 rounded-lg px-2 py-1 shadow-sm" aria-label="Основная навигация">
               <NavTab active={tab === "dashboard"} onClick={() => setTab("dashboard")} label="Обзор" live />
               <NavTab active={tab === "terminal"} onClick={() => setTab("terminal")} label="Терминал" live />
               <NavTab active={tab === "discover"} onClick={() => setTab("discover")} label="Discover" />
@@ -520,23 +569,22 @@ export default function App() {
         </div>
 
         {backendChecked && !backend && (
-          <div className="mb-5 terminal-panel rounded-lg px-4 py-3.5 animate-fade-in">
+          <div className="mb-5 terminal-panel rounded-lg px-4 py-3.5 animate-fade-in border border-[#2a2a2a] bg-gradient-to-r from-[#1a1a1a] to-[#141414]">
             <div className="flex items-start gap-3">
               <ServerOff className="w-4 h-4 text-[#ff6b35] shrink-0 mt-0.5" />
               <div className="flex-1">
                 <div className="text-sm text-[#ccc] font-medium">
-                  Бэкенд Wake к <code className="text-[#888] font-mono text-xs">{BACKEND_URL}</code> не подключён
+                  Бэкенд Wake не подключён
                 </div>
-                <p className="text-xs text-[#888] leading-relaxed mt-1.5 mb-2 font-mono">
-                  Сайт — статика на Cloudflare Pages, Wake-бэкенд (<code className="text-[#666]">backend/app.py</code>) — отдельный
-                  сервис, в сборку сайта он не входит. Сейчас работают панели, которые говорят с публичным API Lighter напрямую:
+                <p className="text-xs text-[#888] leading-relaxed mt-1.5 mb-2">
+                  Сайт — статика на Cloudflare Pages, Wake-бэкенд — отдельный сервис. Сейчас работают панели, которые говорят с публичным API Lighter напрямую:
                   «Терминал» — стакан, свечи и лента сделок; «Funding» — ставки Lighter рядом с Binance, Bybit и Hyperliquid; «Портфель» —
                   позиции по адресу. Остальные хранят состояние в базе Wake — копи-трейд, Predict, агент, риск-расчёты и обзор рынка с
-                  ранжированием по 24-часовому обороту. Поднять бэкенд локально: <code className="text-[#666]">docker compose up app</code>.
+                  ранжированием по 24-часовому обороту.
                 </p>
                 <button
                   onClick={checkBackend}
-                  className="text-xs text-[#ccc] hover:text-white border border-[#2a2a2a] hover:border-[#3a3a3a] rounded px-3 py-1.5 transition-colors inline-flex items-center gap-1.5"
+                  className="text-xs text-[#ccc] hover:text-white border border-[#2a2a2a] hover:border-[#3a3a3a] rounded px-3 py-1.5 transition-all inline-flex items-center gap-1.5 hover:shadow-sm"
                 >
                   <RefreshCw className="w-3 h-3" />
                   Проверить снова
@@ -556,67 +604,108 @@ export default function App() {
         )}
 
         {/* перемонтирование по сети: панели иначе держат данные со старой сети до следующего опроса */}
-        <div key={network}>
-          {tab === "dashboard" && <Dashboard setTab={setTab} setAsset={setAsset} />}
+        <Suspense fallback={
+          <div style={{ padding: "24px", display: "flex", flexDirection: "column", gap: "16px" }}>
+            <div style={{ display: "flex", gap: "12px" }}>
+              {[1, 2, 3, 4].map((i) => (
+                <div key={i} style={{ flex: 1, height: "80px", background: "#111", borderRadius: "6px", animation: "wakeShimmer 1.6s ease-in-out infinite" }} />
+              ))}
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 300px", gap: "16px" }}>
+              <div style={{ height: "400px", background: "#111", borderRadius: "6px", animation: "wakeShimmer 1.6s ease-in-out infinite" }} />
+              <div style={{ height: "400px", background: "#111", borderRadius: "6px", animation: "wakeShimmer 1.6s ease-in-out infinite" }} />
+            </div>
+          </div>
+        }>
+          <div key={network}>
+            {tab === "dashboard" && (
+              <ErrorBoundary fallback={<div style={{ padding: "24px", color: "#ef4444" }}>Ошибка загрузки Dashboard. <button onClick={() => window.location.reload()} style={{ color: "#3b82f6", background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>Обновить</button></div>}>
+                <Dashboard setTab={setTab} setAsset={setAsset} />
+              </ErrorBoundary>
+            )}
 
-          {tab === "terminal" && (
-            <Terminal
-              asset={asset}
-              setAsset={setAsset}
-              markets={markets}
-              dataError={dataError}
-              setToast={setToast}
-              isCopyable={isCopyable}
-              toggleCopyable={() => void toggleCopyable()}
-              setMarketPickerOpen={setMarketPickerOpen}
-              network={network}
-            />
-          )}
+            {tab === "terminal" && (
+              <ErrorBoundary fallback={<div style={{ padding: "24px", color: "#ef4444" }}>Ошибка загрузки Terminal. <button onClick={() => window.location.reload()} style={{ color: "#3b82f6", background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>Обновить</button></div>}>
+                <Terminal
+                  asset={asset}
+                  setAsset={setAsset}
+                  markets={markets}
+                  dataError={dataError}
+                  setToast={setToast}
+                  isCopyable={isCopyable}
+                  toggleCopyable={() => void toggleCopyable()}
+                  setMarketPickerOpen={setMarketPickerOpen}
+                  network={network}
+                  accountEquityUsd={lighterAccount?.equityUsd}
+                />
+              </ErrorBoundary>
+            )}
 
-          {tab === "discover" && <Discover setCopyModal={setCopyModal} />}
+            {tab === "discover" && (
+              <ErrorBoundary fallback={<div style={{ padding: "24px", color: "#ef4444" }}>Ошибка загрузки Discover. <button onClick={() => window.location.reload()} style={{ color: "#3b82f6", background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>Обновить</button></div>}>
+                <Discover setCopyModal={setCopyModal} />
+              </ErrorBoundary>
+            )}
 
-          {tab === "portfolio" && (
-            <Portfolio
-              following={following}
-              setTab={setTab}
-              togglePause={togglePause}
-              unfollow={unfollow}
-              followerId={followerId}
-              lighterAccountIndex={lighterAccountIndex}
-              hasWallet={!!address}
-              markets={markets}
-            />
-          )}
+            {tab === "portfolio" && (
+              <ErrorBoundary fallback={<div style={{ padding: "24px", color: "#ef4444" }}>Ошибка загрузки Portfolio. <button onClick={() => window.location.reload()} style={{ color: "#3b82f6", background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>Обновить</button></div>}>
+                <Portfolio
+                  following={following}
+                  setTab={setTab}
+                  togglePause={togglePause}
+                  unfollow={unfollow}
+                  followerId={followerId}
+                  lighterAccountIndex={lighterAccountIndex}
+                  hasWallet={!!address}
+                  markets={markets}
+                />
+              </ErrorBoundary>
+            )}
 
-          {tab === "earn" && (
-            <Earn
-              isCopyable={isCopyable}
-              setTab={setTab}
-              leaderId={leaderId}
-              leaderFeeBps={leaderFeeBps}
-              setLeaderFeeBps={setLeaderFeeBps}
-              lighterAccountIndex={lighterAccountIndex}
-            />
-          )}
+            {tab === "earn" && (
+              <ErrorBoundary fallback={<div style={{ padding: "24px", color: "#ef4444" }}>Ошибка загрузки Earn. <button onClick={() => window.location.reload()} style={{ color: "#3b82f6", background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>Обновить</button></div>}>
+                <Earn
+                  isCopyable={isCopyable}
+                  setTab={setTab}
+                  leaderId={leaderId}
+                  leaderFeeBps={leaderFeeBps}
+                  setLeaderFeeBps={setLeaderFeeBps}
+                  lighterAccountIndex={lighterAccountIndex}
+                />
+              </ErrorBoundary>
+            )}
 
-          {tab === "predict" && (
-            <Predict followerId={followerId} setToast={setToast} onConnect={() => setConnectPickerOpen(true)} />
-          )}
+            {tab === "predict" && (
+              <ErrorBoundary fallback={<div style={{ padding: "24px", color: "#ef4444" }}>Ошибка загрузки Predict. <button onClick={() => window.location.reload()} style={{ color: "#3b82f6", background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>Обновить</button></div>}>
+                <Predict followerId={followerId} setToast={setToast} onConnect={() => setConnectPickerOpen(true)} />
+              </ErrorBoundary>
+            )}
 
-          {tab === "agent" && (
-            <Agent
-              followerId={followerId}
-              subscription={subscription}
-              currentMarket={currentMarket}
-              setToast={setToast}
-              startTrial={() => void startTrial()}
-            />
-          )}
+            {tab === "agent" && (
+              <ErrorBoundary fallback={<div style={{ padding: "24px", color: "#ef4444" }}>Ошибка загрузки Agent. <button onClick={() => window.location.reload()} style={{ color: "#3b82f6", background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>Обновить</button></div>}>
+                <Agent
+                  followerId={followerId}
+                  subscription={subscription}
+                  currentMarket={currentMarket}
+                  setToast={setToast}
+                  startTrial={() => void startTrial()}
+                />
+              </ErrorBoundary>
+            )}
 
-          {tab === "risk" && <Risk markets={markets} setToast={setToast} />}
+            {tab === "risk" && (
+              <ErrorBoundary fallback={<div style={{ padding: "24px", color: "#ef4444" }}>Ошибка загрузки Risk. <button onClick={() => window.location.reload()} style={{ color: "#3b82f6", background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>Обновить</button></div>}>
+                <Risk markets={markets} setToast={setToast} />
+              </ErrorBoundary>
+            )}
 
-          {tab === "funding" && <Funding markets={markets} setToast={setToast} />}
-        </div>
+            {tab === "funding" && (
+              <ErrorBoundary fallback={<div style={{ padding: "24px", color: "#ef4444" }}>Ошибка загрузки Funding. <button onClick={() => window.location.reload()} style={{ color: "#3b82f6", background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>Обновить</button></div>}>
+                <Funding markets={markets} setToast={setToast} />
+              </ErrorBoundary>
+            )}
+          </div>
+        </Suspense>
       </div>
 
       {marketPickerOpen && (
@@ -632,7 +721,7 @@ export default function App() {
           >
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-white font-semibold text-sm">Выбор рынка</h3>
-              <button onClick={() => setMarketPickerOpen(false)} className="text-[#666] hover:text-[#888]">
+              <button onClick={() => setMarketPickerOpen(false)} className="text-[#666] hover:text-[#888]" aria-label="Закрыть">
                 <X className="w-5 h-5" />
               </button>
             </div>
@@ -774,9 +863,27 @@ export default function App() {
       )}
 
       {toast && (
-        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-[#1a1a1a] border border-[#2a2a2a] rounded-full px-5 py-3 shadow-2xl flex items-center gap-2 z-50 max-w-md text-center animate-slide-up">
-          <Check className="w-4 h-4 text-[#10b981] shrink-0" />
-          <span className="text-sm text-[#ccc]">{toast}</span>
+        <div
+          role="status"
+          aria-live="polite"
+          className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-[#1a1a1a] border rounded-full px-5 py-3 shadow-2xl flex items-center gap-3 z-50 max-w-md animate-slide-up"
+          style={{ borderColor: toast.variant === "error" ? "#ef4444" : toast.variant === "success" ? "#10b981" : "#3b82f6" }}
+        >
+          {toast.variant === "error" ? (
+            <AlertTriangle className="w-4 h-4 text-[#ef4444] shrink-0" />
+          ) : toast.variant === "success" ? (
+            <Check className="w-4 h-4 text-[#10b981] shrink-0" />
+          ) : (
+            <Info className="w-4 h-4 text-[#3b82f6] shrink-0" />
+          )}
+          <span className="text-sm text-[#ccc]">{toast.msg}</span>
+          <button
+            onClick={() => setToastState(null)}
+            className="ml-2 text-[#666] hover:text-[#ccc] transition-colors"
+            aria-label="Закрыть уведомление"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
         </div>
       )}
     </div>

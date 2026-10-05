@@ -210,9 +210,9 @@ class TestApiSmoke(unittest.TestCase):
         self.assertEqual(r.json()["follower_count"], 1)
         follow_id = r.json()["follows"][0]["id"]
 
-        r = client.post(f"/follows/{follow_id}/pause")
+        r = client.post(f"/follows/{follow_id}/pause?follower_id={follower_id}")
         self.assertEqual(r.status_code, 200)
-        r = client.post(f"/follows/{follow_id}/resume")
+        r = client.post(f"/follows/{follow_id}/resume?follower_id={follower_id}")
         self.assertEqual(r.status_code, 200)
 
         r = client.post(

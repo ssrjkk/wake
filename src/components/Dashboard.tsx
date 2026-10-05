@@ -18,7 +18,7 @@ interface DashboardProps {
   setAsset: (asset: string) => void;
 }
 
-export function Dashboard({ setTab, setAsset }: DashboardProps) {
+export default function Dashboard({ setTab, setAsset }: DashboardProps) {
   const [overview, setOverview] = useState<MarketOverview | null>(null);
   const [marketsError, setMarketsError] = useState<string | null>(null);
   const [arcusMarkets, setArcusMarkets] = useState<ArcusMarket[]>([]);
@@ -37,6 +37,7 @@ export function Dashboard({ setTab, setAsset }: DashboardProps) {
   // null — это не перезагрузка: следующий запрос всё равно произошёл бы только
   // через 60 секунд, и кнопка выглядела бы рабочей, не будучи ею.
   const [nonce, setNonce] = useState(0);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
   // Два независимых эффекта, а не один с двумя await подряд: обзор считается
   // секунды, и последовательное ожидание держало бы Predict пустым всё это время.
@@ -47,6 +48,7 @@ export function Dashboard({ setTab, setAsset }: DashboardProps) {
         if (!alive) return;
         setOverview(data);
         setMarketsError(null);
+        setLastUpdated(new Date());
       })
       .catch((e) => {
         if (alive) setMarketsError(errorText(e));
@@ -120,14 +122,29 @@ export function Dashboard({ setTab, setAsset }: DashboardProps) {
         <div className="terminal-header" style={{ flexDirection: "column", alignItems: "flex-start" }}>
           <div style={{ display: "flex", alignItems: "center", gap: "12px", width: "100%" }}>
             <h2 style={{ fontSize: "16px", fontWeight: 600, color: "#fafafa", margin: 0 }}>Рынки Lighter</h2>
-            <span style={{ fontSize: "10px", color: "#ff6b35", padding: "2px 6px", background: "#1a1a1a", borderRadius: "3px", border: "1px solid #2a2a2a" }}>zkLighter</span>
+            <span style={{ fontSize: "10px", color: "#ff6b35", padding: "2px 6px", background: "rgba(255, 107, 53, 0.1)", borderRadius: "3px", border: "1px solid rgba(255, 107, 53, 0.2)" }}>zkLighter</span>
             <button
               onClick={() => setNonce((n) => n + 1)}
-              style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: "6px", fontSize: "11px", color: "#888", background: "transparent", border: "1px solid #2a2a2a", borderRadius: "4px", padding: "6px 10px", cursor: "pointer" }}
+              style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: "6px", fontSize: "11px", color: "#888", background: "rgba(26, 26, 26, 0.5)", border: "1px solid #2a2a2a", borderRadius: "4px", padding: "6px 10px", cursor: "pointer", transition: "all 0.15s" }}
               title="Обновить сейчас"
+              onMouseEnter={(e) => {
+                e.currentTarget.style.borderColor = "#3a3a3a";
+                e.currentTarget.style.color = "#aaa";
+                e.currentTarget.style.background = "rgba(26, 26, 26, 0.8)";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.borderColor = "#2a2a2a";
+                e.currentTarget.style.color = "#888";
+                e.currentTarget.style.background = "rgba(26, 26, 26, 0.5)";
+              }}
             >
               <RefreshCw style={{ width: "12px", height: "12px" }} /> обновить
             </button>
+            {lastUpdated && (
+              <span style={{ fontSize: "10px", color: "#525252", fontFamily: "'JetBrains Mono', monospace" }}>
+                {lastUpdated.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+              </span>
+            )}
           </div>
           <p style={{ fontSize: "12px", color: "#666", margin: "8px 0 0 0", maxWidth: "800px" }}>
             Перпы на zkLighter, отсортированные по фактическому $-обороту за 24 часа: оборот — сумма 24 часовых свечей по каждому
@@ -140,7 +157,7 @@ export function Dashboard({ setTab, setAsset }: DashboardProps) {
         <div className="terminal-header" style={{ color: "#ff6b35", fontSize: "12px", alignItems: "flex-start" }}>
           <TriangleAlert style={{ width: "14px", height: "14px", marginTop: "2px", flexShrink: 0 }} />
           <span>
-            Обзор рынка не пришёл — {marketsError} Свечевые запросы к Lighter делает бэкенд Wake.
+            Обзор рынка временно недоступен. Функция требует подключённый бэкенд Wake.
           </span>
         </div>
       )}
@@ -163,25 +180,25 @@ export function Dashboard({ setTab, setAsset }: DashboardProps) {
           </div>
         </div>
       ) : (
-        <div style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", overflow: "hidden" }}>
-          <table style={{ width: "100%", fontSize: "12px", borderCollapse: "collapse" }}>
+        <div style={{ background: "linear-gradient(135deg, #111 0%, #0f0f0f 100%)", border: "1px solid #1e1e1e", borderRadius: "6px", overflow: "hidden", boxShadow: "0 1px 3px rgba(0, 0, 0, 0.2)" }}>
+          <table style={{ width: "100%", fontSize: "12px", borderCollapse: "collapse" }} aria-label="Таблица данных">
             <thead>
-              <tr style={{ textAlign: "left", fontSize: "11px", color: "#666", borderBottom: "1px solid #1e1e1e" }}>
-                <th style={{ padding: "10px 16px", fontWeight: 500 }}>#</th>
-                <th style={{ padding: "10px 8px", fontWeight: 500 }}>Актив</th>
-                <th style={{ padding: "10px 8px", fontWeight: 500, textAlign: "right" }}>Цена</th>
-                <th style={{ padding: "10px 8px", fontWeight: 500, textAlign: "right" }}>24ч</th>
-                <th style={{ padding: "10px 8px", fontWeight: 500, textAlign: "right" }}>Оборот 24ч</th>
-                <th style={{ padding: "10px 8px", fontWeight: 500, textAlign: "right" }} title="Ставка за часовую эпоху funding">
+              <tr style={{ textAlign: "left", fontSize: "11px", color: "#666", borderBottom: "1px solid #1e1e1e", background: "rgba(26, 26, 26, 0.3)" }}>
+                <th scope="col" style={{ padding: "10px 16px", fontWeight: 500 }}>#</th>
+                <th scope="col" style={{ padding: "10px 8px", fontWeight: 500 }}>Актив</th>
+                <th scope="col" style={{ padding: "10px 8px", fontWeight: 500, textAlign: "right" }}>Цена</th>
+                <th scope="col" style={{ padding: "10px 8px", fontWeight: 500, textAlign: "right" }}>24ч</th>
+                <th scope="col" style={{ padding: "10px 8px", fontWeight: 500, textAlign: "right" }}>Оборот 24ч</th>
+                <th scope="col" style={{ padding: "10px 8px", fontWeight: 500, textAlign: "right" }} title="Ставка за часовую эпоху funding">
                   Funding, %/ч
                 </th>
-                <th style={{ padding: "10px 8px", fontWeight: 500, textAlign: "right" }}>Годовая</th>
-                <th style={{ padding: "10px 8px", fontWeight: 500 }}>Платят</th>
-                <th style={{ padding: "10px 8px", fontWeight: 500, textAlign: "right" }} title="Открытый интерес в единицах актива">
+                <th scope="col" style={{ padding: "10px 8px", fontWeight: 500, textAlign: "right" }}>Годовая</th>
+                <th scope="col" style={{ padding: "10px 8px", fontWeight: 500 }}>Платят</th>
+                <th scope="col" style={{ padding: "10px 8px", fontWeight: 500, textAlign: "right" }} title="Открытый интерес в единицах актива">
                   OI, баз.
                 </th>
-                <th style={{ padding: "10px 8px", fontWeight: 500, textAlign: "right" }}>Мин. лот</th>
-                <th style={{ padding: "10px 8px" }}></th>
+                <th scope="col" style={{ padding: "10px 8px", fontWeight: 500, textAlign: "right" }}>Мин. лот</th>
+                <th scope="col" style={{ padding: "10px 8px" }}></th>
               </tr>
             </thead>
             <tbody>
@@ -189,51 +206,60 @@ export function Dashboard({ setTab, setAsset }: DashboardProps) {
                 <tr
                   key={r.market_id}
                   onClick={() => openMarket(r)}
-                  style={{ borderBottom: "1px solid #1a1a1a", cursor: "pointer", transition: "background 0.1s" }}
-                  onMouseEnter={(e) => e.currentTarget.style.background = "#1a1a1a"}
-                  onMouseLeave={(e) => e.currentTarget.style.background = "transparent"}
+                  style={{ borderBottom: "1px solid #1a1a1a", cursor: "pointer", transition: "all 0.15s" }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background = "rgba(26, 26, 26, 0.6)";
+                    e.currentTarget.style.borderColor = "#2a2a2a";
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = "transparent";
+                    e.currentTarget.style.borderColor = "#1a1a1a";
+                  }}
                 >
-                  <td style={{ padding: "8px 16px", color: "#666", fontFamily: "'JetBrains Mono', monospace", fontSize: "11px" }}>{i + 1}</td>
-                  <td style={{ padding: "8px", color: "#fafafa", fontWeight: 500 }}>{r.symbol}</td>
-                  <td style={{ padding: "8px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: "#fafafa" }}>{fmtPrice(r.price)}</td>
-                  <td style={{ padding: "8px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: r.change_24h >= 0 ? "#10b981" : "#ef4444" }}>
+                  <td style={{ padding: "10px 16px", color: "#666", fontFamily: "'JetBrains Mono', monospace", fontSize: "11px" }}>{i + 1}</td>
+                  <td style={{ padding: "10px 8px", color: "#fafafa", fontWeight: 600 }}>{r.symbol}</td>
+                  <td style={{ padding: "10px 8px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: "#fafafa" }}>{fmtPrice(r.price)}</td>
+                  <td style={{ padding: "10px 8px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: r.change_24h >= 0 ? "#10b981" : "#ef4444", fontWeight: 500 }}>
                     {fmtPct(r.change_24h)}
                   </td>
-                  <td style={{ padding: "8px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: "#ccc" }}>{fmtUsdCompact(r.quote_volume_24h)}</td>
-                  <td style={{ padding: "8px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: "#ccc" }}>
+                  <td style={{ padding: "10px 8px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: "#ccc" }}>{fmtUsdCompact(r.quote_volume_24h)}</td>
+                  <td style={{ padding: "10px 8px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: "#ccc" }}>
                     {r.funding_hourly == null ? "—" : (r.funding_hourly * 100).toFixed(4)}
                   </td>
-                  <td style={{ padding: "8px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: "#fafafa" }}>
+                  <td style={{ padding: "10px 8px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: "#fafafa", fontWeight: 500 }}>
                     {r.funding_annualized == null ? "—" : `${(r.funding_annualized * 100).toFixed(1)}%`}
                   </td>
-                  <td style={{ padding: "8px", fontSize: "11px" }}>
+                  <td style={{ padding: "10px 8px", fontSize: "11px" }}>
                     {r.funding_payer == null ? (
                       <span style={{ color: "#666" }}>нет ставки</span>
                     ) : r.funding_payer === "long" ? (
-                      <span style={{ color: "#10b981" }}>лонги</span>
+                      <span style={{ color: "#10b981", fontWeight: 500 }}>лонги</span>
                     ) : (
-                      <span style={{ color: "#ef4444" }}>шорты</span>
+                      <span style={{ color: "#ef4444", fontWeight: 500 }}>шорты</span>
                     )}
                   </td>
-                  <td style={{ padding: "8px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: "#888" }}>
+                  <td style={{ padding: "10px 8px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: "#888" }}>
                     {r.open_interest_base > 0 ? r.open_interest_base.toLocaleString("en-US", { maximumFractionDigits: 2 }) : "—"}
                   </td>
-                  <td style={{ padding: "8px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: "#888" }}>
+                  <td style={{ padding: "10px 8px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: "#888" }}>
                     {r.min_base_amount > 0 ? r.min_base_amount.toLocaleString("en-US", { maximumFractionDigits: 6 }) : "—"}
                   </td>
-                  <td style={{ padding: "8px", textAlign: "right" }}>
-                    <ArrowRight style={{ width: "12px", height: "12px", color: "#666" }} />
+                  <td style={{ padding: "10px 8px", textAlign: "right" }}>
+                    <ArrowRight style={{ width: "12px", height: "12px", color: "#666", transition: "transform 0.15s" }} />
                   </td>
                 </tr>
               ))}
             </tbody>
           </table>
-          <div style={{ padding: "8px 16px", borderTop: "1px solid #1e1e1e", display: "flex", flexWrap: "wrap", alignItems: "center", gap: "12px", fontSize: "11px", color: "#666" }}>
+          <div style={{ padding: "10px 16px", borderTop: "1px solid #1e1e1e", display: "flex", flexWrap: "wrap", alignItems: "center", gap: "12px", fontSize: "11px", color: "#666", background: "rgba(10, 10, 10, 0.3)" }}>
             <span>
               сеть {overview?.network} · рядов {rows.length}
             </span>
             {rows.length > SHOWN_BY_DEFAULT && (
-              <button onClick={() => setShowAll((v) => !v)} style={{ color: "#3b82f6", background: "transparent", border: "none", cursor: "pointer", fontSize: "11px" }}>
+              <button onClick={() => setShowAll((v) => !v)} style={{ color: "#3b82f6", background: "transparent", border: "none", cursor: "pointer", fontSize: "11px", fontWeight: 500, transition: "color 0.15s" }}
+                onMouseEnter={(e) => e.currentTarget.style.color = "#60a5fa"}
+                onMouseLeave={(e) => e.currentTarget.style.color = "#3b82f6"}
+              >
                 {showAll ? "свернуть" : `показать все ${rows.length}`}
               </button>
             )}
@@ -245,7 +271,7 @@ export function Dashboard({ setTab, setAsset }: DashboardProps) {
       <div className="terminal-header" style={{ flexDirection: "column", alignItems: "flex-start" }}>
         <div style={{ display: "flex", alignItems: "center", gap: "12px", width: "100%" }}>
           <h2 style={{ fontSize: "16px", fontWeight: 600, color: "#fafafa", margin: 0 }}>Рынки Arcus</h2>
-          <span style={{ fontSize: "10px", color: "#10b981", padding: "2px 6px", background: "#1a1a1a", borderRadius: "3px", border: "1px solid #2a2a2a" }}>Robinhood Chain</span>
+          <span style={{ fontSize: "10px", color: "#10b981", padding: "2px 6px", background: "rgba(16, 185, 129, 0.1)", borderRadius: "3px", border: "1px solid rgba(16, 185, 129, 0.2)" }}>Robinhood Chain</span>
           {arcusError && (
             <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: "6px", fontSize: "11px", color: "#ff6b35" }}>
               <TriangleAlert style={{ width: "12px", height: "12px" }} />
@@ -275,10 +301,10 @@ export function Dashboard({ setTab, setAsset }: DashboardProps) {
           </div>
         </div>
       ) : (
-        <div style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", overflow: "hidden" }}>
-          <table style={{ width: "100%", fontSize: "12px", borderCollapse: "collapse" }}>
+        <div style={{ background: "linear-gradient(135deg, #111 0%, #0f0f0f 100%)", border: "1px solid #1e1e1e", borderRadius: "6px", overflow: "hidden", boxShadow: "0 1px 3px rgba(0, 0, 0, 0.2)" }}>
+          <table style={{ width: "100%", fontSize: "12px", borderCollapse: "collapse" }} aria-label="Таблица данных">
             <thead>
-              <tr style={{ textAlign: "left", fontSize: "11px", color: "#666", borderBottom: "1px solid #1e1e1e" }}>
+              <tr style={{ textAlign: "left", fontSize: "11px", color: "#666", borderBottom: "1px solid #1e1e1e", background: "rgba(26, 26, 26, 0.3)" }}>
                 <th style={{ padding: "10px 16px", fontWeight: 500 }}>#</th>
                 <th style={{ padding: "10px 8px", fontWeight: 500 }}>Актив</th>
                 <th style={{ padding: "10px 8px", fontWeight: 500 }}>Тип</th>
@@ -294,31 +320,37 @@ export function Dashboard({ setTab, setAsset }: DashboardProps) {
                 return (
                   <tr
                     key={m.marketId}
-                    style={{ borderBottom: "1px solid #1a1a1a", cursor: "pointer", transition: "background 0.1s" }}
-                    onMouseEnter={(e) => e.currentTarget.style.background = "#1a1a1a"}
-                    onMouseLeave={(e) => e.currentTarget.style.background = "transparent"}
+                    style={{ borderBottom: "1px solid #1a1a1a", cursor: "pointer", transition: "all 0.15s" }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.background = "rgba(26, 26, 26, 0.6)";
+                      e.currentTarget.style.borderColor = "#2a2a2a";
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.background = "transparent";
+                      e.currentTarget.style.borderColor = "#1a1a1a";
+                    }}
                     onClick={() => {
                       setAsset(m.baseAsset);
                       setTab("terminal");
                     }}
                   >
-                    <td style={{ padding: "8px 16px", color: "#666", fontFamily: "'JetBrains Mono', monospace", fontSize: "11px" }}>{i + 1}</td>
-                    <td style={{ padding: "8px" }}>
-                      <div style={{ color: "#fafafa", fontWeight: 500 }}>{m.marketDisplayName}</div>
+                    <td style={{ padding: "10px 16px", color: "#666", fontFamily: "'JetBrains Mono', monospace", fontSize: "11px" }}>{i + 1}</td>
+                    <td style={{ padding: "10px 8px" }}>
+                      <div style={{ color: "#fafafa", fontWeight: 600 }}>{m.marketDisplayName}</div>
                       <div style={{ color: "#666", fontSize: "11px", fontFamily: "'JetBrains Mono', monospace" }}>{m.baseAsset}/{m.quoteAsset}</div>
                     </td>
-                    <td style={{ padding: "8px" }}>
-                      <span style={{ fontSize: "10px", padding: "2px 6px", background: "#1a1a1a", color: "#888", borderRadius: "3px", border: "1px solid #2a2a2a" }}>
+                    <td style={{ padding: "10px 8px" }}>
+                      <span style={{ fontSize: "10px", padding: "2px 6px", background: "rgba(26, 26, 26, 0.5)", color: "#888", borderRadius: "3px", border: "1px solid #2a2a2a", fontWeight: 500 }}>
                         {isArcusPerp(m) ? "PERP" : "SPOT"}
                       </span>
                     </td>
-                    <td style={{ padding: "8px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: "#fafafa" }}>
+                    <td style={{ padding: "10px 8px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: "#fafafa", fontWeight: 500 }}>
                       {price ? `$${Number(price).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "—"}
                     </td>
-                    <td style={{ padding: "8px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: "#888", fontSize: "11px" }}>{m.tickSize}</td>
-                    <td style={{ padding: "8px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: "#888", fontSize: "11px" }}>{m.stepSize}</td>
-                    <td style={{ padding: "8px", fontSize: "11px" }}>
-                      <span style={{ color: m.status === "ACTIVE" ? "#10b981" : "#666" }}>
+                    <td style={{ padding: "10px 8px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: "#888", fontSize: "11px" }}>{m.tickSize}</td>
+                    <td style={{ padding: "10px 8px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: "#888", fontSize: "11px" }}>{m.stepSize}</td>
+                    <td style={{ padding: "10px 8px", fontSize: "11px" }}>
+                      <span style={{ color: m.status === "ACTIVE" ? "#10b981" : "#666", fontWeight: m.status === "ACTIVE" ? 500 : 400 }}>
                         {m.status === "ACTIVE" ? "активен" : m.status.toLowerCase()}
                       </span>
                     </td>
@@ -346,7 +378,7 @@ export function Dashboard({ setTab, setAsset }: DashboardProps) {
       </div>
         {predictError ? (
           <div style={{ background: "#1a1a1a", border: "1px solid #5c3a1a", borderRadius: "6px", padding: "12px 16px", fontSize: "12px", color: "#fbbf24" }}>
-            Открытые рынки Predict не загрузились — {predictError}
+            Открытые рынки Predict временно недоступны. Функция требует подключённый бэкенд Wake.
           </div>
         ) : predict === null ? (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: "8px" }}>

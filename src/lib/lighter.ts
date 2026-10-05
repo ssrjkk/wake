@@ -317,12 +317,12 @@ export async function createFollow(followerId: string, leaderId: string, allocat
   return data.follow_id;
 }
 
-export async function setFollowPaused(followId: string, paused: boolean): Promise<void> {
-  await backendJson(`/follows/${followId}/${paused ? "pause" : "resume"}`, { method: "POST" });
+export async function setFollowPaused(followId: string, paused: boolean, followerId: string): Promise<void> {
+  await backendJson(`/follows/${followId}/${paused ? "pause" : "resume"}?follower_id=${encodeURIComponent(followerId)}`, { method: "POST" });
 }
 
-export async function deleteFollow(followId: string): Promise<void> {
-  await backendJson(`/follows/${followId}`, { method: "DELETE" });
+export async function deleteFollow(followId: string, followerId: string): Promise<void> {
+  await backendJson(`/follows/${followId}?follower_id=${encodeURIComponent(followerId)}`, { method: "DELETE" });
 }
 
 // mirror_log — то, чем закончился каждый прогон копи-движка (leader_listener.py).

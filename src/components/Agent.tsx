@@ -44,7 +44,7 @@ const EXECUTION_STYLE: Record<string, { bg: string; color: string; border?: stri
   failed: { bg: "#2a0a0a", color: "#ef4444", border: "#3d1a1a" },
 };
 
-export function Agent({ followerId, subscription, currentMarket, setToast, startTrial }: AgentProps) {
+export default function Agent({ followerId, subscription, currentMarket, setToast, startTrial }: AgentProps) {
   const [resolution, setResolution] = useState<Resolution>("1h");
   const [candles, setCandles] = useState<Candle[] | null>(null);
   const [candlesError, setCandlesError] = useState<string | null>(null);
@@ -52,6 +52,7 @@ export function Agent({ followerId, subscription, currentMarket, setToast, start
   const [busy, setBusy] = useState(false);
   const [lastDecision, setLastDecision] = useState<Decision | null>(null);
   const [memory, setMemory] = useState<MemoryView | null>(null);
+  const [memoryError, setMemoryError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!currentMarket) return;
@@ -81,8 +82,14 @@ export function Agent({ followerId, subscription, currentMarket, setToast, start
       return;
     }
     backendJson<MemoryView>(`/agent/memory/${followerId}`)
-      .then(setMemory)
-      .catch(() => setMemory(null));
+      .then((m) => {
+        setMemory(m);
+        setMemoryError(null);
+      })
+      .catch((e) => {
+        setMemory(null);
+        setMemoryError(errorText(e));
+      });
   }, [followerId, lastDecision]);
 
   const prices = (candles ?? []).map((c) => c.c);
@@ -240,6 +247,11 @@ export function Agent({ followerId, subscription, currentMarket, setToast, start
             )}
           </div>
 
+          {memoryError && (
+            <div style={{ padding: "10px 16px", background: "rgba(239, 68, 68, 0.08)", border: "1px solid rgba(239, 68, 68, 0.2)", borderRadius: "6px", fontSize: "12px", color: "#ef4444" }}>
+              Не удалось загрузить память агента: {memoryError}
+            </div>
+          )}
           {memory && (
             <div style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", padding: "16px" }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px" }}>

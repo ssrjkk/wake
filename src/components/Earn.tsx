@@ -17,7 +17,7 @@ interface EarnProps {
   lighterAccountIndex: number | null;
 }
 
-export function Earn({ isCopyable, setTab, leaderId, leaderFeeBps, setLeaderFeeBps, lighterAccountIndex }: EarnProps) {
+export default function Earn({ isCopyable, setTab, leaderId, leaderFeeBps, setLeaderFeeBps, lighterAccountIndex }: EarnProps) {
   const [leader, setLeader] = useState<Leader | null>(null);
   const [follows, setFollows] = useState<LeaderFollowRow[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -47,7 +47,7 @@ export function Earn({ isCopyable, setTab, leaderId, leaderFeeBps, setLeaderFeeB
           return;
         }
         const built = await buildLeader(mine);
-        const subs = await listFollowsForLeader(leaderId!).catch(() => []);
+        const subs = await listFollowsForLeader(leaderId!);
         if (!cancelled) {
           setLeader(built);
           setFollows(subs.sort((a, b) => b.allocation_usd - a.allocation_usd));
@@ -112,7 +112,7 @@ export function Earn({ isCopyable, setTab, leaderId, leaderFeeBps, setLeaderFeeB
           </div>
           <p style={{ fontSize: "14px", color: "#a0a0a0", marginBottom: "4px" }}>Переключатель включён, лидера в базе нет</p>
           <p style={{ fontSize: "12px", color: "#666", marginBottom: "16px", maxWidth: "400px" }}>
-            POST /leaders не прошёл: бэкенд не отвечает{lighterAccountIndex == null ? ", либо по этому адресу нет аккаунта Lighter (лидер публикуется по номеру аккаунта, а не по адресу кошелька)" : ""}.
+            Не удалось зарегистрировать лидера: бэкенд недоступен{lighterAccountIndex == null ? ", либо по этому адресу нет аккаунта Lighter" : ""}.
           </p>
           <button onClick={() => setTab("terminal")} style={{ color: "#3b82f6", fontSize: "14px", fontWeight: 500, display: "flex", alignItems: "center", gap: "4px", background: "none", border: "none", cursor: "pointer" }}>
             Проверить в Терминале <ChevronRight style={{ width: "16px", height: "16px" }} />

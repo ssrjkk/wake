@@ -12,7 +12,12 @@ export async function backendJson<T>(path: string, init?: RequestInit): Promise<
   try {
     res = await fetch(`${BACKEND_URL}${path}`, init);
   } catch (e) {
-    throw new Error(`${BACKEND_URL} не отвечает (${e instanceof Error ? e.message : String(e)}). Wake — отдельный сервис, в сборку сайта он не входит.`);
+    // Не показываем localhost URL пользователю — это выглядит непрофессионально на продакшене
+    const isLocalhost = BACKEND_URL.includes("localhost") || BACKEND_URL.includes("127.0.0.1");
+    const message = isLocalhost
+      ? "Сервер недоступен. Функция требует подключённый бэкенд Wake."
+      : `${BACKEND_URL} не отвечает (${e instanceof Error ? e.message : String(e)}). Wake — отдельный сервис, в сборку сайта он не входит.`;
+    throw new Error(message);
   }
   if (!res.ok) {
     // Текст ошибки от бэкенда говорящий (409 «рынок уже резолвлен», 400 «недостаточно
@@ -22,6 +27,10 @@ export async function backendJson<T>(path: string, init?: RequestInit): Promise<
   try {
     return (await res.json()) as T;
   } catch {
+    const isLocalhost = BACKEND_URL.includes("localhost") || BACKEND_URL.includes("127.0.0.1");
+    if (isLocalhost) {
+      throw new Error("Бэкенд Wake не настроен. Функция требует подключённый сервер.");
+    }
     throw new Error(`по адресу ${BACKEND_URL} бэкенда Wake нет: вместо JSON вернулась страница сайта.`);
   }
 }

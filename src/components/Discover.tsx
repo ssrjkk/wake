@@ -10,7 +10,7 @@ interface DiscoverProps {
   setCopyModal: (leader: Leader | null) => void;
 }
 
-export function Discover({ setCopyModal }: DiscoverProps) {
+export default function Discover({ setCopyModal }: DiscoverProps) {
   const [leaders, setLeaders] = useState<Leader[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 

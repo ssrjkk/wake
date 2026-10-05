@@ -25,10 +25,11 @@ interface FundingProps {
   setToast: (toast: string | null) => void;
 }
 
-export function Funding({ markets, setToast }: FundingProps) {
+export default function Funding({ markets, setToast }: FundingProps) {
   const [rates, setRates] = useState<FundingRateRow[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [arcusPerps, setArcusPerps] = useState<ArcusMarket[]>([]);
+  const [arcusError, setArcusError] = useState<string | null>(null);
   const [onlyDeltaNeutral, setOnlyDeltaNeutral] = useState(false);
   const [selected, setSelected] = useState<Row | null>(null);
   const [capital, setCapital] = useState(2000);
@@ -53,8 +54,14 @@ export function Funding({ markets, setToast }: FundingProps) {
 
   useEffect(() => {
     getArcusMarkets()
-      .then((m) => setArcusPerps(m.filter(isArcusPerp)))
-      .catch(() => setArcusPerps([]));
+      .then((m) => {
+        setArcusPerps(m.filter(isArcusPerp));
+        setArcusError(null);
+      })
+      .catch((e) => {
+        setArcusPerps([]);
+        setArcusError(errorText(e));
+      });
   }, []);
 
   const rows = useMemo<Row[]>(() => {
@@ -212,7 +219,9 @@ export function Funding({ markets, setToast }: FundingProps) {
               <th style={{ padding: "10px 8px", fontWeight: 500, textAlign: "right" }}>Binance</th>
               <th style={{ padding: "10px 8px", fontWeight: 500, textAlign: "right" }}>Bybit</th>
               <th style={{ padding: "10px 8px", fontWeight: 500, textAlign: "right" }}>Hyperliquid</th>
-              <th style={{ padding: "10px 8px", fontWeight: 500, textAlign: "right" }}>Arcus</th>
+              <th style={{ padding: "10px 8px", fontWeight: 500, textAlign: "right" }}>
+                Arcus{arcusError && <span style={{ color: "#ef4444", fontSize: "10px", display: "block", fontWeight: 400 }}>ошибка загрузки</span>}
+              </th>
               <th style={{ padding: "10px 8px", fontWeight: 500 }}>Спот-нога</th>
               <th style={{ padding: "10px 8px" }}></th>
             </tr>

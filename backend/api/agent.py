@@ -41,7 +41,7 @@ def _get_risk_state(user_id: str) -> UserRiskState:
 class AgentStepRequest(BaseModel):
     user_id: str
     market_id: int
-    recent_prices: list
+    recent_prices: list[float]
     size_decimals: int = 4
     price_decimals: int = 0
     base_size_usd: float = 100

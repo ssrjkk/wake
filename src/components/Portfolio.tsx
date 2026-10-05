@@ -26,10 +26,11 @@ const STATUS_STYLE: Record<MirrorLogRow["status"], { bg: string; color: string; 
   failed: { bg: "#2a0a0a", color: "#ef4444", border: "#3d1a1a" },
 };
 
-export function Portfolio({ following, setTab, togglePause, unfollow, followerId, lighterAccountIndex, hasWallet, markets }: PortfolioProps) {
+export default function Portfolio({ following, setTab, togglePause, unfollow, followerId, lighterAccountIndex, hasWallet, markets }: PortfolioProps) {
   const [account, setAccount] = useState<LighterAccount | null>(null);
   const [accountError, setAccountError] = useState<string | null>(null);
   const [mirrorLog, setMirrorLog] = useState<MirrorLogRow[] | null>(null);
+  const [mirrorLogError, setMirrorLogError] = useState<string | null>(null);
 
   useEffect(() => {
     if (lighterAccountIndex == null) {
@@ -65,10 +66,15 @@ export function Portfolio({ following, setTab, togglePause, unfollow, followerId
     async function load() {
       try {
         const rows = await getMirrorLog(followerId!, 50);
-        if (!cancelled) setMirrorLog(rows);
-      } catch {
-        // Бэкенд лежит — журнала просто нет, без красных экранов.
-        if (!cancelled) setMirrorLog([]);
+        if (!cancelled) {
+          setMirrorLog(rows);
+          setMirrorLogError(null);
+        }
+      } catch (e) {
+        if (!cancelled) {
+          setMirrorLog([]);
+          setMirrorLogError(errorText(e));
+        }
       }
     }
     void load();
@@ -148,9 +154,14 @@ export function Portfolio({ following, setTab, togglePause, unfollow, followerId
                     </td>
                     <td style={{ padding: "12px 0", textAlign: "right" }}>
                       <button
-                        onClick={() => unfollow(t.followId)}
+                        onClick={() => {
+                          if (window.confirm("Удалить подписку? Это действие нельзя отменить.")) {
+                            unfollow(t.followId);
+                          }
+                        }}
                         style={{ color: "#666", background: "none", border: "none", cursor: "pointer", padding: 0, display: "flex" }}
                         title="Удалить подписку из follows"
+                        aria-label="Удалить подписку"
                       >
                         <X style={{ width: "16px", height: "16px" }} />
                       </button>
@@ -265,6 +276,10 @@ export function Portfolio({ following, setTab, togglePause, unfollow, followerId
           <div style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", padding: "16px" }}>
             {mirrorLog === null ? (
               <p style={{ fontSize: "13px", color: "#666", margin: 0 }}>Читаю журнал…</p>
+            ) : mirrorLogError ? (
+              <p style={{ fontSize: "13px", color: "#ef4444", margin: 0 }}>
+                Не удалось загрузить журнал: {mirrorLogError}
+              </p>
             ) : mirrorLog.length === 0 ? (
               <p style={{ fontSize: "13px", color: "#666", lineHeight: 1.6, margin: 0 }}>
                 Пусто. Строки появляются, когда <code style={{ color: "#a0a0a0" }}>leader_listener.py</code> видит изменение позиции лидера по одной из

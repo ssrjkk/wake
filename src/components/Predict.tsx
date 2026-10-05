@@ -50,11 +50,12 @@ function conditionOf(m: PredictMarket): string | null {
   return `${sign} ${value} · mark-цена Lighter, рынок #${m.lighter_market_id}`;
 }
 
-export function Predict({ followerId, setToast, onConnect }: PredictProps) {
+export default function Predict({ followerId, setToast, onConnect }: PredictProps) {
   const [status, setStatus] = useState<PredictStatus>("open");
   const [markets, setMarkets] = useState<PredictMarket[] | null>(null);
   const [marketsError, setMarketsError] = useState<string | null>(null);
   const [positions, setPositions] = useState<PredictPosition[] | null>(null);
+  const [positionsError, setPositionsError] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0);
   const [trade, setTrade] = useState<{ market: PredictMarket; outcome: "yes" | "no"; held: number } | null>(null);
   const [sellMode, setSellMode] = useState(false);
@@ -62,6 +63,17 @@ export function Predict({ followerId, setToast, onConnect }: PredictProps) {
   const [preview, setPreview] = useState<number | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
+  const [tradeConfirmed, setTradeConfirmed] = useState(false);
+
+  useEffect(() => {
+    if (!trade) return;
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") setTrade(null);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [trade]);
+
   // Срок рынка пересчитывается по часам, поэтому раз в минуту обновляем только
   // локальные подписи: данные рынка при этом не дёргаются — они меняются со
   // сделками, а не со временем.
@@ -98,10 +110,16 @@ export function Predict({ followerId, setToast, onConnect }: PredictProps) {
     let live = true;
     getPredictPositions(followerId)
       .then((rows) => {
-        if (live) setPositions(rows);
+        if (live) {
+          setPositions(rows);
+          setPositionsError(null);
+        }
       })
-      .catch(() => {
-        if (live) setPositions([]);
+      .catch((e) => {
+        if (live) {
+          setPositions([]);
+          setPositionsError(errorText(e));
+        }
       });
     return () => {
       live = false;
@@ -127,6 +145,7 @@ export function Predict({ followerId, setToast, onConnect }: PredictProps) {
     setSellMode(false);
     setShares(10);
     setPreview(null);
+    setTradeConfirmed(false);
     setPreviewError(null);
   }
 
@@ -198,7 +217,17 @@ export function Predict({ followerId, setToast, onConnect }: PredictProps) {
             <h2 style={{ fontSize: "16px", fontWeight: 600, color: "#fafafa", margin: 0 }}>Predict</h2>
             <button
               onClick={() => setNonce((n) => n + 1)}
-              style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: "6px", fontSize: "11px", color: "#888", background: "transparent", border: "1px solid #2a2a2a", borderRadius: "4px", padding: "6px 10px", cursor: "pointer" }}
+              style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: "6px", fontSize: "11px", color: "#888", background: "rgba(26, 26, 26, 0.5)", border: "1px solid #2a2a2a", borderRadius: "4px", padding: "6px 10px", cursor: "pointer", transition: "all 0.15s" }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.borderColor = "#3a3a3a";
+                e.currentTarget.style.color = "#aaa";
+                e.currentTarget.style.background = "rgba(26, 26, 26, 0.8)";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.borderColor = "#2a2a2a";
+                e.currentTarget.style.color = "#888";
+                e.currentTarget.style.background = "rgba(26, 26, 26, 0.5)";
+              }}
             >
               <RefreshCw style={{ width: "12px", height: "12px" }} /> Обновить
             </button>
@@ -217,12 +246,24 @@ export function Predict({ followerId, setToast, onConnect }: PredictProps) {
               padding: "6px 12px",
               borderRadius: "4px",
               fontSize: "11px",
-              fontWeight: 500,
-              background: status === f.id ? "#1a1a1a" : "transparent",
+              fontWeight: status === f.id ? 600 : 500,
+              background: status === f.id ? "rgba(59, 130, 246, 0.1)" : "rgba(26, 26, 26, 0.3)",
               color: status === f.id ? "#3b82f6" : "#ccc",
-              border: status === f.id ? "1px solid #3b82f6" : "1px solid #2a2a2a",
+              border: status === f.id ? "1px solid rgba(59, 130, 246, 0.3)" : "1px solid #2a2a2a",
               cursor: "pointer",
               transition: "all 0.15s"
+            }}
+            onMouseEnter={(e) => {
+              if (status !== f.id) {
+                e.currentTarget.style.background = "rgba(26, 26, 26, 0.6)";
+                e.currentTarget.style.borderColor = "#3a3a3a";
+              }
+            }}
+            onMouseLeave={(e) => {
+              if (status !== f.id) {
+                e.currentTarget.style.background = "rgba(26, 26, 26, 0.3)";
+                e.currentTarget.style.borderColor = "#2a2a2a";
+              }
             }}
           >
             {f.label}
@@ -230,26 +271,32 @@ export function Predict({ followerId, setToast, onConnect }: PredictProps) {
         ))}
         <span style={{ fontSize: "11px", color: "#666", marginLeft: "auto" }}>
           {positions ? `позиций: ${positions.length}` : followerId ? "позиции грузятся…" : "позиции — после входа"}
-          {claimable.length > 0 && <span style={{ color: "#10b981" }}> · доступно к выплате {claimable.length}</span>}
+          {claimable.length > 0 && <span style={{ color: "#10b981", fontWeight: 500 }}> · доступно к выплате {claimable.length}</span>}
         </span>
       </div>
 
+      {positionsError && (
+        <div style={{ padding: "10px 16px", background: "rgba(239, 68, 68, 0.08)", border: "1px solid rgba(239, 68, 68, 0.2)", borderRadius: "6px", fontSize: "12px", color: "#ef4444", marginBottom: "12px" }}>
+          Не удалось загрузить позиции: {positionsError}
+        </div>
+      )}
+
       {positions && positions.length > 0 && (
-        <div style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", overflow: "hidden" }}>
-          <div style={{ padding: "10px 16px", borderBottom: "1px solid #1e1e1e", fontSize: "10px", textTransform: "uppercase", letterSpacing: "0.05em", color: "#666" }}>
+        <div style={{ background: "linear-gradient(135deg, #111 0%, #0f0f0f 100%)", border: "1px solid #1e1e1e", borderRadius: "6px", overflow: "hidden", boxShadow: "0 1px 3px rgba(0, 0, 0, 0.2)" }}>
+          <div style={{ padding: "10px 16px", borderBottom: "1px solid #1e1e1e", fontSize: "10px", textTransform: "uppercase", letterSpacing: "0.05em", color: "#666", background: "rgba(26, 26, 26, 0.3)", fontWeight: 600 }}>
             Мои позиции
           </div>
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", fontSize: "12px", borderCollapse: "collapse" }}>
               <thead>
-                <tr style={{ textAlign: "left", fontSize: "10px", textTransform: "uppercase", letterSpacing: "0.05em", color: "#666" }}>
-                  <th style={{ padding: "8px 16px", fontWeight: 500 }}>Рынок</th>
-                  <th style={{ padding: "8px 12px", fontWeight: 500, textAlign: "right" }}>Доля</th>
-                  <th style={{ padding: "8px 12px", fontWeight: 500, textAlign: "right" }}>shares</th>
-                  <th style={{ padding: "8px 12px", fontWeight: 500, textAlign: "right" }}>Средняя</th>
-                  <th style={{ padding: "8px 12px", fontWeight: 500, textAlign: "right" }}>Стоит сейчас</th>
-                  <th style={{ padding: "8px 12px", fontWeight: 500, textAlign: "right" }}>P&L</th>
-                  <th style={{ padding: "8px 16px", fontWeight: 500, textAlign: "right" }}> </th>
+                <tr style={{ textAlign: "left", fontSize: "10px", textTransform: "uppercase", letterSpacing: "0.05em", color: "#666", background: "rgba(26, 26, 26, 0.2)" }}>
+                  <th style={{ padding: "10px 16px", fontWeight: 500 }}>Рынок</th>
+                  <th style={{ padding: "10px 12px", fontWeight: 500, textAlign: "right" }}>Доля</th>
+                  <th style={{ padding: "10px 12px", fontWeight: 500, textAlign: "right" }}>shares</th>
+                  <th style={{ padding: "10px 12px", fontWeight: 500, textAlign: "right" }}>Средняя</th>
+                  <th style={{ padding: "10px 12px", fontWeight: 500, textAlign: "right" }}>Стоит сейчас</th>
+                  <th style={{ padding: "10px 12px", fontWeight: 500, textAlign: "right" }}>P&L</th>
+                  <th style={{ padding: "10px 16px", fontWeight: 500, textAlign: "right" }}> </th>
                 </tr>
               </thead>
               <tbody>
@@ -259,8 +306,11 @@ export function Predict({ followerId, setToast, onConnect }: PredictProps) {
                       ? predictOutcomeWorth(p.market_outcome, p.outcome) * p.shares - p.net_cost_usd
                       : p.mark_value_usd - p.net_cost_usd;
                   return (
-                    <tr key={`${p.market_id}:${p.outcome}`} style={{ borderTop: "1px solid #1a1a1a" }}>
-                      <td style={{ padding: "10px 16px", color: "#fafafa" }}>
+                    <tr key={`${p.market_id}:${p.outcome}`} style={{ borderTop: "1px solid #1a1a1a", transition: "background 0.15s" }}
+                      onMouseEnter={(e) => e.currentTarget.style.background = "rgba(26, 26, 26, 0.4)"}
+                      onMouseLeave={(e) => e.currentTarget.style.background = "transparent"}
+                    >
+                      <td style={{ padding: "12px 16px", color: "#fafafa" }}>
                         <div style={{ maxWidth: "350px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.question}</div>
                         <div style={{ fontSize: "10px", color: "#666", marginTop: "2px" }}>
                           {p.outcome.toUpperCase()} ·{" "}
@@ -268,21 +318,29 @@ export function Predict({ followerId, setToast, onConnect }: PredictProps) {
                           {p.claimed && " · забрано"}
                         </div>
                       </td>
-                      <td style={{ padding: "10px 12px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: "#ccc" }}>{cents(p.mark_price)}</td>
-                      <td style={{ padding: "10px 12px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: "#ccc" }}>{p.shares}</td>
-                      <td style={{ padding: "10px 12px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: "#ccc" }}>{money(p.avg_entry_usd)}</td>
-                      <td style={{ padding: "10px 12px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: "#ccc" }}>
+                      <td style={{ padding: "12px 12px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: "#ccc" }}>{cents(p.mark_price)}</td>
+                      <td style={{ padding: "12px 12px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: "#ccc" }}>{p.shares}</td>
+                      <td style={{ padding: "12px 12px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: "#ccc" }}>{money(p.avg_entry_usd)}</td>
+                      <td style={{ padding: "12px 12px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: "#ccc", fontWeight: 500 }}>
                         {p.market_status === "resolved" ? money(p.claimable_usd) : money(p.mark_value_usd)}
                       </td>
-                      <td style={{ padding: "10px 12px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: pnl >= 0 ? "#10b981" : "#ef4444" }}>
+                      <td style={{ padding: "12px 12px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: pnl >= 0 ? "#10b981" : "#ef4444", fontWeight: 600 }}>
                         {pnl >= 0 ? "+" : "−"}
                         {money(Math.abs(pnl))}
                       </td>
-                      <td style={{ padding: "10px 16px", textAlign: "right" }}>
+                      <td style={{ padding: "12px 16px", textAlign: "right" }}>
                         {p.claimable_usd > 0 && !p.claimed && (
                           <button
                             onClick={() => void claim(p)}
-                            style={{ background: "#10b981", color: "#0a0a0a", fontSize: "11px", fontWeight: 600, padding: "6px 12px", border: "none", borderRadius: "4px", cursor: "pointer" }}
+                            style={{ background: "linear-gradient(135deg, #10b981 0%, #34d399 100%)", color: "#0a0a0a", fontSize: "11px", fontWeight: 600, padding: "6px 12px", border: "none", borderRadius: "4px", cursor: "pointer", transition: "all 0.15s", boxShadow: "0 1px 2px rgba(16, 185, 129, 0.2)" }}
+                            onMouseEnter={(e) => {
+                              e.currentTarget.style.filter = "brightness(1.1)";
+                              e.currentTarget.style.boxShadow = "0 2px 4px rgba(16, 185, 129, 0.3)";
+                            }}
+                            onMouseLeave={(e) => {
+                              e.currentTarget.style.filter = "brightness(1)";
+                              e.currentTarget.style.boxShadow = "0 1px 2px rgba(16, 185, 129, 0.2)";
+                            }}
                           >
                             Забрать {money(p.claimable_usd)}
                           </button>
@@ -301,8 +359,8 @@ export function Predict({ followerId, setToast, onConnect }: PredictProps) {
         <div style={{ background: "#1a0a0a", border: "1px solid #5c1a1a", borderRadius: "6px", padding: "12px 16px", display: "flex", alignItems: "flex-start", gap: "10px" }}>
           <AlertTriangle style={{ width: "14px", height: "14px", color: "#ef4444", marginTop: "2px", flexShrink: 0 }} />
           <div>
-            <p style={{ fontSize: "12px", color: "#fca5a5", margin: 0 }}>Список рынков не загрузился</p>
-            <p style={{ fontSize: "10px", color: "#ef4444", fontFamily: "'JetBrains Mono', monospace", marginTop: "4px" }}>{marketsError}</p>
+            <p style={{ fontSize: "12px", color: "#fca5a5", margin: 0 }}>Список рынков временно недоступен</p>
+            <p style={{ fontSize: "11px", color: "#999", marginTop: "4px" }}>Функция требует подключённый бэкенд Wake.</p>
           </div>
         </div>
       )}
@@ -432,7 +490,7 @@ export function Predict({ followerId, setToast, onConnect }: PredictProps) {
               <h3 style={{ fontSize: "13px", color: "#fafafa", fontWeight: 600, margin: 0 }}>
                 {sellMode ? "Продать" : "Купить"} {trade.outcome.toUpperCase()} — {trade.market.question}
               </h3>
-              <button onClick={() => setTrade(null)} style={{ color: "#666", background: "none", border: "none", cursor: "pointer", padding: 0, flexShrink: 0 }}>
+              <button onClick={() => setTrade(null)} aria-label="Закрыть" style={{ color: "#666", background: "none", border: "none", cursor: "pointer", padding: 0, flexShrink: 0 }}>
                 <X style={{ width: "16px", height: "16px" }} />
               </button>
             </div>
@@ -494,17 +552,25 @@ export function Predict({ followerId, setToast, onConnect }: PredictProps) {
             </div>
 
             <button
-              onClick={() => void confirmTrade()}
+              onClick={() => {
+                if (!tradeConfirmed) {
+                  setTradeConfirmed(true);
+                  return;
+                }
+                void confirmTrade();
+              }}
               disabled={sending || preview == null || shares <= 0 || (sellMode && shares > trade.held)}
-              style={{ width: "100%", background: sending || preview == null || shares <= 0 || (sellMode && shares > trade.held) ? "#1a1a1a" : "#3b82f6", color: sending || preview == null || shares <= 0 || (sellMode && shares > trade.held) ? "#666" : "#fff", fontWeight: 600, borderRadius: "4px", padding: "10px 0", border: "none", cursor: "pointer", fontSize: "12px" }}
+              style={{ width: "100%", background: sending || preview == null || shares <= 0 || (sellMode && shares > trade.held) ? "#1a1a1a" : tradeConfirmed ? "#ef4444" : "#3b82f6", color: sending || preview == null || shares <= 0 || (sellMode && shares > trade.held) ? "#666" : "#fff", fontWeight: 600, borderRadius: "4px", padding: "10px 0", border: "none", cursor: "pointer", fontSize: "12px" }}
             >
               {sending
                 ? "Отправка…"
                 : preview == null
                   ? "Цена недоступна"
-                  : sellMode
-                    ? `Продать ${shares}`
-                    : `Купить ${shares} за ${money(preview)}`}
+                  : tradeConfirmed
+                    ? "Подтвердить"
+                    : sellMode
+                      ? `Продать ${shares}`
+                      : `Купить ${shares} за ${money(preview)}`}
             </button>
             <p style={{ fontSize: "10px", color: "#666", marginTop: "12px", textAlign: "center", lineHeight: 1.5 }}>
               Номинал — это не прибыль: share победившего исхода после резолюции стоит $1, проигравшего — $0,

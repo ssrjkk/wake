@@ -12,8 +12,10 @@ import hmac
 import os
 import time as _time
 import uuid
+from typing import Literal
+
 from fastapi import APIRouter, HTTPException, Query, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 import predict_db as pdb
 import audit_log as al
@@ -46,9 +48,23 @@ class CreatePriceMarket(BaseModel):
     question: str
     lighter_market_id: int
     threshold: float
-    comparator: str  # ">=" | "<=" | ">" | "<"
+    comparator: Literal[">=", "<=", ">", "<"]
     resolve_at: float
     b: float = 100
+
+    @field_validator("resolve_at")
+    @classmethod
+    def resolve_at_in_future(cls, v: float) -> float:
+        if v <= _time.time():
+            raise ValueError("resolve_at must be in the future")
+        return v
+
+    @field_validator("b")
+    @classmethod
+    def b_positive(cls, v: float) -> float:
+        if v <= 0:
+            raise ValueError("b must be positive")
+        return v
 
 
 class CreateEventMarket(BaseModel):
@@ -56,11 +72,32 @@ class CreateEventMarket(BaseModel):
     resolve_at: float
     b: float = 100
 
+    @field_validator("resolve_at")
+    @classmethod
+    def resolve_at_in_future(cls, v: float) -> float:
+        if v <= _time.time():
+            raise ValueError("resolve_at must be in the future")
+        return v
+
+    @field_validator("b")
+    @classmethod
+    def b_positive(cls, v: float) -> float:
+        if v <= 0:
+            raise ValueError("b must be positive")
+        return v
+
 
 class TradeRequest(BaseModel):
     user_id: str
-    outcome: str  # "yes" | "no"
-    shares: float  # >0 купить, <0 продать
+    outcome: Literal["yes", "no"]
+    shares: float
+
+    @field_validator("shares")
+    @classmethod
+    def shares_nonzero(cls, v: float) -> float:
+        if v == 0:
+            raise ValueError("shares must not be zero")
+        return v
 
 
 class ResolveEventRequest(BaseModel):
