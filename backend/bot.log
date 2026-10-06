@@ -1,0 +1,9 @@
+2026-10-06 11:08:07 INFO [aiogram.dispatcher] Start polling
+2026-10-06 11:08:07 INFO [aiogram.dispatcher] Run polling for bot @waketrade_bot id=8889080460 - 'wake'
+2026-10-06 11:24:30 ERROR [aiogram.dispatcher] Failed to fetch updates - TelegramNetworkError: HTTP Client says - ClientOSError: [WinError 64] Указанное сетевое имя более недоступно
+2026-10-06 11:24:30 WARNING [aiogram.dispatcher] Sleep for 1.000000 seconds and try again... (tryings = 0, bot id = 8889080460)
+2026-10-06 11:24:52 ERROR [aiogram.dispatcher] Failed to fetch updates - TelegramNetworkError: HTTP Client says - ClientConnectorError: Cannot connect to host api.telegram.org:443 ssl:default [Превышен таймаут семафора]
+2026-10-06 11:24:52 WARNING [aiogram.dispatcher] Sleep for 1.215488 seconds and try again... (tryings = 1, bot id = 8889080460)
+2026-10-06 11:25:09 INFO [aiogram.dispatcher] Connection established (tryings = 2, bot id = 8889080460)
+2026-10-06 11:57:49 ERROR [aiogram.dispatcher] Failed to fetch updates - TelegramNetworkError: HTTP Client says - ClientOSError: [WinError 64] Указанное сетевое имя более недоступно
+2026-10-06 11:57:49 WARNING [aiogram.dispatcher] Sleep for 1.000000 seconds and try again... (tryings = 0, bot id = 8889080460)

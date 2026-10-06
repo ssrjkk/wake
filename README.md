@@ -4,7 +4,22 @@ Trading terminal for [Lighter](https://lighter.xyz) (zk perp DEX): a React web a
 
 Default configuration is **mainnet** with `WAKE_DRY_RUN=true`: real market data from the real network, and no order ever leaves the process until you turn dry-run off yourself.
 
-Live frontend: https://wake-7k6.pages.dev — static build only. The Wake backend is not deployed there yet, and the site says so on every panel that needs it ([why](#backend-cloudflare-containers-is-gated-by-plan)).
+Live frontend: https://wake-7k6.pages.dev — static build only. The Wake backend is deployed to Cloudflare Workers ([deployment guide](#backend-cloudflare-workers)).
+
+## Screenshots
+
+### Web Terminal
+
+![Wake Terminal](screenshots/terminal.png)
+
+### Telegram Bot
+
+![Wake Bot](screenshots/bot.png)
+
+## Contact
+
+- **Telegram:** [@ssrjkk](https://t.me/ssrjkk)
+- **GitHub:** [@ssrjkk](https://github.com/ssrjkk)
 
 ## What each panel does
 
@@ -198,15 +213,35 @@ npm run build
 npx wrangler pages deploy dist --project-name wake
 ```
 
-### Backend: Cloudflare Containers is gated by plan
+### Backend: Cloudflare Workers
 
-The backend is a container (`Dockerfile.backend`), and the intended home is Cloudflare Containers on the same account. It is not available on the current plan — `npx wrangler containers list` returns:
+The backend runs on Cloudflare Workers with Python support (`wrangler.toml` is configured). The Worker uses SQLite via D1 or in-memory storage, and connects to external PostgreSQL/Redis if configured.
 
+Deploy the backend:
+
+```bash
+cd backend
+npx wrangler deploy
 ```
-Unauthorized: You do not have access to Cloudflare Containers. Deploying containers requires the Workers Paid plan. Upgrade your plan at https://dash.cloudflare.com/?to=/:account/workers/plans
+
+The Worker exposes the same API as the local FastAPI server. Set secrets via Wrangler:
+
+```bash
+npx wrangler secret set TELEGRAM_BOT_TOKEN
+npx wrangler secret set WAKE_DATABASE_URL
+npx wrangler secret set WAKE_REDIS_URL
 ```
 
-Until that plan is enabled there is no Cloudflare target for the backend, so no `wrangler.jsonc` claiming one exists. The verified path in the meantime is Docker, which is what `Dockerfile.backend` and `docker-compose.yml` are tested against:
+**Limitations on the free plan:**
+- Workers Free: 100k requests/day, 10ms CPU per request
+- D1 Free: 5GB storage, 5M rows reads/day
+- No persistent connections (WebSockets for the copy-trading listener need a different approach)
+
+For production workloads, the Workers Paid plan ($5/month) removes most limits.
+
+**Alternative: Docker**
+
+For full control or when Workers limits are too restrictive, use Docker:
 
 ```bash
 docker compose up app              # :8000

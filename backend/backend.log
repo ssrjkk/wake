@@ -1,13 +1,107 @@
-INFO:     Started server process [20008]
+INFO:     Started server process [3140]
 INFO:     Waiting for application startup.
-2026-10-04 19:19:20 INFO [wake.app] Starting Wake backend (network=mainnet, dry_run=True)
+2026-10-05 20:20:41 INFO [wake.app] Starting Wake backend (network=mainnet, dry_run=True)
 INFO:     Application startup complete.
-INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+INFO:     Uvicorn running on http://0.0.0.0:8001 (Press CTRL+C to quit)
 No pending migrations
-INFO:     127.0.0.1:18905 - "GET /ready HTTP/1.1" 200 OK
-INFO:     127.0.0.1:43800 - "GET /health HTTP/1.1" 200 OK
-INFO:     127.0.0.1:8551 - "GET /predict/markets?status=open HTTP/1.1" 200 OK
-INFO:     127.0.0.1:43800 - "GET /health HTTP/1.1" 200 OK
-INFO:     127.0.0.1:28037 - "GET /predict/markets?status=open HTTP/1.1" 200 OK
-INFO:     127.0.0.1:47965 - "GET /markets/overview HTTP/1.1" 200 OK
-INFO:     127.0.0.1:28037 - "GET /markets/overview HTTP/1.1" 200 OK
+INFO:     127.0.0.1:22837 - "GET /health HTTP/1.1" 200 OK
+INFO:     194.46.59.218:0 - "HEAD /health HTTP/1.1" 405 Method Not Allowed
+INFO:     16.216.88.122:0 - "GET /robots.txt HTTP/1.1" 404 Not Found
+INFO:     16.216.88.70:0 - "GET /robots.txt HTTP/1.1" 404 Not Found
+INFO:     104.30.167.164:0 - "HEAD / HTTP/1.1" 404 Not Found
+INFO:     104.30.167.164:0 - "HEAD / HTTP/1.1" 404 Not Found
+INFO:     104.30.167.164:0 - "HEAD / HTTP/1.1" 404 Not Found
+INFO:     104.30.167.164:0 - "HEAD / HTTP/1.1" 404 Not Found
+INFO:     194.46.59.218:0 - "GET /health HTTP/1.1" 200 OK
+INFO:     194.46.59.218:0 - "GET /predict/markets?status=open HTTP/1.1" 200 OK
+INFO:     194.46.59.218:0 - "GET /markets/overview HTTP/1.1" 200 OK
+INFO:     194.46.59.218:0 - "GET /markets/overview HTTP/1.1" 200 OK
+INFO:     194.46.59.218:0 - "GET /predict/markets?status=open HTTP/1.1" 200 OK
+INFO:     194.46.59.218:0 - "GET /markets/overview HTTP/1.1" 200 OK
+INFO:     194.46.59.218:0 - "GET /predict/markets?status=open HTTP/1.1" 200 OK
+INFO:     194.46.59.218:0 - "GET /markets/overview HTTP/1.1" 200 OK
+INFO:     194.46.59.218:0 - "GET /predict/markets?status=open HTTP/1.1" 200 OK
+INFO:     194.46.59.218:0 - "GET /markets/overview HTTP/1.1" 200 OK
+INFO:     194.46.59.218:0 - "GET /predict/markets?status=open HTTP/1.1" 200 OK
+INFO:     194.46.59.218:0 - "GET /predict/markets?status=open HTTP/1.1" 200 OK
+INFO:     194.46.59.218:0 - "GET /markets/overview HTTP/1.1" 200 OK
+INFO:     194.46.59.218:0 - "GET /markets/overview HTTP/1.1" 200 OK
+INFO:     194.46.59.218:0 - "GET /predict/markets?status=open HTTP/1.1" 200 OK
+INFO:     194.46.59.218:0 - "GET /markets/overview HTTP/1.1" 200 OK
+INFO:     194.46.59.218:0 - "GET /predict/markets?status=open HTTP/1.1" 200 OK
+INFO:     194.46.59.218:0 - "GET /predict/markets?status=open HTTP/1.1" 200 OK
+INFO:     194.46.59.218:0 - "GET /markets/overview HTTP/1.1" 200 OK
+INFO:     194.46.59.218:0 - "GET /predict/markets?status=open HTTP/1.1" 200 OK
+INFO:     194.46.59.218:0 - "GET /markets/overview HTTP/1.1" 200 OK
+INFO:     194.46.59.218:0 - "GET /markets/overview HTTP/1.1" 200 OK
+INFO:     194.46.59.218:0 - "GET /predict/markets?status=open HTTP/1.1" 200 OK
+INFO:     194.46.59.218:0 - "GET /markets/overview HTTP/1.1" 200 OK
+INFO:     194.46.59.218:0 - "GET /predict/markets?status=open HTTP/1.1" 200 OK
+INFO:     194.46.59.218:0 - "GET /markets/overview HTTP/1.1" 200 OK
+INFO:     194.46.59.218:0 - "GET /predict/markets?status=open HTTP/1.1" 200 OK
+INFO:     194.46.59.218:0 - "GET /markets/overview HTTP/1.1" 200 OK
+INFO:     194.46.59.218:0 - "GET /predict/markets?status=open HTTP/1.1" 200 OK
+INFO:     162.217.248.123:0 - "GET /predict/markets?status=open HTTP/1.1" 200 OK
+INFO:     162.217.248.123:0 - "GET /markets/overview HTTP/1.1" 200 OK
+INFO:     162.217.248.123:0 - "GET /predict/markets?status=open HTTP/1.1" 200 OK
+INFO:     162.217.248.123:0 - "GET /markets/overview HTTP/1.1" 200 OK
+INFO:     162.217.248.123:0 - "GET /predict/markets?status=open HTTP/1.1" 200 OK
+INFO:     162.217.248.123:0 - "GET /markets/overview HTTP/1.1" 200 OK
+INFO:     162.217.248.123:0 - "GET /predict/markets?status=open HTTP/1.1" 200 OK
+INFO:     162.217.248.123:0 - "GET /markets/overview HTTP/1.1" 200 OK
+INFO:     162.217.248.123:0 - "GET /predict/markets?status=open HTTP/1.1" 200 OK
+INFO:     162.217.248.123:0 - "GET /markets/overview HTTP/1.1" 200 OK
+INFO:     162.217.248.123:0 - "GET /predict/markets?status=open HTTP/1.1" 200 OK
+INFO:     162.217.248.123:0 - "GET /markets/overview HTTP/1.1" 200 OK
+INFO:     162.217.248.123:0 - "GET /predict/markets?status=open HTTP/1.1" 200 OK
+INFO:     162.217.248.123:0 - "GET /markets/overview HTTP/1.1" 200 OK
+INFO:     162.217.248.123:0 - "GET /predict/markets?status=open HTTP/1.1" 200 OK
+INFO:     162.217.248.123:0 - "GET /markets/overview HTTP/1.1" 200 OK
+INFO:     162.217.248.123:0 - "GET /predict/markets?status=open HTTP/1.1" 200 OK
+INFO:     162.217.248.123:0 - "GET /markets/overview HTTP/1.1" 200 OK
+INFO:     162.217.248.123:0 - "GET /markets/overview HTTP/1.1" 200 OK
+INFO:     162.217.248.123:0 - "GET /predict/markets?status=open HTTP/1.1" 200 OK
+INFO:     162.217.248.123:0 - "GET /predict/markets?status=open HTTP/1.1" 200 OK
+INFO:     162.217.248.123:0 - "GET /markets/overview HTTP/1.1" 200 OK
+INFO:     162.217.248.123:0 - "GET /predict/markets?status=open HTTP/1.1" 200 OK
+INFO:     162.217.248.123:0 - "GET /markets/overview HTTP/1.1" 200 OK
+INFO:     162.217.248.123:0 - "GET /predict/markets?status=open HTTP/1.1" 200 OK
+INFO:     162.217.248.123:0 - "GET /markets/overview HTTP/1.1" 200 OK
+INFO:     162.217.248.123:0 - "GET /markets/overview HTTP/1.1" 200 OK
+INFO:     162.217.248.123:0 - "GET /predict/markets?status=open HTTP/1.1" 200 OK
+INFO:     162.217.248.123:0 - "GET /predict/markets?status=open HTTP/1.1" 200 OK
+INFO:     162.217.248.123:0 - "GET /markets/overview HTTP/1.1" 200 OK
+INFO:     162.217.248.123:0 - "GET /markets/overview HTTP/1.1" 200 OK
+INFO:     162.217.248.123:0 - "GET /predict/markets?status=open HTTP/1.1" 200 OK
+INFO:     162.217.248.123:0 - "GET /predict/markets?status=open HTTP/1.1" 200 OK
+INFO:     162.217.248.123:0 - "GET /markets/overview HTTP/1.1" 200 OK
+INFO:     162.217.248.123:0 - "GET /markets/overview HTTP/1.1" 200 OK
+INFO:     162.217.248.123:0 - "GET /predict/markets?status=open HTTP/1.1" 200 OK
+INFO:     162.217.248.123:0 - "GET /predict/markets?status=open HTTP/1.1" 200 OK
+INFO:     162.217.248.123:0 - "GET /markets/overview HTTP/1.1" 200 OK
+INFO:     162.217.248.123:0 - "GET /predict/markets?status=open HTTP/1.1" 200 OK
+INFO:     162.217.248.123:0 - "GET /markets/overview HTTP/1.1" 200 OK
+INFO:     162.217.248.123:0 - "GET /predict/markets?status=open HTTP/1.1" 200 OK
+INFO:     162.217.248.123:0 - "GET /markets/overview HTTP/1.1" 200 OK
+INFO:     162.217.248.123:0 - "GET /markets/overview HTTP/1.1" 200 OK
+INFO:     162.217.248.123:0 - "GET /predict/markets?status=open HTTP/1.1" 200 OK
+INFO:     162.217.248.123:0 - "GET /predict/markets?status=open HTTP/1.1" 200 OK
+INFO:     162.217.248.123:0 - "GET /markets/overview HTTP/1.1" 200 OK
+INFO:     162.217.248.123:0 - "GET /markets/overview HTTP/1.1" 200 OK
+INFO:     162.217.248.123:0 - "GET /predict/markets?status=open HTTP/1.1" 200 OK
+INFO:     162.217.248.123:0 - "GET /predict/markets?status=open HTTP/1.1" 200 OK
+INFO:     162.217.248.123:0 - "GET /markets/overview HTTP/1.1" 200 OK
+INFO:     162.217.248.123:0 - "GET /predict/markets?status=open HTTP/1.1" 200 OK
+INFO:     162.217.248.123:0 - "GET /markets/overview HTTP/1.1" 200 OK
+INFO:     162.217.248.123:0 - "GET /predict/markets?status=open HTTP/1.1" 200 OK
+INFO:     162.217.248.123:0 - "GET /markets/overview HTTP/1.1" 200 OK
+INFO:     162.217.248.123:0 - "GET /markets/overview HTTP/1.1" 200 OK
+INFO:     162.217.248.123:0 - "GET /predict/markets?status=open HTTP/1.1" 200 OK
+INFO:     162.217.248.123:0 - "GET /predict/markets?status=open HTTP/1.1" 200 OK
+INFO:     162.217.248.123:0 - "GET /markets/overview HTTP/1.1" 200 OK
+INFO:     162.217.248.123:0 - "GET /predict/markets?status=open HTTP/1.1" 200 OK
+INFO:     162.217.248.123:0 - "GET /markets/overview HTTP/1.1" 200 OK
+INFO:     162.217.248.123:0 - "GET /predict/markets?status=open HTTP/1.1" 200 OK
+INFO:     162.217.248.123:0 - "GET /markets/overview HTTP/1.1" 200 OK
+INFO:     162.217.248.123:0 - "GET /markets/overview HTTP/1.1" 200 OK
+INFO:     162.217.248.123:0 - "GET /predict/markets?status=open HTTP/1.1" 200 OK

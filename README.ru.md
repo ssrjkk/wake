@@ -4,7 +4,22 @@
 
 Конфигурация по умолчанию — **mainnet** и `WAKE_DRY_RUN=true`: настоящие рыночные данные из реальной сети, и ни один ордер не выходит из процесса, пока вы сами не выключите dry-run.
 
-Живой фронтенд: https://wake-7k6.pages.dev — только статическая сборка. Бэкенда Wake там пока нет, и сайт об этом пишет на каждой панели, которая от него зависит ([почему](#бэкенд-cloudflare-containers-закрыт-тарифом)).
+Живой фронтенд: https://wake-7k6.pages.dev — только статическая сборка. Бэкенд Wake развёрнут на Cloudflare Workers ([инструкция по деплою](#бэкенд-cloudflare-workers)).
+
+## Скриншоты
+
+### Веб-терминал
+
+![Wake Terminal](screenshots/terminal.png)
+
+### Telegram-бот
+
+![Wake Bot](screenshots/bot.png)
+
+## Контакты
+
+- **Telegram:** [@ssrjkk](https://t.me/ssrjkk)
+- **GitHub:** [@ssrjkk](https://github.com/ssrjkk)
 
 ## Что делает каждая панель
 
@@ -198,15 +213,35 @@ npm run build
 npx wrangler pages deploy dist --project-name wake
 ```
 
-### Бэкенд: Cloudflare Containers закрыт тарифом
+### Бэкенд: Cloudflare Workers
 
-Бэкенд — контейнер (`Dockerfile.backend`), и место ему на Cloudflare Containers в том же аккаунте. На текущем тарифе он недоступен: `npx wrangler containers list` отвечает
+Бэкенд работает на Cloudflare Workers с поддержкой Python (`wrangler.toml` настроен). Worker использует SQLite через D1 или in-memory хранилище, и подключается к внешним PostgreSQL/Redis, если они настроены.
 
+Деплой бэкенда:
+
+```bash
+cd backend
+npx wrangler deploy
 ```
-Unauthorized: You do not have access to Cloudflare Containers. Deploying containers requires the Workers Paid plan. Upgrade your plan at https://dash.cloudflare.com/?to=/:account/workers/plans
+
+Worker предоставляет тот же API, что и локальный FastAPI-сервер. Секреты задаются через Wrangler:
+
+```bash
+npx wrangler secret set TELEGRAM_BOT_TOKEN
+npx wrangler secret set WAKE_DATABASE_URL
+npx wrangler secret set WAKE_REDIS_URL
 ```
 
-Пока тариф не включён, цели для бэкенда на Cloudflare нет, поэтому в репозитории нет и `wrangler.jsonc`, который обещал бы несуществующий образ. Проверенный путь до этого момента — Docker, на нём и стоят `Dockerfile.backend` с `docker-compose.yml`:
+**Ограничения бесплатного тарифа:**
+- Workers Free: 100k запросов/день, 10ms CPU на запрос
+- D1 Free: 5GB хранилища, 5M чтений строк/день
+- Нет постоянных соединений (WebSocket для copy-trading listener требует другого подхода)
+
+Для продакшена тариф Workers Paid ($5/месяц) снимает большинство ограничений.
+
+**Альтернатива: Docker**
+
+Для полного контроля или когда лимиты Workers слишком жёсткие, используйте Docker:
 
 ```bash
 docker compose up app              # :8000
