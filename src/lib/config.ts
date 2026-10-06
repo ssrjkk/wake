@@ -5,7 +5,7 @@
 // умолчанию были бы тихой ошибкой: бот и бэкенд показывают основной рынок, а
 // фронт в это время дергает testnet с другими market ids.
 
-export const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "http://localhost:8000";
+export const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "https://wake-backend-production-3483.up.railway.app";
 export const SIGNING_SERVICE_URL = import.meta.env.VITE_SIGNING_SERVICE_URL || "http://localhost:8787";
 export const LIGHTER_NETWORK: "mainnet" | "testnet" = import.meta.env.VITE_LIGHTER_NETWORK || "mainnet";
 export const TELEGRAM_BOT_NAME = import.meta.env.VITE_TELEGRAM_BOT_NAME || "";

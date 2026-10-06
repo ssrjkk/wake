@@ -4,7 +4,8 @@
 
 Конфигурация по умолчанию — **mainnet** и `WAKE_DRY_RUN=true`: настоящие рыночные данные из реальной сети, и ни один ордер не выходит из процесса, пока вы сами не выключите dry-run.
 
-Живой фронтенд: https://wake-7k6.pages.dev — только статическая сборка. Бэкенд Wake развёрнут на Cloudflare Workers ([инструкция по деплою](#бэкенд-cloudflare-workers)).
+Живой фронтенд: https://wake-7k6.pages.dev  
+Живой бэкенд: https://wake-backend-production-3483.up.railway.app
 
 ## Скриншоты
 

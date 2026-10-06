@@ -4,7 +4,8 @@ Trading terminal for [Lighter](https://lighter.xyz) (zk perp DEX): a React web a
 
 Default configuration is **mainnet** with `WAKE_DRY_RUN=true`: real market data from the real network, and no order ever leaves the process until you turn dry-run off yourself.
 
-Live frontend: https://wake-7k6.pages.dev — static build only. The Wake backend is deployed to Cloudflare Workers ([deployment guide](#backend-cloudflare-workers)).
+Live frontend: https://wake-7k6.pages.dev  
+Live backend: https://wake-backend-production-3483.up.railway.app
 
 ## Screenshots
 
