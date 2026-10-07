@@ -1,6 +1,32 @@
 # pip install -r requirements.txt --break-system-packages
+
+# Core
 lighter-sdk
 fastapi
+pydantic
+pydantic-settings
 uvicorn
 websockets
+
+# Database — PostgreSQL (async)
+sqlalchemy[asyncio]>=2.0
+asyncpg
+aiosqlite
+alembic
+
+# Cache & Rate limiting
+redis>=5.0
+
+# HTTP client (telegram_bot.py)
+httpx
+
+# Encryption (encrypted_key_store.py)
+cryptography
+
+# Telegram bot (telegram_bot.py) — optional, code works without it
+aiogram
+
+# Error monitoring (optional — only used if SENTRY_DSN is set)
+sentry-sdk
+
 # sqlite3 — стандартная библиотека Python, отдельно ставить не нужно

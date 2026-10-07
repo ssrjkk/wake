@@ -25,7 +25,9 @@ class TestPerTransactionLimit(unittest.TestCase):
         state = UserRiskState("u1")
         buggy_requested_size = 500 * 1000
         r = check_order(limits, state, market_id=0, requested_usd=buggy_requested_size)
-        self.assertFalse(r.allowed, "лимит должен поймать раздутый багом размер, а не пропустить его")
+        self.assertFalse(
+            r.allowed, "лимит должен поймать раздутый багом размер, а не пропустить его"
+        )
 
 
 class TestDailyVolumeLimit(unittest.TestCase):
@@ -63,7 +65,9 @@ class TestPositionLimit(unittest.TestCase):
     def test_position_limit_is_per_market_not_global(self):
         limits = RiskLimits(max_position_usd=1000)
         state = UserRiskState("u1", open_position_usd={0: 1000})  # рынок 0 полон
-        r = check_order(limits, state, market_id=1, requested_usd=500)  # рынок 1 свободен
+        r = check_order(
+            limits, state, market_id=1, requested_usd=500
+        )  # рынок 1 свободен
         self.assertTrue(r.allowed)
 
 
@@ -71,8 +75,13 @@ class TestReduceOnlyBypassesLimits(unittest.TestCase):
     def test_closing_a_position_is_never_blocked_by_limits(self):
         limits = RiskLimits(max_order_usd=100, max_daily_volume_usd=0)  # всё исчерпано
         state = UserRiskState("u1", volume_today_usd=99999)
-        r = check_order(limits, state, market_id=0, requested_usd=50_000, is_reduce_only=True)
-        self.assertTrue(r.allowed, "закрытие позиции не должно блокироваться лимитами — иначе выход из позиции невозможен")
+        r = check_order(
+            limits, state, market_id=0, requested_usd=50_000, is_reduce_only=True
+        )
+        self.assertTrue(
+            r.allowed,
+            "закрытие позиции не должно блокироваться лимитами — иначе выход из позиции невозможен",
+        )
 
 
 class TestRecordExecuted(unittest.TestCase):

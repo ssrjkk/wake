@@ -1,0 +1,58 @@
+# Контекст сборки уезжает на Docker-сервер целиком, а Dockerfile берёт из него
+# только backend/requirements.txt, backend/*.py и backend/api/. Без этого списка
+# в контекст попадают node_modules (385 МБ), .git и локальные базы данных —
+# минуты на загрузку ради файлов, которые в образ не войдут никогда.
+
+# Фронтенд и его инструменты
+node_modules/
+dist/
+public/
+src/
+e2e/
+mockups/
+screenshots/
+coverage/
+test-results/
+playwright-report/
+*.tsbuildinfo
+index.html
+package.json
+package-lock.json
+eslint.config.js
+playwright.config.ts
+postcss.config.js
+tailwind.config.js
+tsconfig.json
+vite.config.ts
+vitest.config.ts
+
+# Локальные состояние и секреты: образ собирает свои БД при первом запросе,
+# а .env в контекст не должен попадать даже неиспользуемым слоем.
+*.db
+backend/*.db
+.env
+.env.*
+backend/.env
+backend/.env.*
+!backend/.env.example
+
+# Мусор инструментов и служебные файлы репозитория
+.git/
+.github/
+.gitignore
+.dockerignore
+Dockerfile
+docker-compose.yml
+LICENSE
+Procfile
+*.md
+railway.json
+runtime.txt
+wrangler.toml
+backend/__pycache__/
+backend/.pytest_cache/
+backend/.ruff_cache/
+backend/.benchmarks/
+backend/alembic/
+backend/alembic.ini
+backend/api/__pycache__/

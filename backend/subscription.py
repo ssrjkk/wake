@@ -25,8 +25,21 @@ TRIAL_DURATION_DAYS = 14
 # Что разблокирует каждый тир — единственный источник правды, не разбросано по коду.
 FEATURES = {
     Tier.FREE: {"terminal_view", "discover_view"},
-    Tier.FREE_TRIAL: {"terminal_view", "discover_view", "copy_trading", "ai_agent", "predict_markets"},
-    Tier.PRO: {"terminal_view", "discover_view", "copy_trading", "ai_agent", "predict_markets", "priority_execution"},
+    Tier.FREE_TRIAL: {
+        "terminal_view",
+        "discover_view",
+        "copy_trading",
+        "ai_agent",
+        "predict_markets",
+    },
+    Tier.PRO: {
+        "terminal_view",
+        "discover_view",
+        "copy_trading",
+        "ai_agent",
+        "predict_markets",
+        "priority_execution",
+    },
 }
 
 
@@ -63,11 +76,18 @@ class Subscription:
 
 def start_trial(user_id: str, now: float | None = None) -> Subscription:
     now = now if now is not None else time.time()
-    return Subscription(user_id=user_id, tier=Tier.FREE_TRIAL, started_at=now, trial_started_at=now)
+    return Subscription(
+        user_id=user_id, tier=Tier.FREE_TRIAL, started_at=now, trial_started_at=now
+    )
 
 
 def upgrade_to_pro(sub: Subscription, now: float | None = None) -> Subscription:
     """Апгрейд — новый объект, не мутация на месте, чтобы вызывающий код не мог
     случайно забыть сохранить изменение в базу."""
     now = now if now is not None else time.time()
-    return Subscription(user_id=sub.user_id, tier=Tier.PRO, started_at=now, trial_started_at=sub.trial_started_at)
+    return Subscription(
+        user_id=sub.user_id,
+        tier=Tier.PRO,
+        started_at=now,
+        trial_started_at=sub.trial_started_at,
+    )

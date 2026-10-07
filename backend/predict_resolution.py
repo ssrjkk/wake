@@ -18,8 +18,8 @@ Oracle с dispute-периодом, как у настоящего Polymarket; �
 для аудита, не замена реальному decentralized dispute-механизму.
 """
 
-import time
 import audit_log as al
+from config import AUDIT_DB_PATH
 from dataclasses import dataclass
 from enum import Enum
 
@@ -41,14 +41,16 @@ _OPS = {
 
 @dataclass(frozen=True)
 class PriceResolution:
-    outcome: str          # "yes" | "no"
+    outcome: str  # "yes" | "no"
     observed_price: float
     threshold: float
     comparator: Comparator
     source: str = "lighter_mark_price"
 
 
-def resolve_price_market(observed_price: float, threshold: float, comparator: Comparator) -> PriceResolution:
+def resolve_price_market(
+    observed_price: float, threshold: float, comparator: Comparator
+) -> PriceResolution:
     """observed_price — РЕАЛЬНАЯ цена с Lighter (getCandles/getOrderBooks в
     src/lib/lighter.ts) на момент/после дедлайна рынка. Эта функция не делает
     сетевых вызовов сама — ей подают уже полученную реальную цену, чтобы её
@@ -67,13 +69,15 @@ def resolve_price_market(observed_price: float, threshold: float, comparator: Co
 @dataclass(frozen=True)
 class EventResolution:
     outcome: str
-    resolved_by: str    # идентификатор куратора — обязателен, не опционален
+    resolved_by: str  # идентификатор куратора — обязателен, не опционален
     resolved_at: float  # unix timestamp
-    evidence_url: str   # ссылка на источник — обязательна, не опциональна
+    evidence_url: str  # ссылка на источник — обязательна, не опциональна
     disputed: bool = False
 
 
-def resolve_event_market(outcome: str, resolved_by: str, resolved_at: float, evidence_url: str) -> EventResolution:
+def resolve_event_market(
+    outcome: str, resolved_by: str, resolved_at: float, evidence_url: str
+) -> EventResolution:
     """НЕ автоматическая, НЕ трастлесс. resolved_by и evidence_url обязательны
     намеренно — резолюция без указания, кто и на основании чего её вынес, не
     создаётся этой функцией вообще. Это минимум для аудита постфактум, не
@@ -83,14 +87,24 @@ def resolve_event_market(outcome: str, resolved_by: str, resolved_at: float, evi
     if not resolved_by:
         raise ValueError("resolved_by обязателен — резолюция без куратора не создаётся")
     if not evidence_url:
-        raise ValueError("evidence_url обязателен — резолюция без источника не создаётся")
-    resolution = EventResolution(outcome=outcome, resolved_by=resolved_by, resolved_at=resolved_at, evidence_url=evidence_url)
-    with al.connect("audit.db") as audit_conn:
-        al.log_action(audit_conn, al.AuditEntry(
-            actor=resolved_by,
-            action="market_resolution",
-            resource=f"event_market:{outcome}",
-            details={"evidence_url": evidence_url, "resolved_at": resolved_at},
-            success=True,
-        ))
+        raise ValueError(
+            "evidence_url обязателен — резолюция без источника не создаётся"
+        )
+    resolution = EventResolution(
+        outcome=outcome,
+        resolved_by=resolved_by,
+        resolved_at=resolved_at,
+        evidence_url=evidence_url,
+    )
+    with al.connect(AUDIT_DB_PATH) as audit_conn:
+        al.log_action(
+            audit_conn,
+            al.AuditEntry(
+                actor=resolved_by,
+                action="market_resolution",
+                resource=f"event_market:{outcome}",
+                details={"evidence_url": evidence_url, "resolved_at": resolved_at},
+                success=True,
+            ),
+        )
     return resolution

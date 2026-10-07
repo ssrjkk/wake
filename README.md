@@ -1,239 +1,269 @@
-# Wake — от макета к настоящему продукту
+# Wake
 
-> [!]  **Читать первым:** `AGENTS.md` (правила для любого ИИ-агента и человека в этом репо; папка `app/` в архиве).
+Trading terminal for [Lighter](https://lighter.xyz) (zk perp DEX): a React web app, a FastAPI backend, and a Telegram bot with a Mini App — the bot and the site read and write the same backend.
 
-Не артефакт для клика — настоящий проект. `npm install && npm run dev`, нужен свой WalletConnect project id (cloud.walletconnect.com) в `src/wagmi.ts`.
+Default configuration is **mainnet** with `WAKE_DRY_RUN=true`: real market data from the real network, and no order ever leaves the process until you turn dry-run off yourself.
 
-## Что реально прямо сейчас
+Live frontend: https://wake-7k6.pages.dev  
+Live backend: https://wake-backend-production-3483.up.railway.app
 
-- **Tailwind реально подключён** (`tailwind.config.js`, `postcss.config.js`, `src/index.css`, импорт в `main.tsx`). Раньше классы были в JSX, но без сборки CSS — приложение отрисовывалось бы полностью неокрашенным. Поймал и починил это сам, стоит перепроверять такие вещи в реальном проекте — Claude.ai-артефакты прощают то, что реальная сборка не прощает.
-- **Wallet connect** (`src/wagmi.ts`, `App.tsx`) — настоящее подключение Ethereum-кошелька через wagmi/viem.
-- **Реальная проверка аккаунта на Lighter** — после коннекта приложение реально спрашивает `GET /api/v1/account?by=l1_address` и показывает твой account index или честно говорит, что аккаунт не зарегистрирован.
-- **Живые рыночные данные** (`src/lib/lighter.ts`) — список рынков, часовые свечи и лента последних сделок с `https://mainnet.zklighter.elliot.ai/api/v1`. Терминал: график — раз в 20с, лента сделок — раз в 4с (WebSocket вместо polling — следующий логичный апгрейд). Поля отдельной сделки в `getRecentTrades` угаданы защитным парсингом — точную схему ответа доки не публикуют статически, только интерактивный виджет; сверь перед тем как полагаться на неё для чего-то важнее отображения.
-- **Приличные состояния загрузки** — шиммер-скелетоны вместо текста «Загрузка…», карточка ошибки вместо голого текста.
-- **Реальный пример подписи ордера** (`backend/place_order_example.py`) — рабочий вызов `SignerClient.create_order` по их официальному Python SDK (`pip install lighter-sdk`). Это НЕ часть браузерного приложения и размещает настоящий ордер, если вставить настоящие ключи и запустить — там есть предупреждение.
-- **Ядро копи-движка, протестировано** (`backend/mirror_engine.py`, `backend/test_mirror_engine.py`) — чистая логика расчёта зеркальных ордеров: пропорциональный риск (не 1:1 копирование размера), явный skip с причиной при нехватке маржи или размере ниже минимума рынка, пропорциональное закрытие от собственного размера подписчика при уменьшении лидером. Никаких ключей, никакой сети — 10 тестов, реально прогнаны: `cd backend && python3 -m unittest test_mirror_engine -v` → `OK`.
-- **Кнопка «Открыть Long/Short» реально пытается исполниться** (`backend/signing_service.py`, `placeOrderViaSigningService` в `src/lib/lighter.ts`) — через локальный сервис подписи, не имитацию. Требует отдельного запуска (`uvicorn signing_service:app --port 8787` со своими переменными окружения) — если сервис не поднят, кнопка честно покажет ошибку сети, а не притворится, что сработало.
+## Screenshots
 
-### Открытый вопрос Фазы 1 — решён (см. IMPLEMENTATION-PLAN.md)
-Официального браузерного/WASM signer'а у Lighter нет. Есть неофициальные community TS-обёртки — как минимум одна (`smartcrypto0/lighter-ts` на GitHub) заявляет WASM-signer, теоретически работающий в браузере; другие (`lighter-node-client` и подобные) explicitly server-only из-за нативных FFI-биндингов к Go-бинарю. Доверять непроверенному стороннему пакету саму подпись для реальных денег — решение, которое заслуживает отдельного ревью, не то, что стоит принимать между делом. Поэтому сейчас — сервер (`signing_service.py`), не браузер. WASM-путь стоит пересмотреть отдельно, когда/если такой пакет пройдёт независимую проверку.
+### Web Terminal
 
-## Бэкенд — что реально, что нет (важно не путать)
+![Wake Terminal](screenshots/terminal.png)
 
-`backend/` теперь полноценный слой, не только примеры. Разделение честное:
+### Telegram Bot
 
-**Реально прогнано мной, не только написано:**
-- `db.py` + `test_db.py` — SQLite-схема (leaders/followers/follows/mirror_log), foreign keys, unique-constraints, pause-фильтр. Прогони сам: `cd backend && python3 test_db.py`.
-- `key_store.py` — round-trip set/get/remove проверен.
-- `mirror_engine.py` — 10/10 тестов, как и раньше.
+![Wake Bot](screenshots/bot.png)
 
-**Написано аккуратно, теми же паттернами, но НЕ прогнано мной — в авторской песочнице не было сети, чтобы поставить `fastapi`/`websockets`:**
-- `app.py` — тонкий FastAPI-файл: middleware (CORS, rate limiting) + сборка роутеров из `api/`. **Обновлено:** на этой машине fastapi/pydantic доступны, `import app` проходит, все 28 эндпоинтов регистрируются.
-- `leader_listener.py` — ядро копи-движка «на проводе». `DRY_RUN=true` по умолчанию. Канал и схема сообщений (`account_all_positions`, `user_stats`) подтверждены официальной документацией, а логика сравнения снапшотов позиции вынесена в `leader_position_tracker.py` и реально прогнана — 9/9 тестов, включая разворот позиции (два события: закрытие + открытие). Сам `websockets.connect()` — тонкая обвязка вокруг этой протестированной логики, по-прежнему не запускалась мной (нет сети на `pip install websockets`).
-- `signing_service.py` — тот же статус, что раньше: паттерн подписи проверен (`place_order_example.py`), сам HTTP-сервис — нет.
+## Contact
 
-## Архитектура бэкенда (после рефакторинга)
+- **Telegram:** [@ssrjkk](https://t.me/ssrjkk)
+- **GitHub:** [@ssrjkk](https://github.com/ssrjkk)
 
-`backend/app.py` больше не монолит — это тонкий слой: создаёт FastAPI,
-подключает middleware (CORS, rate limiting) и собирает роутеры из `backend/api/`,
-каждый продукт в своём модуле:
+## What each panel does
 
-- `api/copy_trading.py` — followers/leaders/follows + `/simulate-mirror`
-- `api/predict.py` — предсказания (price/event рынки)
-- `api/agent.py` — AI-агент + подписка
-- `api/portfolio.py` — cross-asset portfolio risk
-- `api/funding.py` — funding rate арбитраж
+| Panel | Where the data comes from | Works without the Wake backend |
+| --- | --- | --- |
+| Обзор (Overview) | Market ranking by real 24h quote volume (`/markets/overview`, 18 perp markets, cached 60 s) plus open Predict markets | no |
+| Терминал (Terminal) | Order book, candles and recent trades from Lighter's public REST | reads yes; sending an order needs the signing service |
+| Discover | Leaders ranked by follower count and AUM, follow / pause / unfollow | no |
+| Портфель (Portfolio) | Your positions on Lighter looked up by L1 address (public REST); subscriptions and the copy-engine log from the backend | positions yes, copy state no |
+| Earn | Copy subscription state and trial activation | no |
+| Predict | LMSR price and event markets: creation, quoting, resolution, claims | no |
+| Агент (Agent) | Per-market decision with per-market win-rate memory | no |
+| Risk | Cross-asset exposure and hedge sizing | no |
+| Funding | Lighter funding rate next to Binance, Bybit and Hyperliquid for the same `market_id` (all four come from Lighter's `/funding-rates`), annualised at 24 epochs/day | rates yes; the arb check and sizing call the backend |
 
-Чистая логика каждого продукта живёт в корневых модулях (`mirror_engine.py`,
-`predict_amm.py`, `portfolio_risk.py`, `funding_arb.py`, ...) и протестирована
-в `test_*.py` — 135 тестов зелёные локально. Общая конфигурация (пути БД,
-лимиты rate limiting) вынесена в `backend/config.py`, переопределяется
-переменными окружения (`WAKE_DB_PATH`, `WAKE_AUDIT_DB_PATH`,
-`WAKE_RATE_LIMIT_CAPACITY`, `WAKE_RATE_LIMIT_REFILL`).
+Those three keep working with no backend, which is why the site does not go blank when the backend is missing — see [src/lib/backend.ts](src/lib/backend.ts).
 
-Добавление нового продукта = новый модуль в `api/` + `include_router` в `app.py`.
+## Connecting
 
-- **Обе стороны копи-трейдинга реально пишут в базу**: тумблер «сделать копируемым» регистрирует лидера через `POST /leaders`, Discover/Copy регистрирует подписчика и создаёт follow. Earn показывает реальные подписчики/AUM (зелёная точка), когда бэкенд отвечает, честно демо-числа — когда нет. `backend/seed_demo_leaders.py` сажает демо-трейдеров из UI как настоящие строки leaders, иначе Copy упрётся во внешний ключ.
-- **ENS-имена** (`useEnsName` из wagmi, настоящий хук) — в шапке и как handle лидера при регистрации, вместо голого адреса.
+Two identity paths, both landing on the same follower record:
 
-**Всё ещё намеренно НЕ существует:** настоящий HSM/KMS. `encrypted_key_store.py` — реальное улучшение (AES-шифрование на диске через Fernet, проверено: секрет физически не читается из файла без мастер-ключа), но это encryption-at-rest, не custody-grade хранение — если скомпрометирован сам работающий процесс, мастер-ключ в переменной окружения доступен тому же атакующему. Разница между этими двумя уровнями — не вопрос более аккуратного Python-кода, это другая инфраструктура. См. `backend/GO-LIVE-CHECKLIST.md` — конкретный, требующий именных подписей гейт перед тем, как `WAKE_DRY_RUN` осознанно становится `false` для кого-то за пределами команды.
+**Telegram.** The Login Widget button renders only when the frontend is built with `VITE_TELEGRAM_BOT_NAME` (bot username, no `@`) and the backend runs with `TELEGRAM_BOT_TOKEN`. The backend recomputes the widget's check string and compares HMACs (`POST /auth/telegram`), and validates Mini App `initData` separately (`POST /auth/telegram/init`). Without the token the panel states that Telegram login is off rather than showing a button that will 401.
 
-Установка бэкенда целиком: `cd backend && pip install -r requirements.txt --break-system-packages`.
+**Wallet.** Injected wallets (MetaMask, Rabby) work with no configuration; WalletConnect QR needs `VITE_WALLETCONNECT_PROJECT_ID`. The connected L1 address is registered as the follower (`POST /followers`), and positions are read back from Lighter by that address.
 
-## Что честно помечено как демо
+## Quick start
 
-Discover / Портфель / Earn работают на локальном стейте с теми же тестовыми трейдерами, что и в исходных макетах — в интерфейсе у них бейдж «демо», а не зелёная точка «live», как у Терминала. Кнопка «Открыть Long/Short» и переключатель «копируемые сделки» кликабельны, но честно говорят, что исполнение не подключено — потому что пока не подключено.
+### Frontend
 
-## Три слоя, три разных уровня риска
+```bash
+npm install
+cp .env.example .env    # optional: the defaults are mainnet + localhost services
+npm run dev             # http://localhost:5173
+```
 
-### 1. Рыночные данные — сделано
-### 2. Кошелёк + свои сделки — наполовину сделано
-Регистрация/депозит — L1-кошелёк (есть). Ордера подписываются ОТДЕЛЬНЫМ Lighter API key через их SDK — не wagmi/viem (пример есть в `backend/place_order_example.py`, но он не подключён к UI — сознательно, чтобы не путать «ключ кошелька» и «торговый ключ» в одной кнопке).
+### Backend
 
-### 3. Копи-движок — самое интересное и самое рискованное
-Lighter поддерживает нужный механизм: саб-аккаунты и до 256 API-ключей с ограниченными правами каждый — подписчик выдаёт ключ, который **только торгует**, вывести средства им нельзя. `backend/place_order_example.py` — буквально зерно этого движка: вместо ручного запуска — триггер по WebSocket-событию «лидер открыл позицию», create_order вызывается для каждого подписчика с его ключом и лимитами. Но хранение чужих торговых ключей — самое чувствительное место продукта. Собирать это без тестов — плохая идея.
+```bash
+cd backend
+pip install -r requirements.txt
+cp .env.example .env
+uvicorn app:app --reload --port 8000
+```
 
-## Модуль предсказаний (новое) — ядро, не UI
+Swagger UI at `http://localhost:8000/docs`, machine-readable schema (37 paths) at `/openapi.json`. Run it from `backend/`: the SQLite paths are relative to the working directory, so starting it from the repo root silently creates a second database.
 
-Polymarket-аналог поверх Lighter. У Lighter нет своей инфраструктуры под это
-(проверено поиском) — построено с нуля, честно на двух разных уровнях доверия:
+### Copy trading without a seed script
 
-- `predict_amm.py` + `test_predict_amm.py` — LMSR (тот же класс механизма, что
-  у Augur), численно стабильная форма, 17/17 тестов зелёные — включая found-by-testing
-  предел float64 при экстремальном перекосе (задокументирован, не спрятан).
-- `predict_resolution.py` + `test_predict_resolution.py` — 10/10 тестов. Два честно
-  разных механизма: цены на Lighter резолвятся АВТОМАТИЧЕСКИ его же mark price;
-  события (выборы, спорт) — НЕТ, только вручную куратором с обязательными
-  resolved_by/evidence_url — это trust-модель, не трастлесс dispute-оракул, как
-  настоящий UMA у Polymarket. Смешивать эти два в одном месте — ровно так в
-  реальных prediction markets возникают споры.
+There is no demo-leader seeder. Register a leader through the API, then a follower:
 
-**Сделано с прошлой версии:** `predict_db.py` (создание рынков, торговля, независимые позиции, честная выплата после резолюции — все пути протестированы, включая overselling-защиту и запрет двойного claim), `test_predict_integration.py` — полный цикл create→trade→resolve→claim через все три модуля разом, реально прогнан. `lighter_rest.py` — stdlib-only Python-клиент к реальным ценам Lighter (для автоматической резолюции price-рынков), не тестировался живьём — нет сети. Эндпоинты в `api/predict.py` (`/predict/markets/*`) — написаны, `import app` проходит на этой машине. Вкладка **Predict** в UI — реальные вызовы на `localhost:8000`, честный пустой список, если бэкенд не отвечает.
+```bash
+curl -X POST http://localhost:8000/leaders \
+  -H 'Content-Type: application/json' \
+  -d '{"lighter_account_index": 12345, "handle": "your-handle", "fee_bps": 8}'
 
-**Сделано позднее:** авторизация создания event-рынков — только доверенные кураторы через `WAKE_CURATOR_TOKEN` (заголовок `X-Curator-Token`, сравнение через `hmac.compare_digest`). Аудит-лог расширен на резолюцию рынков (см. `predict_resolution.py`).
-- Юридическая сторона (комиссия с плечевой торговли чужими деньгами) — требует консультации под конкретную юрисдикцию.
-- Security-ревью до того, как это тронет деньги живых пользователей.
+curl -X POST http://localhost:8000/followers \
+  -H 'Content-Type: application/json' \
+  -d '{"l1_address": "0xYourAddress"}'
 
-## AI-агент с памятью (новое) — тестируемое ядро, не чёрный ящик
+curl -X POST http://localhost:8000/follows \
+  -H 'Content-Type: application/json' \
+  -d '{"follower_id": "0xYourAddress", "leader_id": "<leader_id>", "allocation_usd": 500, "max_leverage": 3}'
+```
 
-- `agent_memory.py` + `test_agent_memory.py` — 14/14 тестов. История сделок, PnL,
-  винрейт по рынку, человеко-читаемая сводка (то, что пойдёт в промпт LLM).
-- `agent_decision.py` + `test_agent_decision.py` — 11/11 тестов. Правило-базированный
-  momentum-движок: детерминированный, полностью тестируемый baseline, не "умный ИИ
-  на честном слове". Плохая история на рынке уменьшает размер позиции, не блокирует —
-  задокументированный выбор.
+The listener that turns a leader's position changes into follower orders runs per leader:
 
-**Про «не ебаться с ключами»:** решается embedded-wallet провайдерами (Privy,
-Turnkey, Dynamic) — реальные, проверенные seedless-onboarding сервисы, не
-самодельная кастодия чужих денег вместо `encrypted_key_store.py`. Реальный
-интеграционный скаффолд: `src/wagmi-embedded.ts` (не тестировался — нет сети
-на `npm install`, честно помечено).
+```bash
+cd backend
+python leader_listener.py --leader-id <leader_id> --account-index 12345
+```
 
-## LLM-рассуждение и подписка (новое)
+With `WAKE_DRY_RUN=true` it logs the mirror plan instead of signing anything.
 
-- `llm_agent.py` — реальный вызов Claude API поверх `agent_memory.py`, с
-  проверенным fallback'ом на `rule_based_decision()`, если ключа нет, сеть
-  недоступна, или ответ не распарсился. Fallback-путь протестирован (без сети
-  он и не может обратиться к сети). Сам HTTP-вызов к Anthropic — нет.
-- `agent_runner.py` — связывает решение с реальным исполнением через
-  `signing_service.py`. `WAKE_DRY_RUN=true` по умолчанию, тот же принцип, что
-  везде. Dry-run путь протестирован напрямую.
-- `subscription.py` + `test_subscription.py` — 10/10 тестов. Free trial (14
-  дней), Free, Pro — фича-гейтинг чистой логикой. Сама оплата (Stripe и
-  подобное) — не здесь, это реальная интеграция с реальным процессором.
+### Signing service
 
-**Полный прогон бэкенда:** 135 unittest-тестов + 3 отдельных интеграционных
-скрипта (`test_db.py`, `test_predict_db.py`, `test_predict_integration.py`) —
-всё зелёное одним заходом (`python3 -m unittest discover -v` → OK).
+```bash
+cd backend
+uvicorn signing_service:app --port 8787
+```
 
-## Лимиты риска (новое)
+Requires `LIGHTER_ACCOUNT_INDEX`, `LIGHTER_API_KEY_INDEX` and `LIGHTER_API_KEY_PRIVATE_KEY` (an API key exported from app.lighter.xyz — not a wallet private key). The Terminal sends orders here, never to the backend.
 
-По твоей идее с ограничением суммы транзакции — сделано по-настоящему:
-`risk_limits.py` + `test_risk_limits.py` (11/11), реально ловит сценарий
-«баг раздул размер в 1000 раз» тестом. Вшито в `agent_runner.py` — это
-реальный гейт на пути исполнения, не модуль, который лежит неиспользуемым.
-Три уровня: лимит на транзакцию (жёсткий отказ), дневной объём и лимит
-позиции по рынку (мягкая подрезка размера), reduce-only не блокируется
-никогда — иначе лимит мешал бы выйти из позиции.
+### Telegram bot and Mini App
 
-**Что это не заменяет:** хранение ключей. Лимит режет ущерб от одного
-плохого ордера или бага; он не защищает от скомпрометированного ключа,
-который тратит по чуть-чуть, но постоянно, в пределах лимита.
+```bash
+cd backend
+python telegram_bot.py     # reads TELEGRAM_BOT_TOKEN from the environment
+```
 
-По пути поймал у себя реальный баг при вшивании: `AgentDecision` — frozen
-dataclass, прямое присваивание `decision.size_usd = ...` падает с
-`FrozenInstanceError`. Проверил, что падает, починил через
-`dataclasses.replace()`, проверил на живом пути `run_agent_step()` — не
-абстрактно, а именно там, где лимит реально подрезает размер.
+Commands: `/start`, `/help`, `/price BTC`, `/markets`, `/funding`, `/predict`, `/predict resolved`. The bot's answers come from the same endpoints the site uses (`/markets/overview`, `/funding/rates`, `/predict/markets`), so the two cannot drift apart. `WAKE_MINIAPP_URL` is the address the bot's "Open Wake" button opens — Telegram requires it to be https.
 
-## Живая проверка API (новое) — не документация, реальный ответ прямо сейчас
+### Predict resolver
 
-Достучался до `mainnet.zklighter.elliot.ai/api/v1/orderBooks` напрямую, не через доки. Подтверждено дословно: схема `OrderBook` в `lighter.ts` совпадает с реальным ответом поле в поле, `taker_fee`/`maker_fee` реально `"0.0000"` у всех рынков.
+```bash
+cd backend
+python predict_resolver.py --loop     # one tick without --loop
+```
 
-Находки:
-- **Спот уже существует на Lighter**, не гипотетическое расширение: `ETH/USDC`, `LINK/USDC`, `UNI/USDC`, `LDO/USDC` и другие, `market_type: "spot"`, тот же API что у перпов, market_id в отдельном диапазоне (2048+). То, что раньше звучало как «построить новую биржу», частично уже есть и подключается тем же способом.
-- Рынков не два (BTC/ETH) — их больше сотни: акции как перпы (AAPL, TSLA, NVDA, GOOGL...), форекс (EURUSD, GBPUSD...), золото, нефть, газ. Wake сейчас показывает только BTC/ETH — это сознательное упрощение UI, не ограничение API.
-- BTC = market_id 1, ETH = market_id 0 (не наоборот, как можно было бы угадать) — проверил код: нигде не захардкожено, везде поиск по `symbol`, так что это не задело ничего.
-- Есть рынок с символом `ANTHROPIC` (market_id 193). Не придумано — реальная строка в реальном ответе API, на котором построен Wake.
+Price markets close themselves at the deadline only while this process runs; otherwise resolution stays a manual curator call. `WAKE_PREDICT_RESOLVER_TICK` sets the interval (default 300 s).
 
-## Интерфейс до топ-уровня (новое)
+## Configuration
 
-Терминал больше не ограничен BTC/ETH — реальный пикер рынков с поиском и категориями (Crypto/Spot/Stocks/Forex/Commodities), подключён к полному каталогу через `getOrderBooks("all")`. Заодно убрал два места, где децималы угадывались по имени актива (`asset === "BTC" ? 0 : 2`) — теперь берутся из настоящего `supported_price_decimals` конкретного рынка. Ордер-тикет спот-осведомлён: Long/Short превращается в Buy/Sell для спот-рынков, шорт задизейблен с объяснением, автосброс на Buy при переключении на спот со стороны Short.
+### Frontend (`.env`, read by Vite at build time)
 
-## Интерфейс — рыночный пикер (новое)
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `VITE_LIGHTER_NETWORK` | `mainnet` | must match the backend's `WAKE_LIGHTER_NETWORK`, or the site and the bot show different market ids |
+| `VITE_BACKEND_URL` | Railway URL | baked into the bundle, not changeable at runtime; set `http://localhost:8000` in `.env` for local dev |
+| `VITE_SIGNING_SERVICE_URL` | `http://localhost:8787` | |
+| `VITE_WALLETCONNECT_PROJECT_ID` | empty | empty means no QR connector; injected wallets still work |
+| `VITE_TELEGRAM_BOT_NAME` | empty | empty disables the Telegram login panel |
+| `VITE_SENTRY_DSN` | empty | leave empty until a real project exists |
 
-Терминал был на двух кнопках BTC/ETH — теперь настоящий поиск по всем реальным
-рынкам с живого API: категории (Crypto/Spot/Stocks/Forex/Commodities),
-поиск по символу, до 200 результатов разом без просадки рендера. Для спота
-кнопки честно называются Buy/Sell, а не Long/Short, и Sell задизейблена с
-подсказкой — на споте шорта нет, это не то же самое, что перп. Decimals
-цены и размера везде берутся из реальных `supported_price_decimals` рынка,
-не захардкожены под BTC.
+### Backend (`backend/.env`)
 
-## Portfolio Risk через классы активов (новое, отвечает на «чего не хватает Lighter/Robinhood»)
+[backend/.env.example](backend/.env.example) documents every variable with its code default. The ones that change behaviour:
 
-Единая маржа Lighter через крипту+акции+форекс+commodities делает это
-структурно возможным так, как не может быть у Robinhood (разные продукты)
-и чего нет готовым модулем у самого Lighter.
+| Variable | Default | What it gates |
+| --- | --- | --- |
+| `WAKE_LIGHTER_NETWORK` | `mainnet` | name → REST host, WS host and market ids together |
+| `WAKE_DRY_RUN` | `true` | `false` means live orders with real money |
+| `WAKE_CORS_ORIGINS` | `http://localhost:5173` | comma-separated list of frontends allowed to call the API |
+| `WAKE_CURATOR_TOKEN` | empty | empty answers 500 on every curator endpoint; a wrong `X-Curator-Token` answers 403 |
+| `TELEGRAM_BOT_TOKEN` | empty | bot process and Telegram login verification |
+| `WAKE_MASTER_KEY` | empty | encrypts the key store; keep it in a secrets manager, not on disk |
+| `WAKE_DB_PATH` / `WAKE_AUDIT_DB_PATH` | `wake.db` / `audit.db` | two separate SQLite files |
+| `WAKE_RATE_LIMIT_CAPACITY` / `WAKE_RATE_LIMIT_REFILL` | 40 / 20 | token bucket per client |
+| `ANTHROPIC_API_KEY` | empty | only the LLM decision path; without it the agent runs the rule engine |
 
-`portfolio_risk.py` + `test_portfolio_risk.py` — 16/16 тестов, реальная
-теория портфеля (Markowitz), не приближение:
-- Портфельная волатильность через ковариационную матрицу, не наивная сумма
-- Diversification score — насколько корреляции реально гасят риск
-- Minimum-variance hedge suggestion — какой из доступных рынков лучше всего
-  хеджирует позицию, с учётом и корреляции, и волатильности кандидата, не
-  только «что сильнее всего коррелирует»
+## Testing
 
-Реальный баг поймал в собственном тесте, не в движке: домножение серии на
-0.3 не ослабляет корреляцию Пирсона — она инвариантна к линейному
-масштабированию. Тест чинился независимым шумом, не переиспользованием
-одной и той же серии под другим углом. Эндпоинты `/portfolio/risk` и
-`/portfolio/hedge` живут в `api/portfolio.py` — после рефакторинга
-приложение собирается, все роуты зарегистрированы.
+```bash
+# backend — run from backend/
+python -m unittest discover          # 210 tests
+python test_db.py
+python test_predict_db.py
+python test_predict_integration.py
+python test_audit_log.py             # these four are standalone scripts, not part of discovery
 
-## Дизайн — шапка (новое)
+# frontend
+npx tsc --noEmit
+npx vitest run                       # 61 tests in 8 files
+npm run build
 
-7 вкладок в одной строке с логотипом и кошельком неизбежно поехали бы на
-узком экране — разнёс nav на отдельную прокручиваемую строку под шапкой,
-не в общий `flex-wrap`.
+# end-to-end (starts its own dev server; PW_PORT avoids a port clash)
+PW_PORT=5178 npx playwright test     # 6 tests, chromium
+```
 
-**Реальный баг, найденный проверкой «всеми способами»:** правка растянулась
-на несколько шагов и оставила один незакрытый `<div>` в самом конце файла.
-Скобки `(){}[]` были сбалансированы всё это время — мои проверки на них не
-ловят рассинхрон именно JSX-тегов, это разные вещи. Нашёл посимвольным
-трекером глубины `<div>`/`</div>` (построчный regex сначала дал ложное
-срабатывание на многострочном теге — тоже разобрался и починил метод
-проверки, не только код). Теперь 0 глубина в конце файла, подтверждено.
+`test_api_smoke.py` walks every API route over HTTP, so a router that fails to import or a path that 500s fails CI rather than the first click.
 
-## Fuzz-тестирование (новое) — тысячи случайных сценариев, не только примеры
+## Architecture
 
-Помимо 135 unit-тестов, каждый чистый (без сети) модуль прогнан через
-случайные сценарии, проверяющие инварианты, а не конкретные числа:
-LMSR (2000), mirror_engine (3000), portfolio_risk (1000 — с реальным
-инвариантом теории портфеля, неравенство треугольника), risk_limits (2000,
-включая мусорные отрицательные входы), agent_memory (1500), subscription
-(1500, явно включая проверку до старта триала), agent_decision (2000,
-включая пустые ценовые ряды). Ноль нарушений везде. Один найденный
-«баг» по пути оказался ошибкой в самом фаззере (сравнение серий разной
-длины в portfolio_risk), не в коде — разобрался и исправил тест, не начал
-чинить то, что не было сломано.
+### Backend (FastAPI)
 
-## Сверка фронтенд ↔ бэкенд (новое)
+- `backend/app.py` — app, middleware (CORS, rate limiting by client IP, optional Sentry), router registration, `/health`
+- `backend/api/` — HTTP routers by product area:
+  - `auth.py` — Telegram Login Widget and Mini App `initData` verification
+  - `markets.py` — `/markets/overview`: perp ranking by 24h quote volume
+  - `copy_trading.py` — followers, leaders, follows, mirror log
+  - `predict.py` — price and event markets, curator-gated resolution
+  - `agent.py` — decisions, memory, subscriptions
+  - `portfolio.py` — cross-asset risk and hedge
+  - `funding.py` — venue comparison and carry calculations
+- Core logic lives in root modules and is tested on its own: `mirror_engine.py`, `leader_position_tracker.py`, `predict_amm.py`, `predict_resolution.py`, `portfolio_risk.py`, `funding_arb.py`, `agent_decision.py`, `agent_memory.py`, `risk_limits.py`, `rate_limiter.py`, `cache.py`, `db.py`, `predict_db.py`, `audit_log.py`
+- Configuration is read once in `backend/config.py`
 
-Проверил каждый реальный вызов из фронтенда (App.tsx + lighter.ts) против
-реальных роутов в `app.py` — впервые за весь разговор эта конкретная сверка.
-15 вызовов, 15 совпадений. Один ложный сигнал по пути: `${paused ? "pause"
-: "resume"}` схлопнулся в generic-параметр моей проверкой — разобрался,
-это два реальных литеральных пути, оба существуют. Заодно проверил баланс
-всех остальных парных JSX-тегов (span/button/table/tr/td и т.д.) — `<div>`
-был единственной проблемой, не симптомом чего-то большего.
+### Frontend (React + TypeScript + Vite + Tailwind + wagmi)
 
-## Что вне кода
-- Юридическая сторона, аудит — см. IMPLEMENTATION-PLAN.md и GO-LIVE-CHECKLIST.md.
+- `src/App.tsx` — tab shell, connection state, the backend health probe
+- `src/components/` — one file per panel
+- `src/lib/backend.ts` — the only place that calls the Wake backend; every error a panel shows is produced here
+- `src/lib/lighter.ts` — Lighter public REST client
+- `src/lib/predict.ts`, `src/lib/telegram.ts`, `src/lib/leaders.ts`, `src/lib/config.ts`
 
-## Полезные ссылки
-- Sub-accounts and API keys: https://docs.lighter.xyz/perpetual-futures/sub-accounts-and-api-keys
-- Signing Transactions: https://apidocs.lighter.xyz/docs/trading
-- Partner Attribution (комиссия Wake как интегратора): https://apidocs.lighter.xyz/docs/partner-integration
-- Python SDK: https://github.com/elliottech/lighter-python
-- Полный индекс API для агентов: https://apidocs.lighter.xyz/llms.txt
+## Deployment
+
+### Frontend: Cloudflare Pages (this is what runs)
+
+Project `wake` → https://wake-7k6.pages.dev.
+
+- build command `npm run build`, output directory `dist`, Node 24
+- set the `VITE_*` variables as build env vars; they are compiled into the bundle, so changing one requires a rebuild
+- `public/_redirects` contains `/* /index.html 200` so deep links into the SPA resolve
+
+One consequence worth knowing: because Pages answers *any* unknown path with `index.html` and status 200, an API request to a host with no backend returns HTML. `src/lib/backend.ts` turns that into a readable "there is no backend at this address" message instead of a JSON parse error, and the panels print which three still work.
+
+Deploy from the repo:
+
+```bash
+npm run build
+npx wrangler pages deploy dist --project-name wake
+```
+
+### Backend: Railway (this is what runs)
+
+The backend runs on Railway via Docker (`Dockerfile` at the repo root, `railway.json` configures the build). Environment variables are set through the Railway dashboard or CLI.
+
+```bash
+railway variables set WAKE_DRY_RUN=true WAKE_LIGHTER_NETWORK=mainnet
+railway variables set WAKE_CORS_ORIGINS="https://wake-7k6.pages.dev"
+railway service redeploy --service wake-backend
+```
+
+See [RAILWAY_DEPLOY.md](RAILWAY_DEPLOY.md) for the full setup guide.
+
+**Alternative: Docker Compose (local or self-hosted)**
+
+```bash
+docker compose up app              # :8000
+docker compose up signing          # :8787
+docker compose up telegram-bot     # needs TELEGRAM_BOT_TOKEN
+docker compose up predict-resolver
+```
+
+Databases persist in the `wake-data` volume; secrets come from `backend/.env`, which `docker-compose.yml` reads but does not require.
+
+## Known limits, stated plainly
+
+- `fee_bps` on a leader is validated (0–500) and stored, but nothing charges it — there is no payout path.
+- No payments of any kind. Subscription tiers and trials (`backend/subscription.py`) exist as state only.
+- Agent memory, subscriptions and risk state in `backend/api/agent.py` live in per-process dictionaries — they are gone on restart. The copy-trading and Predict data is in SQLite; this is not.
+- The LLM decision path (`backend/llm_agent.py`) has no automated test. It falls back to the tested rule engine when the call fails or no key is set.
+- `leader_listener.py`'s websocket connection is not exercised by tests (they cover the snapshot-diffing logic around it); it needs a network to verify.
+- SQLite for local dev and copy-trading/Predict data; PostgreSQL is available for production (see `backend/database.py`, `backend/pg_models.py`, `alembic/`). Agent memory and subscriptions are per-process and lost on restart.
+- A leader's `handle` is whatever the registering user types; it is not matched to a verified Lighter account.
+- `/markets/overview` costs 18 candle requests per refresh and is cached for 60 seconds.
+
+## Security
+
+- Secrets come from environment variables only; `backend/.env` is gitignored, as are `wake.db`, `audit.db`, `*.enc` and dev keystores.
+- `WAKE_DRY_RUN` defaults to `true`; order sizes always round down.
+- Curator endpoints require the `X-Curator-Token` header and compare it with `hmac.compare_digest`; if the token is not configured on the server they stay closed instead of allowing anonymous market creation or resolution.
+- SQL is parameterized throughout; CORS and the rate limiter are env-driven.
+- Keys are encrypted at rest (`encrypted_key_store.py`, optional KMS mode) — this is encryption, not an HSM.
+
+To use this with real funds: get an external security audit, replace the file keystore with HSM/KMS, and get legal advice for your jurisdiction. Report vulnerabilities privately through GitHub's security advisory feature rather than a public issue.
+
+## Documentation
+
+- [README.ru.md](README.ru.md) — русская версия
+- [CONTRIBUTING.md](CONTRIBUTING.md)
+- [LICENSE](LICENSE) — MIT
+
+## License
+
+MIT — see [LICENSE](LICENSE).

@@ -27,7 +27,10 @@ class TestTrial(unittest.TestCase):
         after = 1000 + (TRIAL_DURATION_DAYS + 1) * 86400
         self.assertFalse(sub.has_feature("ai_agent", now=after))
         self.assertFalse(sub.has_feature("copy_trading", now=after))
-        self.assertTrue(sub.has_feature("terminal_view", now=after), "бесплатный терминал должен остаться доступен")
+        self.assertTrue(
+            sub.has_feature("terminal_view", now=after),
+            "бесплатный терминал должен остаться доступен",
+        )
 
     def test_days_left_counts_down_correctly(self):
         sub = start_trial("u1", now=0)
@@ -48,12 +51,17 @@ class TestUpgrade(unittest.TestCase):
 
         pro = upgrade_to_pro(sub, now=after_expiry)
         self.assertTrue(pro.has_feature("ai_agent", now=after_expiry))
-        self.assertTrue(pro.has_feature("priority_execution", now=after_expiry), "priority_execution только у pro, не у trial")
+        self.assertTrue(
+            pro.has_feature("priority_execution", now=after_expiry),
+            "priority_execution только у pro, не у trial",
+        )
 
     def test_upgrade_does_not_mutate_original(self):
         sub = start_trial("u1", now=1000)
         pro = upgrade_to_pro(sub, now=2000)
-        self.assertEqual(sub.tier, Tier.FREE_TRIAL, "апгрейд не должен мутировать исходный объект")
+        self.assertEqual(
+            sub.tier, Tier.FREE_TRIAL, "апгрейд не должен мутировать исходный объект"
+        )
         self.assertEqual(pro.tier, Tier.PRO)
 
     def test_pro_never_expires_like_trial_does(self):
@@ -66,6 +74,7 @@ class TestUpgrade(unittest.TestCase):
 class TestFreeTier(unittest.TestCase):
     def test_free_tier_only_has_basic_features(self):
         from subscription import Subscription
+
         sub = Subscription(user_id="u1", tier=Tier.FREE, started_at=0)
         self.assertTrue(sub.has_feature("terminal_view"))
         self.assertFalse(sub.has_feature("ai_agent"))

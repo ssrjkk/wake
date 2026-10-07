@@ -74,29 +74,108 @@ def init_predict_db(path: str = "wake.db"):
         conn.executescript(SCHEMA)
 
 
-def create_market(conn, id_: str, kind: str, question: str, resolve_at: float, b: float,
-                   lighter_market_id: int | None = None, threshold: float | None = None,
-                   comparator: str | None = None):
+def create_market(
+    conn,
+    id_: str,
+    kind: str,
+    question: str,
+    resolve_at: float,
+    b: float,
+    lighter_market_id: int | None = None,
+    threshold: float | None = None,
+    comparator: str | None = None,
+):
     if kind not in ("price", "event"):
         raise ValueError("kind должен быть 'price' или 'event'")
-    if kind == "price" and (lighter_market_id is None or threshold is None or comparator is None):
-        raise ValueError("price-рынок требует lighter_market_id, threshold и comparator")
+    if kind == "price" and (
+        lighter_market_id is None or threshold is None or comparator is None
+    ):
+        raise ValueError(
+            "price-рынок требует lighter_market_id, threshold и comparator"
+        )
     conn.execute(
         "INSERT INTO predict_markets (id, kind, question, lighter_market_id, threshold, comparator, "
         "resolve_at, b, created_at) VALUES (?,?,?,?,?,?,?,?,?)",
-        (id_, kind, question, lighter_market_id, threshold, comparator, resolve_at, b, time.time()),
+        (
+            id_,
+            kind,
+            question,
+            lighter_market_id,
+            threshold,
+            comparator,
+            resolve_at,
+            b,
+            time.time(),
+        ),
     )
 
 
 def get_market(conn, market_id: str):
-    return conn.execute("SELECT * FROM predict_markets WHERE id = ?", (market_id,)).fetchone()
+    return conn.execute(
+        "SELECT * FROM predict_markets WHERE id = ?", (market_id,)
+    ).fetchone()
 
 
 def list_open_markets(conn):
-    return conn.execute("SELECT * FROM predict_markets WHERE status = 'open' ORDER BY resolve_at ASC").fetchall()
+    return conn.execute(
+        "SELECT * FROM predict_markets WHERE status = 'open' ORDER BY resolve_at ASC"
+    ).fetchall()
 
 
-def record_trade(conn, trade_id: str, user_id: str, market_id: str, outcome: str, shares: float) -> float:
+def list_markets(conn, status: str = "open"):
+    """'open' | 'resolved' | 'all'. Резолванные нужны интерфейсу: показать исход и
+    дать забрать выигрыш, а не выбросить рынок из вида вместе с деньгами юзера."""
+    if status == "all":
+        return conn.execute(
+            "SELECT * FROM predict_markets ORDER BY resolve_at DESC"
+        ).fetchall()
+    if status not in ("open", "resolved"):
+        raise ValueError(f"неизвестный статус фильтра: {status}")
+    return conn.execute(
+        "SELECT * FROM predict_markets WHERE status = ? ORDER BY resolve_at ASC",
+        (status,),
+    ).fetchall()
+
+
+def market_stats(conn):
+    """Объём и число сделок по каждому рынку одним запросом.
+    volume_usd = сумма |cost_usd| по predict_trades: купил на $30, продал на $12 —
+    объём $42. Это честно только для сделок через Wake; прямого доступа к книге
+    LMSR-пула нет, и выдавать его за рыночный объём не стоит."""
+    rows = conn.execute(
+        "SELECT market_id, SUM(ABS(cost_usd)) AS volume_usd, COUNT(*) AS trade_count "
+        "FROM predict_trades GROUP BY market_id"
+    ).fetchall()
+    return {r["market_id"]: dict(r) for r in rows}
+
+
+def list_user_positions(conn, user_id: str):
+    """Позиции юзера вместе с рынками и затратами. Стоимость входа считается по
+    predict_trades (SUM(cost_usd) — сколько реально уплачено за исход с учётом
+    продаж), а не по текущей LMSR-цене: так видно, в плюс или в минус позиция."""
+    rows = conn.execute(
+        """
+        SELECT p.market_id, p.outcome, p.shares, p.claimed,
+               m.question, m.kind, m.status, m.resolve_at, m.b, m.q_yes, m.q_no, m.outcome AS market_outcome,
+               COALESCE(t.net_cost, 0) AS net_cost
+        FROM predict_positions p
+        JOIN predict_markets m ON m.id = p.market_id
+        LEFT JOIN (
+            SELECT market_id, outcome, SUM(cost_usd) AS net_cost
+            FROM predict_trades WHERE user_id = ?
+            GROUP BY market_id, outcome
+        ) t ON t.market_id = p.market_id AND t.outcome = p.outcome
+        WHERE p.user_id = ? AND p.shares > 0
+        ORDER BY m.resolve_at ASC
+        """,
+        (user_id, user_id),
+    ).fetchall()
+    return rows
+
+
+def record_trade(
+    conn, trade_id: str, user_id: str, market_id: str, outcome: str, shares: float
+) -> float:
     """Покупка (shares>0) или продажа (shares<0). Возвращает cost_usd (положительное —
     юзер платит, отрицательное — юзеру платят). Меняет q_yes/q_no рынка, позицию и
     пишет лог — атомарно в одной функции."""
@@ -141,7 +220,24 @@ def record_trade(conn, trade_id: str, user_id: str, market_id: str, outcome: str
     return cost
 
 
-def resolve_market(conn, market_id: str, outcome: str, resolved_by: str | None = None, evidence_url: str | None = None):
+def resolve_market(
+    conn,
+    market_id: str,
+    outcome: str,
+    resolved_by: str | None = None,
+    evidence_url: str | None = None,
+):
+    """Исход выносится один раз. Повторный резолв менял бы выплату постфактум —
+    рынок, по которому уже есть позиции, не может дважды закончиться разным
+    исходом, поэтому здесь это запрещено на уровне слоя данных, а не только в
+    HTTP-обвязке (резолвер и кураторский эндпоинт идут через эту же функцию)."""
+    market = get_market(conn, market_id)
+    if market is None:
+        raise ValueError(f"рынок {market_id} не найден")
+    if market["status"] != "open":
+        raise ValueError(
+            f"рынок {market_id} уже резолвлен с исходом {market['outcome']}"
+        )
     conn.execute(
         "UPDATE predict_markets SET status='resolved', outcome=?, resolved_by=?, evidence_url=? WHERE id = ?",
         (outcome, resolved_by, evidence_url, market_id),

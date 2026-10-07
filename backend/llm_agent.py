@@ -24,12 +24,21 @@ markdown-обёртки: {"action": "long"|"short"|"hold"|"close", "confidence":
 истории — плохая история на этом рынке должна снижать твою уверенность."""
 
 
-def llm_decision(memory: AgentMemoryStore, market_id: int, recent_prices: list, base_size_usd: float = 100) -> AgentDecision:
+def llm_decision(
+    memory: AgentMemoryStore,
+    market_id: int,
+    recent_prices: list,
+    base_size_usd: float = 100,
+) -> AgentDecision:
     fallback = rule_based_decision(memory, market_id, recent_prices, base_size_usd)
 
     if not ANTHROPIC_API_KEY:
-        return AgentDecision(fallback.action, fallback.confidence, fallback.size_usd,
-                              f"[fallback: ANTHROPIC_API_KEY не задан] {fallback.reasoning}")
+        return AgentDecision(
+            fallback.action,
+            fallback.confidence,
+            fallback.size_usd,
+            f"[fallback: ANTHROPIC_API_KEY не задан] {fallback.reasoning}",
+        )
 
     try:
         import urllib.request
@@ -40,12 +49,14 @@ def llm_decision(memory: AgentMemoryStore, market_id: int, recent_prices: list, 
             f"Рынок {market_id}. Последние цены: {recent_prices}. "
             f"История:\n{summary}\nБазовый размер: ${base_size_usd}. Твоё решение?"
         )
-        payload = json.dumps({
-            "model": "claude-sonnet-4-6",
-            "max_tokens": 300,
-            "system": SYSTEM_PROMPT,
-            "messages": [{"role": "user", "content": user_message}],
-        }).encode()
+        payload = json.dumps(
+            {
+                "model": "claude-sonnet-4-6",
+                "max_tokens": 300,
+                "system": SYSTEM_PROMPT,
+                "messages": [{"role": "user", "content": user_message}],
+            }
+        ).encode()
 
         req = urllib.request.Request(
             "https://api.anthropic.com/v1/messages",
@@ -76,5 +87,9 @@ def llm_decision(memory: AgentMemoryStore, market_id: int, recent_prices: list, 
     except Exception as e:
         # Любая ошибка — сеть, парсинг, неожиданный формат — падаем на протестированный
         # rule-based, не оставляем агента без решения и не роняем весь процесс.
-        return AgentDecision(fallback.action, fallback.confidence, fallback.size_usd,
-                              f"[fallback: LLM-вызов не удался: {e}] {fallback.reasoning}")
+        return AgentDecision(
+            fallback.action,
+            fallback.confidence,
+            fallback.size_usd,
+            f"[fallback: LLM-вызов не удался: {e}] {fallback.reasoning}",
+        )

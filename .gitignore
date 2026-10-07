@@ -2,15 +2,34 @@
 node_modules/
 dist/
 *.tsbuildinfo
+test-results/
+playwright-report/
+blob-report/
+coverage/
+.wrangler/
+.env
 
 # Backend / Python
 __pycache__/
 *.pyc
+.pytest_cache/
+backend/.coverage
+.coverage
+htmlcov/
 backend/.env
-backend/wake.db
-backend/audit.db
 backend/*.enc
 backend/dev_keystore*.json
+*.db
+
+# Logs
+*.log
+cloudflared.log
+
+# Linter / tool caches
+.ruff_cache/
+
+# Generated images / mockups
+vibe_images/
 
 # OS
 .DS_Store

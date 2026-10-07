@@ -32,7 +32,12 @@ DEFAULT_PATH = os.environ.get("WAKE_KEYSTORE_PATH", "keystore_kms.enc")
 
 
 class KmsKeyStore:
-    def __init__(self, path: str = DEFAULT_PATH, kms_key_id: str | None = None, region: str = "us-east-1"):
+    def __init__(
+        self,
+        path: str = DEFAULT_PATH,
+        kms_key_id: str | None = None,
+        region: str = "us-east-1",
+    ):
         if boto3 is None:
             raise RuntimeError("boto3 не установлен — pip install boto3")
         self.kms_key_id = kms_key_id or KMS_KEY_ID
@@ -59,8 +64,8 @@ class KmsKeyStore:
         if not raw:
             return {}
         header_len = int.from_bytes(raw[:4], "big")
-        encrypted_data_key = raw[4:4 + header_len]
-        ciphertext = raw[4 + header_len:]
+        encrypted_data_key = raw[4 : 4 + header_len]
+        ciphertext = raw[4 + header_len :]
         plaintext_key = self._decrypt_data_key(encrypted_data_key)
         fernet = Fernet(_to_fernet_key(plaintext_key))
         return json.loads(fernet.decrypt(ciphertext))
@@ -88,4 +93,5 @@ class KmsKeyStore:
 
 def _to_fernet_key(raw_32_bytes: bytes) -> bytes:
     import base64
+
     return base64.urlsafe_b64encode(raw_32_bytes)
