@@ -1,9 +1,10 @@
-// Конфигурация фронтенда. Всё, что обычно хардкодилось на localhost, теперь
-// переопределяется переменными окружения VITE_* (см. .env или docker-compose).
-// Значения по умолчанию — локальная разработка: локальные backend и signing
-// service, а сеть Lighter — mainnet, как в backend/config.py. Разные сети по
-// умолчанию были бы тихой ошибкой: бот и бэкенд показывают основной рынок, а
-// фронт в это время дергает testnet с другими market ids.
+// Конфигурация фронтенда: всё переопределяется переменными окружения VITE_*
+// (см. .env или docker-compose). Значения по умолчанию — сборка без .env, как
+// в CI и на Railway: backend указывает на развёрнутый сервис, signing service
+// остаётся локальным (его поднимают отдельно, в образ фронта он не входит), а
+// сеть Lighter — mainnet, как в backend/config.py. Разные сети по умолчанию
+// были бы тихой ошибкой: бот и бэкенд показывают основной рынок, а фронт в это
+// время дергает testnet с другими market ids.
 
 export const BACKEND_URL = import.meta.env.VITE_BACKEND_URL || "https://wake-backend-production-3483.up.railway.app";
 export const SIGNING_SERVICE_URL = import.meta.env.VITE_SIGNING_SERVICE_URL || "http://localhost:8787";

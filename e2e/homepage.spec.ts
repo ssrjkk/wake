@@ -3,8 +3,20 @@
 // силами — навигация, окно входа, честное состояние «данных нет». Проверять здесь
 // курсы или PnL было бы самообманом: в CI эти числа неоткуда взять.
 import { test, expect, type Page } from "@playwright/test";
+import { existsSync, readFileSync } from "node:fs";
 
 const TABS = ["Обзор", "Терминал", "Discover", "Портфель", "Earn", "Predict", "Агент", "Risk", "Funding"];
+
+// VITE_TELEGRAM_BOT_NAME читает dev-сервер, а не процесс тестов, поэтому значение
+// достаётся из .env напрямую: проверка «вход через Telegram выключен» имеет смысл
+// только когда бота не задавали. В CI файла .env нет (он в .gitignore) и проверка
+// прогоняется целиком; локально с именем бота в .env страница показывает виджет
+// Telegram, а не заглушку, и требовать от неё текста про выключенный вход нельзя.
+function telegramBotConfigured(): boolean {
+  if (!existsSync(".env")) return false;
+  const value = readFileSync(".env", "utf8").match(/^VITE_TELEGRAM_BOT_NAME=(.*)$/m)?.[1];
+  return Boolean(value?.trim());
+}
 
 function nav(page: Page) {
   return page.getByRole("navigation");
@@ -43,7 +55,7 @@ test.describe("Оболочка приложения", () => {
     await page.goto("/");
     await nav(page).getByRole("button", { name: "Терминал" }).click();
     await expect(page.getByText("Lighter API не отвечает")).toBeVisible();
-    await expect(page.getByText("Стакан, свечи и лента сделок тянутся напрямую")).toBeVisible();
+    await expect(page.getByText(/\.zklighter\.elliot\.ai —/)).toBeVisible();
   });
 });
 
@@ -62,6 +74,7 @@ test.describe("Вход", () => {
   });
 
   test("без VITE_TELEGRAM_BOT_NAME кнопки Telegram нет — вместо неё объяснение", async ({ page }) => {
+    test.skip(telegramBotConfigured(), "VITE_TELEGRAM_BOT_NAME задан локально — страница показывает виджет, а не заглушку");
     await openPicker(page);
     await expect(page.getByText(/Вход через Telegram выключен/)).toBeVisible();
   });

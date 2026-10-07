@@ -81,6 +81,13 @@ jobs:
   backend-tests:
     runs-on: ubuntu-latest
     needs: [backend-lint]
+    # upload-artifact пишет в Actions-хранилище, а у токена по умолчанию
+    # (default_workflow_permissions=read) стоит actions:read — без этого блока
+    # шаг падает на загрузке. Шире права не открываем: ветку gh-pages CI не
+    # трогает, а Pages в репозитории выключен.
+    permissions:
+      contents: read
+      actions: write
     # Тесты герметичны и не требуют внешних сервисов: async-слой идёт через
     # aiosqlite (тот же путь get_db, что и в проде на PostgreSQL), лимитер —
     # через fakeredis, legacy-слой — через sqlite3. Никаких service-контейнеров:
@@ -107,19 +114,17 @@ jobs:
             -q
       - name: Generate Allure report
         if: always()
-        uses: simple-elf/allure-report-action@v1.16
+        uses: simple-elf/allure-report-action@v1.15
         with:
           allure_results: backend/allure-results
           allure_report: allure-report
-          gh_pages: gh-pages
-          allure_history: allure-history
-      - name: Deploy report to GitHub Pages
+      - name: Upload Allure report
         if: always()
-        uses: peaceiris/actions-gh-pages@v4
+        uses: actions/upload-artifact@v4
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_branch: gh-pages
-          publish_dir: allure-report
+          name: allure-report
+          path: allure-report
+          if-no-files-found: ignore
 
   # ── Frontend linting + type checking ─────────────────────────────────────
   frontend-check:
@@ -177,16 +182,29 @@ jobs:
         run: npm run build
       - name: Start backend
         working-directory: backend
+        # Middleware дергает Redis на каждом запросе, а async-слой (auth) идёт
+        # через SQLAlchemy-async — поэтому тут реальный redis-сервис и
+        # aiosqlite-URL (sync `sqlite:///` для async-engine не годится).
+        # Переменные объявлены на уровне шага: init_db() поднимает engine при
+        # импорте database.py, и без WAKE_DATABASE_URL он уходит на Postgres,
+        # которого в раннере нет.
+        env:
+          WAKE_DATABASE_URL: sqlite+aiosqlite:///wake_e2e.db
+          WAKE_REDIS_URL: redis://localhost:6379/0
         run: |
           pip install -r requirements.txt --quiet
-          # Middleware дергает Redis на каждом запросе, а async-слой (auth) идёт
-          # через SQLAlchemy-async — поэтому тут реальный redis-сервис и
-          # aiosqlite-URL (sync `sqlite:///` для async-engine не годится).
           python -c "import asyncio, database; asyncio.run(database.init_db())"
-          WAKE_DATABASE_URL="sqlite+aiosqlite:///wake_e2e.db" \
-          WAKE_REDIS_URL="redis://localhost:6379/0" \
-          uvicorn app:app --host 127.0.0.1 --port 8000 &
-          npx wait-on http://localhost:8000/health
+          # python -m uvicorn, а не голый uvicorn: в этом job нет setup-python,
+          # и `-m` гарантирует, что модуль берётся из того же интерпретатора,
+          # куда pip поставил зависимости, — без ставки на ~/.local/bin в PATH.
+          uvicorn_log=/tmp/uvicorn.log
+          python -m uvicorn app:app --host 127.0.0.1 --port 8000 >"$uvicorn_log" 2>&1 &
+          # /health отвечает только после startup-хуков, поэтому ждём, а не спим.
+          curl --silent --show-error --fail --retry 30 --retry-delay 2 \
+            --retry-connrefused http://127.0.0.1:8000/health || {
+              cat "$uvicorn_log"
+              exit 1
+            }
       - name: Run E2E tests
         run: npm run test:e2e
 
