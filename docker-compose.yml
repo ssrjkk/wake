@@ -32,7 +32,7 @@ services:
   app:
     build:
       context: .
-      dockerfile: Dockerfile.backend
+      dockerfile: Dockerfile
     ports:
       - "8000:8000"
     environment:
@@ -58,7 +58,7 @@ services:
   signing:
     build:
       context: .
-      dockerfile: Dockerfile.backend
+      dockerfile: Dockerfile
     command: ["uvicorn", "signing_service:app", "--host", "0.0.0.0", "--port", "8787"]
     ports:
       - "8787:8787"
@@ -79,7 +79,7 @@ services:
   telegram-bot:
     build:
       context: .
-      dockerfile: Dockerfile.backend
+      dockerfile: Dockerfile
     command: ["python", "telegram_bot.py"]
     environment:
       - WAKE_BACKEND_URL=http://app:8000
@@ -94,7 +94,7 @@ services:
   predict-resolver:
     build:
       context: .
-      dockerfile: Dockerfile.backend
+      dockerfile: Dockerfile
     command: ["python", "predict_resolver.py", "--loop"]
     environment:
       - WAKE_LIGHTER_NETWORK=mainnet

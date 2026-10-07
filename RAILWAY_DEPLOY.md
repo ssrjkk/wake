@@ -75,7 +75,7 @@ curl https://your-backend.up.railway.app/health
 
 ## Troubleshooting
 
-- **Build fails**: Check Railway logs, ensure Dockerfile.backend is correct
+- **Build fails**: Check Railway logs, ensure Dockerfile is correct
 - **Database connection**: Verify POSTGRES_DATABASE_URL is set
 - **CORS errors**: Add frontend URL to WAKE_CORS_ORIGINS
 - **Port issues**: Railway auto-sets $PORT, Dockerfile exposes 8000

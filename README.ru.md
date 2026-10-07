@@ -128,7 +128,7 @@ Price-рынки закрываются по дедлайну только по�
 | Переменная | Дефолт | Зачем |
 | --- | --- | --- |
 | `VITE_LIGHTER_NETWORK` | `mainnet` | должна совпадать с `WAKE_LIGHTER_NETWORK` бэкенда, иначе сайт и бот покажут разные market id |
-| `VITE_BACKEND_URL` | `http://localhost:8000` | зашивается в бандл, в рантайме не меняется |
+| `VITE_BACKEND_URL` | Railway URL | зашивается в бандл, в рантайме не меняется; для локальной разработки задайте `http://localhost:8000` в `.env` |
 | `VITE_SIGNING_SERVICE_URL` | `http://localhost:8787` | |
 | `VITE_WALLETCONNECT_PROJECT_ID` | пусто | без него нет QR-коннектора; injected-кошельки работают и так |
 | `VITE_TELEGRAM_BOT_NAME` | пусто | пусто — панель входа через Telegram выключена |
@@ -214,35 +214,19 @@ npm run build
 npx wrangler pages deploy dist --project-name wake
 ```
 
-### Бэкенд: Cloudflare Workers
+### Бэкенд: Railway (именно он и работает)
 
-Бэкенд работает на Cloudflare Workers с поддержкой Python (`wrangler.toml` настроен). Worker использует SQLite через D1 или in-memory хранилище, и подключается к внешним PostgreSQL/Redis, если они настроены.
-
-Деплой бэкенда:
+Бэкенд работает на Railway через Docker (`Dockerfile` в корне репо, `railway.json` настраивает сборку). Переменные окружения задаются через дашборд Railway или CLI.
 
 ```bash
-cd backend
-npx wrangler deploy
+railway variables set WAKE_DRY_RUN=true WAKE_LIGHTER_NETWORK=mainnet
+railway variables set WAKE_CORS_ORIGINS="https://wake-7k6.pages.dev"
+railway service redeploy --service wake-backend
 ```
 
-Worker предоставляет тот же API, что и локальный FastAPI-сервер. Секреты задаются через Wrangler:
+Полная инструкция — в [RAILWAY_DEPLOY.md](RAILWAY_DEPLOY.md).
 
-```bash
-npx wrangler secret set TELEGRAM_BOT_TOKEN
-npx wrangler secret set WAKE_DATABASE_URL
-npx wrangler secret set WAKE_REDIS_URL
-```
-
-**Ограничения бесплатного тарифа:**
-- Workers Free: 100k запросов/день, 10ms CPU на запрос
-- D1 Free: 5GB хранилища, 5M чтений строк/день
-- Нет постоянных соединений (WebSocket для copy-trading listener требует другого подхода)
-
-Для продакшена тариф Workers Paid ($5/месяц) снимает большинство ограничений.
-
-**Альтернатива: Docker**
-
-Для полного контроля или когда лимиты Workers слишком жёсткие, используйте Docker:
+**Альтернатива: Docker Compose (локально или на своём хостинге)**
 
 ```bash
 docker compose up app              # :8000
@@ -260,7 +244,7 @@ docker compose up predict-resolver
 - Память агента, подписки и состояние риска в `backend/api/agent.py` живут в словарях процесса и теряются при рестарте. Данные копи-трейдинга и Predict — в SQLite; агент — нет.
 - LLM-путь решений (`backend/llm_agent.py`) не покрыт тестами. При ошибке вызова или отсутствующем ключе он откатывается на протестированный rule-движок.
 - WebSocket-соединение в `leader_listener.py` автотестами не проверяется (логику сравнения снапшотов позиций — проверяют): нужна реальная сеть.
-- Только SQLite. Пути на Postgres или хостящуюся базу нет.
+- SQLite для локальной разработки и данных копи-трейдинга/Predict; PostgreSQL доступен для продакшена (см. `backend/database.py`, `backend/pg_models.py`, `alembic/`). Память агента и подписки живут в словаре процесса и теряются при рестарте.
 - `handle` лидера — то, что ввёл регистрирующийся; соответствие реальному аккаунту Lighter не сверяется.
 - `/markets/overview` стоит 18 свечных запросов на обновление и кэшируется 60 секунд.
 

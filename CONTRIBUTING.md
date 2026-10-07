@@ -6,7 +6,7 @@ Thank you for your interest in contributing to Wake. This document explains how 
 
 ### Prerequisites
 
-- Node.js 24 and npm
+- Node.js 22+ and npm
 - Python 3.12+
 - Git
 
@@ -155,7 +155,7 @@ Open an issue for questions about contributing.
 
 ### Требования
 
-- Node.js 24 и npm
+- Node.js 22+ и npm
 - Python 3.12+
 - Git
 

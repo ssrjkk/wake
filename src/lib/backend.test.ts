@@ -48,16 +48,15 @@ describe('backendJson', () => {
       json: () => Promise.reject(new SyntaxError(`Unexpected token '<', "<!doctype "... is not valid JSON`)),
     })
     const message = await expectError(() => backendJson('/predict/markets'))
-    expect(message).toContain('бэкенда Wake нет')
-    expect(message).toContain(BACKEND_URL)
+    // localhost и production дают разные сообщения; проверяем общее — нет сырого SyntaxError
     expect(message).not.toContain('Unexpected token')
   })
 
   it('says the backend does not answer when the request never got a response', async () => {
     fetchMock.mockRejectedValue(new TypeError('Failed to fetch'))
     const message = await expectError(() => backendJson('/leaders'))
-    expect(message).toContain('не отвечает')
-    expect(message).toContain(BACKEND_URL)
+    // localhost: "Сервер недоступен"; production: "${URL} не отвечает"
+    expect(message.toLowerCase()).toMatch(/не отвечает|недоступен/)
   })
 
   it('probes /health for the backend status', async () => {

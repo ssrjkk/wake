@@ -128,7 +128,7 @@ Price markets close themselves at the deadline only while this process runs; oth
 | Variable | Default | Notes |
 | --- | --- | --- |
 | `VITE_LIGHTER_NETWORK` | `mainnet` | must match the backend's `WAKE_LIGHTER_NETWORK`, or the site and the bot show different market ids |
-| `VITE_BACKEND_URL` | `http://localhost:8000` | baked into the bundle, not changeable at runtime |
+| `VITE_BACKEND_URL` | Railway URL | baked into the bundle, not changeable at runtime; set `http://localhost:8000` in `.env` for local dev |
 | `VITE_SIGNING_SERVICE_URL` | `http://localhost:8787` | |
 | `VITE_WALLETCONNECT_PROJECT_ID` | empty | empty means no QR connector; injected wallets still work |
 | `VITE_TELEGRAM_BOT_NAME` | empty | empty disables the Telegram login panel |
@@ -214,35 +214,19 @@ npm run build
 npx wrangler pages deploy dist --project-name wake
 ```
 
-### Backend: Cloudflare Workers
+### Backend: Railway (this is what runs)
 
-The backend runs on Cloudflare Workers with Python support (`wrangler.toml` is configured). The Worker uses SQLite via D1 or in-memory storage, and connects to external PostgreSQL/Redis if configured.
-
-Deploy the backend:
+The backend runs on Railway via Docker (`Dockerfile` at the repo root, `railway.json` configures the build). Environment variables are set through the Railway dashboard or CLI.
 
 ```bash
-cd backend
-npx wrangler deploy
+railway variables set WAKE_DRY_RUN=true WAKE_LIGHTER_NETWORK=mainnet
+railway variables set WAKE_CORS_ORIGINS="https://wake-7k6.pages.dev"
+railway service redeploy --service wake-backend
 ```
 
-The Worker exposes the same API as the local FastAPI server. Set secrets via Wrangler:
+See [RAILWAY_DEPLOY.md](RAILWAY_DEPLOY.md) for the full setup guide.
 
-```bash
-npx wrangler secret set TELEGRAM_BOT_TOKEN
-npx wrangler secret set WAKE_DATABASE_URL
-npx wrangler secret set WAKE_REDIS_URL
-```
-
-**Limitations on the free plan:**
-- Workers Free: 100k requests/day, 10ms CPU per request
-- D1 Free: 5GB storage, 5M rows reads/day
-- No persistent connections (WebSockets for the copy-trading listener need a different approach)
-
-For production workloads, the Workers Paid plan ($5/month) removes most limits.
-
-**Alternative: Docker**
-
-For full control or when Workers limits are too restrictive, use Docker:
+**Alternative: Docker Compose (local or self-hosted)**
 
 ```bash
 docker compose up app              # :8000
@@ -260,7 +244,7 @@ Databases persist in the `wake-data` volume; secrets come from `backend/.env`, w
 - Agent memory, subscriptions and risk state in `backend/api/agent.py` live in per-process dictionaries — they are gone on restart. The copy-trading and Predict data is in SQLite; this is not.
 - The LLM decision path (`backend/llm_agent.py`) has no automated test. It falls back to the tested rule engine when the call fails or no key is set.
 - `leader_listener.py`'s websocket connection is not exercised by tests (they cover the snapshot-diffing logic around it); it needs a network to verify.
-- SQLite only. There is no Postgres or hosted-database path.
+- SQLite for local dev and copy-trading/Predict data; PostgreSQL is available for production (see `backend/database.py`, `backend/pg_models.py`, `alembic/`). Agent memory and subscriptions are per-process and lost on restart.
 - A leader's `handle` is whatever the registering user types; it is not matched to a verified Lighter account.
 - `/markets/overview` costs 18 candle requests per refresh and is cached for 60 seconds.
 
