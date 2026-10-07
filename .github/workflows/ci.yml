@@ -199,7 +199,7 @@ jobs:
       - uses: actions/checkout@v4
       - name: Build backend image
         run: |
-          docker build -f Dockerfile.backend -t wake-backend:${{ github.sha }} .
+          docker build -t wake-backend:${{ github.sha }} .
           docker tag wake-backend:${{ github.sha }} wake-backend:latest
       - name: Verify image
         run: |
