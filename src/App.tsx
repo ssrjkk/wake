@@ -366,10 +366,10 @@ export default function App() {
 
   return (
     <div className="min-h-screen w-full font-sans">
-      <div className="max-w-6xl mx-auto px-6 py-5">
+      <div className="max-w-6xl mx-auto px-3 sm:px-6 py-5">
         <div className="mb-6">
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+            <div className="flex flex-wrap items-center gap-2 sm:gap-3">
               <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-[#ff6b35] to-[#ff8c5a] flex items-center justify-center glow-logo shadow-lg shadow-[#ff6b35]/20">
                 <Zap className="w-5 h-5 text-[#0a0a0a]" strokeWidth={2.5} />
               </div>
@@ -377,11 +377,11 @@ export default function App() {
               <div className="flex items-center gap-1.5 ml-2">
                 <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[#141414] border border-[#2a2a2a] hover:border-[#3a3a3a] transition-colors">
                   <div className="w-1.5 h-1.5 rounded-full bg-[#ff6b35] live-indicator"></div>
-                  <span className="text-[10px] font-mono text-[#888] uppercase tracking-wide">Lighter</span>
+                  <span className="text-[11px] font-mono text-[#888] uppercase tracking-wide">Lighter</span>
                 </div>
                 <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[#141414] border border-[#2a2a2a] hover:border-[#3a3a3a] transition-colors">
                   <div className="w-1.5 h-1.5 rounded-full bg-[#10b981] live-indicator"></div>
-                  <span className="text-[10px] font-mono text-[#888] uppercase tracking-wide">Arcus</span>
+                  <span className="text-[11px] font-mono text-[#888] uppercase tracking-wide">Arcus</span>
                 </div>
               </div>
               <div className="flex rounded-lg border border-[#2a2a2a] overflow-hidden ml-2 bg-[#0a0a0a]">
@@ -390,7 +390,7 @@ export default function App() {
                     key={n}
                     onClick={() => switchNetwork(n)}
                     title={n === "mainnet" ? "Реальные рынки Lighter и Arcus, реальные цены" : "Тестовая сеть — тот же код, другие market ids"}
-                    className={`px-3 py-1 text-[10px] font-mono uppercase tracking-wide transition-all ${
+                    className={`px-3 py-2 text-[11px] font-mono uppercase tracking-wide transition-all min-h-[36px] ${
                       network === n
                         ? "bg-[#1a1a1a] text-[#ff6b35] font-semibold shadow-inner"
                         : "text-[#666] hover:text-[#888] hover:bg-[#141414]"
@@ -406,7 +406,7 @@ export default function App() {
               {address || followerId ? (
                 <button
                   onClick={() => setWalletMenuOpen((v) => !v)}
-                  className="flex items-center gap-2 bg-gradient-to-r from-[#1a1a1a] to-[#141414] border border-[#2a2a2a] hover:border-[#3a3a3a] hover:shadow-lg hover:shadow-black/20 rounded-full pl-1.5 pr-3 py-1.5 text-sm text-[#ccc] font-mono transition-all"
+                  className="flex items-center gap-2 bg-gradient-to-r from-[#1a1a1a] to-[#141414] border border-[#2a2a2a] hover:border-[#3a3a3a] hover:shadow-lg hover:shadow-black/20 rounded-full pl-1.5 pr-3 py-2 text-sm text-[#ccc] font-mono transition-all min-h-[40px]"
                 >
                   <span
                     className={`w-6 h-6 rounded-full ${
@@ -553,8 +553,8 @@ export default function App() {
             </div>
           </div>
 
-          <div className="relative -mx-6 px-6 sm:mx-0 sm:px-0">
-            <nav className="glass-panel flex items-center gap-1 overflow-x-auto pb-0.5 rounded-lg px-2 py-1 shadow-sm" aria-label="Основная навигация">
+          <div className="relative -mx-3 px-3 sm:mx-0 sm:px-0">
+            <nav className="glass-panel flex items-center gap-1 overflow-x-auto pb-0.5 rounded-lg px-2 py-1 shadow-sm scrollbar-hide" aria-label="Основная навигация" style={{ WebkitOverflowScrolling: "touch" }}>
               <NavTab active={tab === "dashboard"} onClick={() => setTab("dashboard")} label="Обзор" live />
               <NavTab active={tab === "terminal"} onClick={() => setTab("terminal")} label="Терминал" live />
               <NavTab active={tab === "discover"} onClick={() => setTab("discover")} label="Discover" />
@@ -611,7 +611,7 @@ export default function App() {
                 <div key={i} style={{ flex: 1, height: "80px", background: "#111", borderRadius: "6px", animation: "wakeShimmer 1.6s ease-in-out infinite" }} />
               ))}
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 300px", gap: "16px" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "16px" }}>
               <div style={{ height: "400px", background: "#111", borderRadius: "6px", animation: "wakeShimmer 1.6s ease-in-out infinite" }} />
               <div style={{ height: "400px", background: "#111", borderRadius: "6px", animation: "wakeShimmer 1.6s ease-in-out infinite" }} />
             </div>
@@ -716,7 +716,7 @@ export default function App() {
         >
           <div
             className="w-full max-w-md bg-[#1a1a1a] border border-[#2a2a2a] rounded-lg p-4 flex flex-col"
-            style={{ height: "560px" }}
+            style={{ maxHeight: "min(560px, 85vh)", overflow: "hidden", display: "flex", flexDirection: "column" }}
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between mb-3">
@@ -866,7 +866,7 @@ export default function App() {
         <div
           role="status"
           aria-live="polite"
-          className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-[#1a1a1a] border rounded-full px-5 py-3 shadow-2xl flex items-center gap-3 z-50 max-w-md animate-slide-up"
+          className="fixed bottom-4 left-4 right-4 sm:left-1/2 sm:right-auto sm:-translate-x-1/2 bg-[#1a1a1a] border rounded-full px-5 py-3 shadow-2xl flex items-center gap-3 z-50 sm:max-w-md animate-slide-up"
           style={{ borderColor: toast.variant === "error" ? "#ef4444" : toast.variant === "success" ? "#10b981" : "#3b82f6" }}
         >
           {toast.variant === "error" ? (
@@ -879,7 +879,7 @@ export default function App() {
           <span className="text-sm text-[#ccc]">{toast.msg}</span>
           <button
             onClick={() => setToastState(null)}
-            className="ml-2 text-[#666] hover:text-[#ccc] transition-colors"
+            className="ml-2 text-[#666] hover:text-[#ccc] transition-colors p-2 -m-2"
             aria-label="Закрыть уведомление"
           >
             <X className="w-3.5 h-3.5" />

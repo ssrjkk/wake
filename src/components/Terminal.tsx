@@ -165,14 +165,14 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
   const up = (change ?? 0) >= 0;
 
   return (
-    <div style={{ display: "grid", gridTemplateColumns: "1fr 340px", gap: "1px", height: "calc(100vh - 60px)", background: "#1a1a1a" }}>
+    <div className="terminal-layout">
       <div style={{ display: "grid", gridTemplateRows: "auto 1fr auto", gap: "1px", background: "#1a1a1a", overflow: "hidden" }}>
         {/* Asset header */}
-        <div style={{ display: "flex", alignItems: "center", gap: "24px", padding: "12px 16px", background: "#111" }}>
+        <div className="terminal-asset-header">
           <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
             <button onClick={() => setMarketPickerOpen(true)} style={{ display: "flex", alignItems: "center", gap: "8px", background: "transparent", border: "none", cursor: "pointer", padding: 0 }}>
               <span style={{ fontSize: "16px", fontWeight: 600, color: "#fafafa" }}>{asset}</span>
-              <span style={{ fontSize: "10px", fontWeight: 500, color: "#666", textTransform: "uppercase", padding: "2px 6px", background: "#1a1a1a", borderRadius: "3px" }}>
+              <span style={{ fontSize: "11px", fontWeight: 500, color: "#666", textTransform: "uppercase", padding: "2px 6px", background: "#1a1a1a", borderRadius: "3px" }}>
                 {currentMarket?.market_type ?? "PERP"}
               </span>
             </button>
@@ -196,15 +196,15 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
           {stats24h && (
             <div style={{ display: "flex", gap: "24px", marginLeft: "auto" }}>
               <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
-                <span style={{ fontSize: "10px", fontWeight: 500, color: "#666", textTransform: "uppercase", letterSpacing: "0.05em" }}>24h High</span>
+                <span style={{ fontSize: "11px", fontWeight: 500, color: "#666", textTransform: "uppercase", letterSpacing: "0.05em" }}>24h High</span>
                 <span style={{ fontFamily: MONO, fontSize: "13px", fontWeight: 500, color: "#a0a0a0" }}>${fmt(stats24h.high, decimals)}</span>
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
-                <span style={{ fontSize: "10px", fontWeight: 500, color: "#666", textTransform: "uppercase", letterSpacing: "0.05em" }}>24h Low</span>
+                <span style={{ fontSize: "11px", fontWeight: 500, color: "#666", textTransform: "uppercase", letterSpacing: "0.05em" }}>24h Low</span>
                 <span style={{ fontFamily: MONO, fontSize: "13px", fontWeight: 500, color: "#a0a0a0" }}>${fmt(stats24h.low, decimals)}</span>
               </div>
               <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
-                <span style={{ fontSize: "10px", fontWeight: 500, color: "#666", textTransform: "uppercase", letterSpacing: "0.05em" }}>24h Vol</span>
+                <span style={{ fontSize: "11px", fontWeight: 500, color: "#666", textTransform: "uppercase", letterSpacing: "0.05em" }}>24h Vol</span>
                 <span style={{ fontFamily: MONO, fontSize: "13px", fontWeight: 500, color: "#a0a0a0" }}>{usd(stats24h.volume, 0)}</span>
               </div>
             </div>
@@ -212,7 +212,7 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
 
           {fundingRate != null && (
             <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
-              <span style={{ fontSize: "10px", fontWeight: 500, color: "#666", textTransform: "uppercase", letterSpacing: "0.05em" }}>Funding</span>
+              <span style={{ fontSize: "11px", fontWeight: 500, color: "#666", textTransform: "uppercase", letterSpacing: "0.05em" }}>Funding</span>
               <span style={{ fontFamily: MONO, fontSize: "13px", fontWeight: 500, color: "#a0a0a0" }}>{(fundingRate * 100).toFixed(4)}%/h</span>
             </div>
           )}
@@ -221,7 +221,7 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
         {/* Chart */}
         <div style={{ background: "#111", padding: "16px", minHeight: "300px", position: "relative" }}>
           {lastCandlesUpdate && !candlesError && !dataError && (
-            <div style={{ position: "absolute", top: "8px", right: "8px", fontSize: "10px", color: "#525252", fontFamily: MONO, zIndex: 10 }}>
+            <div style={{ position: "absolute", top: "8px", right: "8px", fontSize: "11px", color: "#525252", fontFamily: MONO, zIndex: 10 }}>
               {lastCandlesUpdate.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
             </div>
           )}
@@ -244,7 +244,7 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
           ) : chartData.length > 1 ? (
             <>
               {candlesLoading && candles.length === 0 && (
-                <div style={{ position: "absolute", top: "8px", right: "8px", fontSize: "10px", color: "#666", display: "flex", alignItems: "center", gap: "4px" }}>
+                <div style={{ position: "absolute", top: "8px", right: "8px", fontSize: "11px", color: "#666", display: "flex", alignItems: "center", gap: "4px" }}>
                   <div style={{ width: "8px", height: "8px", border: "2px solid #3b82f6", borderTopColor: "transparent", borderRadius: "50%", animation: "spin 1s linear infinite" }} />
                   загрузка…
                 </div>
@@ -272,12 +272,12 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
             <span style={{ fontSize: "11px", fontWeight: 600, color: "#666", textTransform: "uppercase", letterSpacing: "0.05em" }}>Recent Trades</span>
             <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
               {lastTradesUpdate && !tradesError && (
-                <span style={{ fontSize: "10px", color: "#525252", fontFamily: MONO }}>
+                <span style={{ fontSize: "11px", color: "#525252", fontFamily: MONO }}>
                   {lastTradesUpdate.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
                 </span>
               )}
               {tradesLoading && trades.length === 0 && (
-                <span style={{ fontSize: "10px", color: "#666" }}>загрузка…</span>
+                <span style={{ fontSize: "11px", color: "#666" }}>загрузка…</span>
               )}
               <Radio style={{ width: "12px", height: "12px", color: trades.length ? "#10b981" : "#525252", animation: "livePulse 2s ease-in-out infinite" }} />
             </div>
@@ -318,7 +318,7 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
           <div style={{ display: "flex", gap: "4px", marginBottom: "16px", padding: "3px", background: "#0a0a0a", borderRadius: "6px" }}>
             <button
               style={{
-                flex: 1, padding: "8px", fontSize: "13px", fontWeight: 600, border: "none", borderRadius: "4px", cursor: "pointer", transition: "all 0.15s",
+                flex: 1, padding: "12px 8px", fontSize: "13px", fontWeight: 600, border: "none", borderRadius: "4px", cursor: "pointer", transition: "all 0.15s", minHeight: "44px",
                 background: side === "long" ? "#10b981" : "transparent",
                 color: side === "long" ? "#0a0a0a" : "#666",
               }}
@@ -328,7 +328,7 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
             </button>
             <button
               style={{
-                flex: 1, padding: "8px", fontSize: "13px", fontWeight: 600, border: "none", borderRadius: "4px", cursor: "pointer", transition: "all 0.15s",
+                flex: 1, padding: "12px 8px", fontSize: "13px", fontWeight: 600, border: "none", borderRadius: "4px", cursor: "pointer", transition: "all 0.15s", minHeight: "44px",
                 background: side === "short" ? "#ef4444" : "transparent",
                 color: side === "short" ? "#0a0a0a" : "#666",
               }}
@@ -440,7 +440,7 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
                 onMouseLeave={(e) => { if (m.symbol !== asset) e.currentTarget.style.background = "transparent"; }}
               >
                 <span style={{ fontFamily: MONO, fontWeight: 600 }}>{m.symbol}</span>
-                <span style={{ fontSize: "10px", color: "#525252", textTransform: "uppercase" }}>{m.market_type}</span>
+                <span style={{ fontSize: "11px", color: "#525252", textTransform: "uppercase" }}>{m.market_type}</span>
               </button>
             ))}
           </div>
@@ -494,7 +494,7 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
               </button>
               <button
                 onClick={() => void placeOrder()}
-                style={{ flex: 1, padding: "10px", fontSize: "13px", fontWeight: 600, border: "none", borderRadius: "6px", cursor: "pointer", background: side === "long" ? "#10b981" : "#ef4444", color: "#0a0a0a", transition: "all 0.15s" }}
+                style={{ flex: 1, padding: "14px 10px", fontSize: "13px", fontWeight: 600, border: "none", borderRadius: "6px", cursor: "pointer", background: side === "long" ? "#10b981" : "#ef4444", color: "#0a0a0a", transition: "all 0.15s", minHeight: "44px" }}
                 onMouseEnter={(e) => { e.currentTarget.style.filter = "brightness(1.1)"; }}
                 onMouseLeave={(e) => { e.currentTarget.style.filter = "brightness(1)"; }}
               >

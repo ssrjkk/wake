@@ -151,7 +151,7 @@ export default function Agent({ followerId, subscription, currentMarket, setToas
             Статус подписки читается с <code style={{ color: "#a0a0a0" }}>GET /subscription/&lt;follower_id&gt;</code>; без входа через Telegram или
             кошелёк её не на что заводить.
           </p>
-          <button onClick={startTrial} style={{ background: "#3b82f6", color: "#fff", fontSize: "13px", fontWeight: 600, padding: "8px 16px", borderRadius: "4px", border: "none", cursor: "pointer" }}>
+          <button onClick={startTrial} style={{ background: "#3b82f6", color: "#fff", fontSize: "13px", fontWeight: 600, padding: "10px 16px", borderRadius: "4px", border: "none", cursor: "pointer", minHeight: "44px" }}>
             Начать 14-дневный trial
           </button>
           <p style={{ fontSize: "11px", color: "#666", marginTop: "12px", maxWidth: "320px", lineHeight: 1.5 }}>
@@ -178,7 +178,7 @@ export default function Agent({ followerId, subscription, currentMarket, setToas
                     <button
                       key={r}
                       onClick={() => setResolution(r)}
-                      style={{ padding: "2px 8px", borderRadius: "3px", fontSize: "12px", fontFamily: "JetBrains Mono, monospace", background: resolution === r ? "#3b82f6" : "#1a1a1a", color: resolution === r ? "#fff" : "#a0a0a0", border: "none", cursor: "pointer" }}
+                      style={{ padding: "4px 8px", borderRadius: "3px", fontSize: "12px", fontFamily: "JetBrains Mono, monospace", background: resolution === r ? "#3b82f6" : "#1a1a1a", color: resolution === r ? "#fff" : "#a0a0a0", border: "none", cursor: "pointer", minHeight: "32px" }}
                     >
                       {r}
                     </button>
@@ -194,13 +194,13 @@ export default function Agent({ followerId, subscription, currentMarket, setToas
                     step={50}
                     value={baseSizeUsd}
                     onChange={(e) => setBaseSizeUsd(Math.max(0, Number(e.target.value)))}
-                    style={{ marginLeft: "6px", background: "#1a1a1a", border: "1px solid #2a2a2a", borderRadius: "4px", padding: "4px 8px", width: "80px", color: "#fafafa", fontSize: "13px", fontFamily: "JetBrains Mono, monospace", outline: "none" }}
+                    style={{ marginLeft: "6px", background: "#1a1a1a", border: "1px solid #2a2a2a", borderRadius: "4px", padding: "8px", width: "100px", color: "#fafafa", fontSize: "13px", fontFamily: "JetBrains Mono, monospace", outline: "none" }}
                   />
                 </label>
                 <button
                   onClick={() => void runAgentStep()}
                   disabled={busy || candles == null || prices.length < 2}
-                  style={{ background: busy || candles == null || prices.length < 2 ? "#333" : "#3b82f6", color: "#fff", fontSize: "12px", fontWeight: 600, padding: "6px 12px", borderRadius: "4px", border: "none", cursor: busy || candles == null || prices.length < 2 ? "not-allowed" : "pointer" }}
+                  style={{ background: busy || candles == null || prices.length < 2 ? "#333" : "#3b82f6", color: "#fff", fontSize: "12px", fontWeight: 600, padding: "8px 12px", borderRadius: "4px", border: "none", cursor: busy || candles == null || prices.length < 2 ? "not-allowed" : "pointer", minHeight: "44px" }}
                 >
                   {busy ? "Считаю…" : "Спросить агента"}
                 </button>
@@ -264,7 +264,8 @@ export default function Agent({ followerId, subscription, currentMarket, setToas
               </div>
               <pre style={{ fontSize: "12px", color: "#a0a0a0", whiteSpace: "pre-wrap", fontFamily: "JetBrains Mono, monospace", marginBottom: "12px" }}>{memory.summary}</pre>
               {memory.open_trades.length > 0 && (
-                <table style={{ width: "100%", fontSize: "12px" }}>
+                <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
+                <table style={{ width: "100%", fontSize: "12px", minWidth: "400px" }}>
                   <thead>
                     <tr style={{ textAlign: "left", fontSize: "11px", color: "#666", borderBottom: "1px solid #1e1e1e" }}>
                       <th style={{ padding: "6px 0", fontWeight: 400 }}>Рынок</th>
@@ -284,6 +285,7 @@ export default function Agent({ followerId, subscription, currentMarket, setToas
                     ))}
                   </tbody>
                 </table>
+                </div>
               )}
             </div>
           )}

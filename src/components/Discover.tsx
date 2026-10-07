@@ -116,7 +116,7 @@ export default function Discover({ setCopyModal }: DiscoverProps) {
                   </div>
                   <button
                     onClick={() => setCopyModal(t)}
-                    style={{ width: "100%", background: "#3b82f6", color: "#fff", fontSize: "12px", fontWeight: 600, padding: "8px 0", border: "none", borderRadius: "4px", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: "6px" }}
+                    style={{ width: "100%", background: "#3b82f6", color: "#fff", fontSize: "12px", fontWeight: 600, padding: "10px 0", border: "none", borderRadius: "4px", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: "6px", minHeight: "44px" }}
                   >
                     <CopyIcon style={{ width: "12px", height: "12px" }} /> Copy
                   </button>

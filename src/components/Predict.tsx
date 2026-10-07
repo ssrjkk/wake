@@ -217,7 +217,7 @@ export default function Predict({ followerId, setToast, onConnect }: PredictProp
             <h2 style={{ fontSize: "16px", fontWeight: 600, color: "#fafafa", margin: 0 }}>Predict</h2>
             <button
               onClick={() => setNonce((n) => n + 1)}
-              style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: "6px", fontSize: "11px", color: "#888", background: "rgba(26, 26, 26, 0.5)", border: "1px solid #2a2a2a", borderRadius: "4px", padding: "6px 10px", cursor: "pointer", transition: "all 0.15s" }}
+              style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: "6px", fontSize: "11px", color: "#888", background: "rgba(26, 26, 26, 0.5)", border: "1px solid #2a2a2a", borderRadius: "4px", padding: "8px 10px", cursor: "pointer", transition: "all 0.15s", minHeight: "36px" }}
               onMouseEnter={(e) => {
                 e.currentTarget.style.borderColor = "#3a3a3a";
                 e.currentTarget.style.color = "#aaa";
@@ -243,7 +243,7 @@ export default function Predict({ followerId, setToast, onConnect }: PredictProp
             key={f.id}
             onClick={() => setStatus(f.id)}
             style={{
-              padding: "6px 12px",
+              padding: "8px 12px",
               borderRadius: "4px",
               fontSize: "11px",
               fontWeight: status === f.id ? 600 : 500,
@@ -251,7 +251,8 @@ export default function Predict({ followerId, setToast, onConnect }: PredictProp
               color: status === f.id ? "#3b82f6" : "#ccc",
               border: status === f.id ? "1px solid rgba(59, 130, 246, 0.3)" : "1px solid #2a2a2a",
               cursor: "pointer",
-              transition: "all 0.15s"
+              transition: "all 0.15s",
+              minHeight: "36px"
             }}
             onMouseEnter={(e) => {
               if (status !== f.id) {
@@ -332,7 +333,7 @@ export default function Predict({ followerId, setToast, onConnect }: PredictProp
                         {p.claimable_usd > 0 && !p.claimed && (
                           <button
                             onClick={() => void claim(p)}
-                            style={{ background: "linear-gradient(135deg, #10b981 0%, #34d399 100%)", color: "#0a0a0a", fontSize: "11px", fontWeight: 600, padding: "6px 12px", border: "none", borderRadius: "4px", cursor: "pointer", transition: "all 0.15s", boxShadow: "0 1px 2px rgba(16, 185, 129, 0.2)" }}
+                            style={{ background: "linear-gradient(135deg, #10b981 0%, #34d399 100%)", color: "#0a0a0a", fontSize: "11px", fontWeight: 600, padding: "8px 12px", border: "none", borderRadius: "4px", cursor: "pointer", transition: "all 0.15s", boxShadow: "0 1px 2px rgba(16, 185, 129, 0.2)", minHeight: "36px" }}
                             onMouseEnter={(e) => {
                               e.currentTarget.style.filter = "brightness(1.1)";
                               e.currentTarget.style.boxShadow = "0 2px 4px rgba(16, 185, 129, 0.3)";
@@ -441,14 +442,14 @@ export default function Predict({ followerId, setToast, onConnect }: PredictProp
                   <button
                     onClick={() => openTrade(m, "yes")}
                     disabled={resolved}
-                    style={{ flex: 1, background: resolved ? "#1a1a1a" : "#10b981", color: resolved ? "#666" : "#0a0a0a", fontSize: "11px", fontWeight: 600, padding: "8px 0", border: "none", borderRadius: "4px", cursor: resolved ? "default" : "pointer" }}
+                    style={{ flex: 1, background: resolved ? "#1a1a1a" : "#10b981", color: resolved ? "#666" : "#0a0a0a", fontSize: "11px", fontWeight: 600, padding: "10px 0", border: "none", borderRadius: "4px", cursor: resolved ? "default" : "pointer", minHeight: "44px" }}
                   >
                     {resolved ? "YES" : `Купить YES ${cents(m.price_yes)}`}
                   </button>
                   <button
                     onClick={() => openTrade(m, "no")}
                     disabled={resolved}
-                    style={{ flex: 1, background: resolved ? "#1a1a1a" : "#ef4444", color: resolved ? "#666" : "#fff", fontSize: "11px", fontWeight: 600, padding: "8px 0", border: "none", borderRadius: "4px", cursor: resolved ? "default" : "pointer" }}
+                    style={{ flex: 1, background: resolved ? "#1a1a1a" : "#ef4444", color: resolved ? "#666" : "#fff", fontSize: "11px", fontWeight: 600, padding: "10px 0", border: "none", borderRadius: "4px", cursor: resolved ? "default" : "pointer", minHeight: "44px" }}
                   >
                     {resolved ? "NO" : `Купить NO ${cents(m.price_no)}`}
                   </button>
@@ -490,7 +491,7 @@ export default function Predict({ followerId, setToast, onConnect }: PredictProp
               <h3 style={{ fontSize: "13px", color: "#fafafa", fontWeight: 600, margin: 0 }}>
                 {sellMode ? "Продать" : "Купить"} {trade.outcome.toUpperCase()} — {trade.market.question}
               </h3>
-              <button onClick={() => setTrade(null)} aria-label="Закрыть" style={{ color: "#666", background: "none", border: "none", cursor: "pointer", padding: 0, flexShrink: 0 }}>
+              <button onClick={() => setTrade(null)} aria-label="Закрыть" style={{ color: "#666", background: "none", border: "none", cursor: "pointer", padding: "14px", flexShrink: 0 }}>
                 <X style={{ width: "16px", height: "16px" }} />
               </button>
             </div>
@@ -499,13 +500,13 @@ export default function Predict({ followerId, setToast, onConnect }: PredictProp
               <div style={{ display: "flex", gap: "4px", marginBottom: "12px" }}>
                 <button
                   onClick={() => setSellMode(false)}
-                  style={{ flex: 1, fontSize: "11px", padding: "6px 0", borderRadius: "4px", background: !sellMode ? "#1a1a1a" : "transparent", color: !sellMode ? "#3b82f6" : "#ccc", border: !sellMode ? "1px solid #3b82f6" : "1px solid #2a2a2a", cursor: "pointer" }}
+                  style={{ flex: 1, fontSize: "11px", padding: "8px 0", borderRadius: "4px", background: !sellMode ? "#1a1a1a" : "transparent", color: !sellMode ? "#3b82f6" : "#ccc", border: !sellMode ? "1px solid #3b82f6" : "1px solid #2a2a2a", cursor: "pointer", minHeight: "36px" }}
                 >
                   Покупка
                 </button>
                 <button
                   onClick={() => setSellMode(true)}
-                  style={{ flex: 1, fontSize: "11px", padding: "6px 0", borderRadius: "4px", background: sellMode ? "#1a1a1a" : "transparent", color: sellMode ? "#3b82f6" : "#ccc", border: sellMode ? "1px solid #3b82f6" : "1px solid #2a2a2a", cursor: "pointer" }}
+                  style={{ flex: 1, fontSize: "11px", padding: "8px 0", borderRadius: "4px", background: sellMode ? "#1a1a1a" : "transparent", color: sellMode ? "#3b82f6" : "#ccc", border: sellMode ? "1px solid #3b82f6" : "1px solid #2a2a2a", cursor: "pointer", minHeight: "36px" }}
                 >
                   Продажа (держишь {trade.held})
                 </button>
@@ -560,7 +561,7 @@ export default function Predict({ followerId, setToast, onConnect }: PredictProp
                 void confirmTrade();
               }}
               disabled={sending || preview == null || shares <= 0 || (sellMode && shares > trade.held)}
-              style={{ width: "100%", background: sending || preview == null || shares <= 0 || (sellMode && shares > trade.held) ? "#1a1a1a" : tradeConfirmed ? "#ef4444" : "#3b82f6", color: sending || preview == null || shares <= 0 || (sellMode && shares > trade.held) ? "#666" : "#fff", fontWeight: 600, borderRadius: "4px", padding: "10px 0", border: "none", cursor: "pointer", fontSize: "12px" }}
+              style={{ width: "100%", background: sending || preview == null || shares <= 0 || (sellMode && shares > trade.held) ? "#1a1a1a" : tradeConfirmed ? "#ef4444" : "#3b82f6", color: sending || preview == null || shares <= 0 || (sellMode && shares > trade.held) ? "#666" : "#fff", fontWeight: 600, borderRadius: "4px", padding: "12px 0", border: "none", cursor: "pointer", fontSize: "12px", minHeight: "44px" }}
             >
               {sending
                 ? "Отправка…"
@@ -594,7 +595,7 @@ export default function Predict({ followerId, setToast, onConnect }: PredictProp
           </div>
           <button
             onClick={onConnect}
-            style={{ background: "#3b82f6", color: "#fff", fontSize: "12px", fontWeight: 600, padding: "8px 16px", border: "none", borderRadius: "4px", cursor: "pointer" }}
+            style={{ background: "#3b82f6", color: "#fff", fontSize: "12px", fontWeight: 600, padding: "10px 16px", border: "none", borderRadius: "4px", cursor: "pointer", minHeight: "44px" }}
           >
             Войти
           </button>

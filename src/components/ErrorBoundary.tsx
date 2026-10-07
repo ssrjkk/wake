@@ -56,7 +56,7 @@ export class ErrorBoundary extends React.Component<Props, State> {
             )}
             <button
               onClick={() => window.location.reload()}
-              style={{ background: "#3b82f6", color: "#fff", fontSize: "13px", fontWeight: 600, padding: "8px 16px", border: "none", borderRadius: "6px", cursor: "pointer", transition: "background 0.15s" }}
+              style={{ background: "#3b82f6", color: "#fff", fontSize: "13px", fontWeight: 600, padding: "10px 16px", border: "none", borderRadius: "6px", cursor: "pointer", transition: "background 0.15s", minHeight: "44px" }}
               onMouseEnter={(e) => e.currentTarget.style.background = "#2563eb"}
               onMouseLeave={(e) => e.currentTarget.style.background = "#3b82f6"}
             >

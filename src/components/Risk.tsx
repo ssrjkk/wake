@@ -116,7 +116,7 @@ export default function Risk({ markets, setToast }: RiskProps) {
             <span style={{ fontSize: "11px", color: "#666", textTransform: "uppercase", letterSpacing: "0.5px" }}>Позиции для анализа</span>
             <button
               onClick={() => setRiskPickerOpen(true)}
-              style={{ background: "#1a1a1a", color: "#fafafa", fontSize: "12px", fontWeight: 500, padding: "6px 12px", borderRadius: "4px", border: "none", cursor: "pointer" }}
+              style={{ background: "#1a1a1a", color: "#fafafa", fontSize: "12px", fontWeight: 500, padding: "8px 12px", borderRadius: "4px", border: "none", cursor: "pointer", minHeight: "36px" }}
             >
               + Добавить
             </button>
@@ -139,9 +139,9 @@ export default function Risk({ markets, setToast }: RiskProps) {
                         const v = Number(e.target.value);
                         setRiskPositions((arr) => arr.map((x, idx) => (idx === i ? { ...x, notionalUsd: v } : x)));
                       }}
-                      style={{ width: "80px", background: "#0a0a0a", border: "1px solid #2a2a2a", borderRadius: "4px", padding: "4px 8px", color: "#fafafa", fontFamily: "JetBrains Mono, monospace", fontSize: "12px", outline: "none" }}
+                      style={{ width: "120px", background: "#0a0a0a", border: "1px solid #2a2a2a", borderRadius: "4px", padding: "8px", color: "#fafafa", fontFamily: "JetBrains Mono, monospace", fontSize: "12px", outline: "none" }}
                     />
-                    <button onClick={() => removeRiskPosition(i)} aria-label="Удалить позицию" style={{ color: "#666", background: "none", border: "none", cursor: "pointer", padding: 0, display: "flex" }}>
+                    <button onClick={() => removeRiskPosition(i)} aria-label="Удалить позицию" style={{ color: "#666", background: "none", border: "none", cursor: "pointer", padding: "15px", display: "flex", alignItems: "center", justifyContent: "center" }}>
                       <X style={{ width: "14px", height: "14px" }} />
                     </button>
                   </div>
@@ -154,7 +154,7 @@ export default function Risk({ markets, setToast }: RiskProps) {
               <button
                 onClick={() => void analyzePortfolioRisk()}
                 disabled={riskBusy}
-                style={{ flex: 1, background: riskBusy ? "#333" : "#3b82f6", color: "#fff", fontSize: "13px", fontWeight: 600, padding: "8px", borderRadius: "4px", border: "none", cursor: riskBusy ? "not-allowed" : "pointer" }}
+                style={{ flex: 1, background: riskBusy ? "#333" : "#3b82f6", color: "#fff", fontSize: "13px", fontWeight: 600, padding: "12px 8px", borderRadius: "4px", border: "none", cursor: riskBusy ? "not-allowed" : "pointer", minHeight: "44px" }}
               >
                 {riskBusy ? (
                   <span style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "6px" }}>
@@ -166,7 +166,7 @@ export default function Risk({ markets, setToast }: RiskProps) {
               <button
                 onClick={() => void findHedge()}
                 disabled={riskBusy}
-                style={{ flex: 1, background: riskBusy ? "#333" : "#1a1a1a", color: "#fafafa", fontSize: "13px", fontWeight: 600, padding: "8px", borderRadius: "4px", border: "none", cursor: riskBusy ? "not-allowed" : "pointer" }}
+                style={{ flex: 1, background: riskBusy ? "#333" : "#1a1a1a", color: "#fafafa", fontSize: "13px", fontWeight: 600, padding: "12px 8px", borderRadius: "4px", border: "none", cursor: riskBusy ? "not-allowed" : "pointer", minHeight: "44px" }}
               >
                 Найти хедж
               </button>
@@ -222,7 +222,7 @@ export default function Risk({ markets, setToast }: RiskProps) {
           <div style={{ width: "100%", maxWidth: "380px", background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", padding: "20px", maxHeight: "70vh", overflowY: "auto" }} onClick={(e) => e.stopPropagation()}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "12px" }}>
               <h3 style={{ color: "#fafafa", fontWeight: 600, fontSize: "14px", margin: 0 }}>Добавить позицию</h3>
-              <button onClick={() => setRiskPickerOpen(false)} aria-label="Закрыть" style={{ color: "#666", background: "none", border: "none", cursor: "pointer", padding: 0, display: "flex" }}>
+              <button onClick={() => setRiskPickerOpen(false)} aria-label="Закрыть" style={{ color: "#666", background: "none", border: "none", cursor: "pointer", padding: "12px", display: "flex" }}>
                 <X style={{ width: "20px", height: "20px" }} />
               </button>
             </div>
@@ -233,14 +233,14 @@ export default function Risk({ markets, setToast }: RiskProps) {
                   <div style={{ display: "flex", gap: "6px" }}>
                     <button
                       onClick={() => addRiskPosition(m, "long")}
-                      style={{ background: "#10b981", color: "#fff", fontSize: "12px", fontWeight: 600, padding: "4px 10px", borderRadius: "4px", border: "none", cursor: "pointer" }}
+                      style={{ background: "#10b981", color: "#fff", fontSize: "12px", fontWeight: 600, padding: "8px 14px", borderRadius: "4px", border: "none", cursor: "pointer", minHeight: "44px" }}
                     >
                       Long
                     </button>
                     {m.market_type === "perp" && (
                       <button
                         onClick={() => addRiskPosition(m, "short")}
-                        style={{ background: "#ef4444", color: "#fff", fontSize: "12px", fontWeight: 600, padding: "4px 10px", borderRadius: "4px", border: "none", cursor: "pointer" }}
+                        style={{ background: "#ef4444", color: "#fff", fontSize: "12px", fontWeight: 600, padding: "8px 14px", borderRadius: "4px", border: "none", cursor: "pointer", minHeight: "44px" }}
                       >
                         Short
                       </button>

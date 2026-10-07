@@ -146,7 +146,7 @@ export default function Portfolio({ following, setTab, togglePause, unfollow, fo
                     <td style={{ padding: "12px 0" }}>
                       <button
                         onClick={() => togglePause(t.followId)}
-                        style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11px", padding: "4px 10px", borderRadius: "4px", border: "none", cursor: "pointer", background: t.paused ? "#1a1a1a" : "#0a2a1a", color: t.paused ? "#666" : "#10b981" }}
+                        style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11px", padding: "8px 10px", borderRadius: "4px", border: "none", cursor: "pointer", background: t.paused ? "#1a1a1a" : "#0a2a1a", color: t.paused ? "#666" : "#10b981", minHeight: "36px" }}
                       >
                         {t.paused ? <Play style={{ width: "12px", height: "12px" }} /> : <Pause style={{ width: "12px", height: "12px" }} />}
                         {t.paused ? "На паузе" : "Копирует"}
@@ -159,7 +159,7 @@ export default function Portfolio({ following, setTab, togglePause, unfollow, fo
                             unfollow(t.followId);
                           }
                         }}
-                        style={{ color: "#666", background: "none", border: "none", cursor: "pointer", padding: 0, display: "flex" }}
+                        style={{ color: "#666", background: "none", border: "none", cursor: "pointer", padding: "14px", display: "flex", alignItems: "center", justifyContent: "center" }}
                         title="Удалить подписку из follows"
                         aria-label="Удалить подписку"
                       >
@@ -230,7 +230,8 @@ export default function Portfolio({ following, setTab, togglePause, unfollow, fo
             {openPositions.length === 0 ? (
               <p style={{ fontSize: "13px", color: "#666", margin: 0 }}>Открытых позиций нет — lighter возвращает строку на каждый рынок, который счёт когда-либо трогал.</p>
             ) : (
-              <table style={{ width: "100%", fontSize: "13px" }}>
+              <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
+              <table style={{ width: "100%", fontSize: "13px", minWidth: "600px" }}>
                 <thead>
                   <tr style={{ textAlign: "left", fontSize: "11px", color: "#666", borderBottom: "1px solid #1e1e1e" }}>
                     <th style={{ paddingBottom: "8px", fontWeight: 400 }}>Рынок</th>
@@ -260,6 +261,7 @@ export default function Portfolio({ following, setTab, togglePause, unfollow, fo
                   ))}
                 </tbody>
               </table>
+              </div>
             )}
           </div>
         ) : (

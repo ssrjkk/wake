@@ -194,7 +194,7 @@ export default function Earn({ isCopyable, setTab, leaderId, leaderFeeBps, setLe
             <button
               onClick={() => void saveFee()}
               disabled={feeSaving || !leader || feeDraft === leader.feeBps}
-              style={{ background: feeSaving || !leader || feeDraft === leader.feeBps ? "#333" : "#3b82f6", color: "#fff", fontSize: "12px", fontWeight: 600, padding: "6px 12px", borderRadius: "4px", border: "none", cursor: feeSaving || !leader || feeDraft === leader.feeBps ? "not-allowed" : "pointer" }}
+              style={{ background: feeSaving || !leader || feeDraft === leader.feeBps ? "#333" : "#3b82f6", color: "#fff", fontSize: "12px", fontWeight: 600, padding: "8px 12px", borderRadius: "4px", border: "none", cursor: feeSaving || !leader || feeDraft === leader.feeBps ? "not-allowed" : "pointer", minHeight: "44px" }}
             >
               {feeSaving ? "Записываю…" : feeDraft === leader?.feeBps ? "Сохранено" : "Сохранить в leaders.fee_bps"}
             </button>
@@ -215,7 +215,7 @@ export default function Earn({ isCopyable, setTab, leaderId, leaderFeeBps, setLe
               max={200}
               value={turnsPerMonth}
               onChange={(e) => setTurnsPerMonth(Math.max(0, Number(e.target.value)))}
-              style={{ background: "#1a1a1a", border: "1px solid #2a2a2a", borderRadius: "4px", padding: "4px 8px", width: "80px", color: "#fafafa", fontSize: "13px", fontFamily: "JetBrains Mono, monospace", outline: "none" }}
+              style={{ background: "#1a1a1a", border: "1px solid #2a2a2a", borderRadius: "4px", padding: "8px", width: "100px", color: "#fafafa", fontSize: "13px", fontFamily: "JetBrains Mono, monospace", outline: "none" }}
             />
           </div>
           <div style={{ fontFamily: "JetBrains Mono, monospace", fontSize: "13px", color: "#a0a0a0", marginBottom: "8px" }}>
@@ -238,7 +238,8 @@ export default function Earn({ isCopyable, setTab, leaderId, leaderFeeBps, setLe
               они попадают в <code style={{ color: "#a0a0a0" }}>follows</code>.
             </p>
           ) : (
-            <table style={{ width: "100%", fontSize: "13px" }}>
+            <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
+            <table style={{ width: "100%", fontSize: "13px", minWidth: "500px" }}>
               <thead>
                 <tr style={{ textAlign: "left", fontSize: "11px", color: "#666", borderBottom: "1px solid #1e1e1e" }}>
                   <th style={{ paddingBottom: "8px", fontWeight: 400 }}>Подписчик</th>
@@ -262,6 +263,7 @@ export default function Earn({ isCopyable, setTab, leaderId, leaderFeeBps, setLe
                 ))}
               </tbody>
             </table>
+            </div>
           )}
           <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11px", color: "#666", marginTop: "12px" }}>
             <Wallet style={{ width: "12px", height: "12px" }} /> Идентификатор подписчика — внутренний id из таблицы followers; адреса кошельков здесь не показываются.

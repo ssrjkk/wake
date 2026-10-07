@@ -181,7 +181,8 @@ export default function Dashboard({ setTab, setAsset }: DashboardProps) {
         </div>
       ) : (
         <div style={{ background: "linear-gradient(135deg, #111 0%, #0f0f0f 100%)", border: "1px solid #1e1e1e", borderRadius: "6px", overflow: "hidden", boxShadow: "0 1px 3px rgba(0, 0, 0, 0.2)" }}>
-          <table style={{ width: "100%", fontSize: "12px", borderCollapse: "collapse" }} aria-label="Таблица данных">
+          <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
+          <table style={{ width: "100%", fontSize: "12px", borderCollapse: "collapse", minWidth: "700px" }} aria-label="Таблица данных">
             <thead>
               <tr style={{ textAlign: "left", fontSize: "11px", color: "#666", borderBottom: "1px solid #1e1e1e", background: "rgba(26, 26, 26, 0.3)" }}>
                 <th scope="col" style={{ padding: "10px 16px", fontWeight: 500 }}>#</th>
@@ -251,6 +252,7 @@ export default function Dashboard({ setTab, setAsset }: DashboardProps) {
               ))}
             </tbody>
           </table>
+          </div>
           <div style={{ padding: "10px 16px", borderTop: "1px solid #1e1e1e", display: "flex", flexWrap: "wrap", alignItems: "center", gap: "12px", fontSize: "11px", color: "#666", background: "rgba(10, 10, 10, 0.3)" }}>
             <span>
               сеть {overview?.network} · рядов {rows.length}
@@ -302,7 +304,8 @@ export default function Dashboard({ setTab, setAsset }: DashboardProps) {
         </div>
       ) : (
         <div style={{ background: "linear-gradient(135deg, #111 0%, #0f0f0f 100%)", border: "1px solid #1e1e1e", borderRadius: "6px", overflow: "hidden", boxShadow: "0 1px 3px rgba(0, 0, 0, 0.2)" }}>
-          <table style={{ width: "100%", fontSize: "12px", borderCollapse: "collapse" }} aria-label="Таблица данных">
+          <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
+          <table style={{ width: "100%", fontSize: "12px", borderCollapse: "collapse", minWidth: "700px" }} aria-label="Таблица данных">
             <thead>
               <tr style={{ textAlign: "left", fontSize: "11px", color: "#666", borderBottom: "1px solid #1e1e1e", background: "rgba(26, 26, 26, 0.3)" }}>
                 <th style={{ padding: "10px 16px", fontWeight: 500 }}>#</th>
@@ -359,6 +362,7 @@ export default function Dashboard({ setTab, setAsset }: DashboardProps) {
               })}
             </tbody>
           </table>
+          </div>
           {arcusMarkets.length > 15 && (
             <div style={{ padding: "8px 16px", borderTop: "1px solid #1e1e1e", fontSize: "11px", color: "#666" }}>
               показано 15 из {arcusMarkets.length} рынков

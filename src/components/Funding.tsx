@@ -210,7 +210,8 @@ export default function Funding({ markets, setToast }: FundingProps) {
       )}
 
       <div style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", overflow: "hidden" }}>
-        <table style={{ width: "100%", fontSize: "12px", borderCollapse: "collapse" }}>
+        <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
+        <table style={{ width: "100%", fontSize: "12px", borderCollapse: "collapse", minWidth: "700px" }}>
           <thead>
             <tr style={{ textAlign: "left", fontSize: "11px", color: "#666", borderBottom: "1px solid #1e1e1e" }}>
               <th style={{ padding: "10px 16px", fontWeight: 500 }}>Актив</th>
@@ -290,6 +291,7 @@ export default function Funding({ markets, setToast }: FundingProps) {
               ))}
           </tbody>
         </table>
+        </div>
       </div>
 
       {selected && (
