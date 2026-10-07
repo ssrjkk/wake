@@ -12,7 +12,6 @@
 import json
 import unittest
 from unittest.mock import patch, MagicMock
-from io import BytesIO
 
 from llm_agent import llm_decision
 from agent_memory import AgentMemoryStore

@@ -100,7 +100,9 @@ def delete_follow(follow_id: str, follower_id: str = Query(...)):
             (follow_id, follower_id),
         ).fetchone()
         if not follow:
-            raise HTTPException(status_code=404, detail="follow not found or not owned by user")
+            raise HTTPException(
+                status_code=404, detail="follow not found or not owned by user"
+            )
         conn.execute("DELETE FROM follows WHERE id = ?", (follow_id,))
     return {"status": "deleted"}
 
@@ -231,7 +233,9 @@ def pause_follow(follow_id: str, follower_id: str = Query(...)):
             (follow_id, follower_id),
         ).fetchone()
         if not follow:
-            raise HTTPException(status_code=404, detail="follow not found or not owned by user")
+            raise HTTPException(
+                status_code=404, detail="follow not found or not owned by user"
+            )
         db.set_paused(conn, follow_id, True)
     return {"status": "paused"}
 
@@ -244,7 +248,9 @@ def resume_follow(follow_id: str, follower_id: str = Query(...)):
             (follow_id, follower_id),
         ).fetchone()
         if not follow:
-            raise HTTPException(status_code=404, detail="follow not found or not owned by user")
+            raise HTTPException(
+                status_code=404, detail="follow not found or not owned by user"
+            )
         db.set_paused(conn, follow_id, False)
     return {"status": "active"}
 

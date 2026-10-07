@@ -15,7 +15,7 @@ import {
   type LighterNetwork,
   type OrderBook,
 } from "./lib/lighter";
-import { BACKEND_URL, LIGHTER_NETWORK } from "./lib/config";
+import { LIGHTER_NETWORK } from "./lib/config";
 import { backendJson, errorText, probeBackend, type BackendHealth } from "./lib/backend";
 import { NavTab } from "./components/ui";
 import { ErrorBoundary } from "./components/ErrorBoundary";
