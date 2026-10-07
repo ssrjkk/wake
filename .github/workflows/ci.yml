@@ -104,7 +104,11 @@ jobs:
         working-directory: backend
         run: |
           pip install -r requirements.txt --quiet
-          pip install pytest allure-pytest --quiet
+          # fakeredis — тестовая зависимость: test_rate_limiter.py подменяет им
+          # реальный Redis. В requirements.txt её нет намеренно: этот файл уходит
+          # в Dockerfile, а продакшн-образ должен ставить redis-клиент, а не его
+          # подделку.
+          pip install pytest allure-pytest fakeredis --quiet
       - name: Run tests with Allure
         working-directory: backend
         run: |
