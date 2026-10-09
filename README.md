@@ -224,7 +224,7 @@ railway variables set WAKE_CORS_ORIGINS="https://wake-7k6.pages.dev"
 railway service redeploy --service wake-backend
 ```
 
-See [RAILWAY_DEPLOY.md](RAILWAY_DEPLOY.md) for the full setup guide.
+See [RAILWAY_DEPLOY.md](docs/RAILWAY_DEPLOY.md) for the full setup guide.
 
 **Alternative: Docker Compose (local or self-hosted)**
 
