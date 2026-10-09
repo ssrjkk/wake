@@ -1,5 +1,11 @@
 # Wake
 
+[![CI](https://github.com/ssrjkk/wake/actions/workflows/ci.yml/badge.svg)](https://github.com/ssrjkk/wake/actions/workflows/ci.yml)
+[![python-3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+
+
 Trading terminal for [Lighter](https://lighter.xyz) (zk perp DEX): a React web app, a FastAPI backend, and a Telegram bot with a Mini App — the bot and the site read and write the same backend.
 
 Default configuration is **mainnet** with `WAKE_DRY_RUN=true`: real market data from the real network, and no order ever leaves the process until you turn dry-run off yourself.
@@ -9,13 +15,11 @@ Live backend: https://wake-backend-production-3483.up.railway.app
 
 ## Screenshots
 
-### Web Terminal
+<!-- TODO: Add demo screenshot -->
 
-![Wake Terminal](screenshots/terminal.png)
+## Screenshots
 
-### Telegram Bot
-
-![Wake Bot](screenshots/bot.png)
+<!-- TODO: Add demo screenshot -->
 
 ## Contact
 
@@ -224,7 +228,7 @@ railway variables set WAKE_CORS_ORIGINS="https://wake-7k6.pages.dev"
 railway service redeploy --service wake-backend
 ```
 
-See [RAILWAY_DEPLOY.md](RAILWAY_DEPLOY.md) for the full setup guide.
+See [RAILWAY_DEPLOY.md](docs/RAILWAY_DEPLOY.md) for the full setup guide.
 
 **Alternative: Docker Compose (local or self-hosted)**
 
@@ -267,3 +271,18 @@ To use this with real funds: get an external security audit, replace the file ke
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+
+## Installation
+
+```bash
+git clone https://github.com/ssrjkk/wake.git
+cd wake
+pip install -r requirements.txt
+```
+
+## Usage
+
+```bash
+python main.py
+```
