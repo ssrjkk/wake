@@ -15,7 +15,7 @@ aiosqlite
 alembic
 
 # Cache & Rate limiting
-redis>=5.0
+redis>=8.1.0
 
 # HTTP client (telegram_bot.py)
 httpx
