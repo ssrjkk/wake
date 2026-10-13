@@ -15,11 +15,14 @@
 
 ### Telegram-бот
 
+Торговый бот: [@wake_trade](https://t.me/waketrade_bot)
+
 ![Wake Bot](screenshots/bot.png)
 
 ## Контакты
 
 - **Telegram:** [@ssrjkk](https://t.me/ssrjkk)
+- **Wake Trade бот:** [@wake_trade](https://t.me/waketrade_bot)
 - **GitHub:** [@ssrjkk](https://github.com/ssrjkk)
 
 ## Что делает каждая панель
