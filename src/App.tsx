@@ -374,7 +374,7 @@ export default function App() {
                 <Zap className="w-5 h-5 text-[#0a0a0a]" strokeWidth={2.5} />
               </div>
               <span className="text-white font-bold tracking-tight text-xl" style={{ fontFamily: "Space Grotesk" }}>Wake</span>
-              <div className="flex items-center gap-1.5 ml-2">
+              <div className="hidden sm:flex items-center gap-1.5 sm:ml-2">
                 <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[#141414] border border-[#2a2a2a] hover:border-[#3a3a3a] transition-colors">
                   <div className="w-1.5 h-1.5 rounded-full bg-[#ff6b35] live-indicator"></div>
                   <span className="text-[11px] font-mono text-[#888] uppercase tracking-wide">Lighter</span>
@@ -384,16 +384,16 @@ export default function App() {
                   <span className="text-[11px] font-mono text-[#888] uppercase tracking-wide">Arcus</span>
                 </div>
               </div>
-              <div className="flex rounded-lg border border-[#2a2a2a] overflow-hidden ml-2 bg-[#0a0a0a]">
+              <div className="flex rounded-lg border border-[#2a2a2a] overflow-hidden sm:ml-2 bg-[#0a0a0a]">
                 {(["mainnet", "testnet"] as const).map((n) => (
                   <button
                     key={n}
                     onClick={() => switchNetwork(n)}
                     title={n === "mainnet" ? "Реальные рынки Lighter и Arcus, реальные цены" : "Тестовая сеть — тот же код, другие market ids"}
-                    className={`px-3 py-2 text-[11px] font-mono uppercase tracking-wide transition-all min-h-[36px] ${
+                    className={`px-3 py-2 text-[11px] font-mono uppercase tracking-wide transition-all min-h-[var(--touch)] ${
                       network === n
                         ? "bg-[#1a1a1a] text-[#ff6b35] font-semibold shadow-inner"
-                        : "text-[#666] hover:text-[#888] hover:bg-[#141414]"
+                        : "text-[#888] hover:text-[#a3a3a3] hover:bg-[#141414]"
                     }`}
                   >
                     {n}
@@ -406,7 +406,7 @@ export default function App() {
               {address || followerId ? (
                 <button
                   onClick={() => setWalletMenuOpen((v) => !v)}
-                  className="flex items-center gap-2 bg-gradient-to-r from-[#1a1a1a] to-[#141414] border border-[#2a2a2a] hover:border-[#3a3a3a] hover:shadow-lg hover:shadow-black/20 rounded-full pl-1.5 pr-3 py-2 text-sm text-[#ccc] font-mono transition-all min-h-[40px]"
+                  className="flex items-center gap-2 bg-gradient-to-r from-[#1a1a1a] to-[#141414] border border-[#2a2a2a] hover:border-[#3a3a3a] hover:shadow-lg hover:shadow-black/20 rounded-full pl-1.5 pr-3 py-2 text-sm text-[#ccc] font-mono transition-all min-h-[var(--touch)]"
                 >
                   <span
                     className={`w-6 h-6 rounded-full ${
@@ -578,9 +578,9 @@ export default function App() {
                 </div>
                 <p className="text-xs text-[#888] leading-relaxed mt-1.5 mb-2">
                   Сайт — статика на Cloudflare Pages, Wake-бэкенд — отдельный сервис. Сейчас работают панели, которые говорят с публичным API Lighter напрямую:
-                  «Терминал» — стакан, свечи и лента сделок; «Funding» — ставки Lighter рядом с Binance, Bybit и Hyperliquid; «Портфель» —
-                  позиции по адресу. Остальные хранят состояние в базе Wake — копи-трейд, Predict, агент, риск-расчёты и обзор рынка с
-                  ранжированием по 24-часовому обороту.
+                  «Терминал» — свечи и лента сделок; «Funding» — ставки Lighter рядом с Binance, Bybit и Hyperliquid; «Портфель» —
+                  позиции по адресу.<span className="hidden sm:inline"> Остальные хранят состояние в базе Wake — копи-трейд, Predict, агент, риск-расчёты и обзор рынка с
+                  ранжированием по 24-часовому обороту.</span>
                 </p>
                 <button
                   onClick={checkBackend}
@@ -716,7 +716,7 @@ export default function App() {
         >
           <div
             className="w-full max-w-md bg-[#1a1a1a] border border-[#2a2a2a] rounded-lg p-4 flex flex-col"
-            style={{ maxHeight: "min(560px, 85vh)", overflow: "hidden", display: "flex", flexDirection: "column" }}
+            style={{ maxHeight: "min(560px, 85dvh)", overflow: "hidden", display: "flex", flexDirection: "column" }}
             onClick={(e) => e.stopPropagation()}
           >
             <div className="flex items-center justify-between mb-3">
@@ -778,7 +778,7 @@ export default function App() {
           style={{ backgroundColor: "rgba(0,0,0,0.6)" }}
           onClick={() => setCopyModal(null)}
         >
-          <div className="w-full max-w-sm bg-[#1a1a1a] border border-[#2a2a2a] rounded-lg p-5" onClick={(e) => e.stopPropagation()}>
+          <div className="w-full max-w-sm bg-[#1a1a1a] border border-[#2a2a2a] rounded-lg p-5 max-h-[85dvh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-2">
                 <div

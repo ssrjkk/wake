@@ -85,7 +85,7 @@ export default function Earn({ isCopyable, setTab, leaderId, leaderFeeBps, setLe
 
   if (!isCopyable) {
     return (
-      <div className="terminal-layout" style={{ gridTemplateColumns: "1fr", height: "auto" }}>
+      <div className="terminal-layout terminal-stack">
         <div className="terminal-main" style={{ padding: "40px 20px", display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center" }}>
           <div style={{ width: "48px", height: "48px", borderRadius: "50%", background: "#1a1a1a", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: "12px" }}>
             <Radio style={{ width: "24px", height: "24px", color: "#666" }} />
@@ -105,7 +105,7 @@ export default function Earn({ isCopyable, setTab, leaderId, leaderFeeBps, setLe
 
   if (!leaderId) {
     return (
-      <div className="terminal-layout" style={{ gridTemplateColumns: "1fr", height: "auto" }}>
+      <div className="terminal-layout terminal-stack">
         <div className="terminal-main" style={{ padding: "40px 20px", display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center" }}>
           <div style={{ width: "48px", height: "48px", borderRadius: "50%", background: "#2a2000", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: "12px" }}>
             <Radio style={{ width: "24px", height: "24px", color: "#fbbf24" }} />
@@ -128,7 +128,7 @@ export default function Earn({ isCopyable, setTab, leaderId, leaderFeeBps, setLe
   const projected = (aum * feeBps * turnsPerMonth) / 10000;
 
   return (
-    <div className="terminal-layout" style={{ gridTemplateColumns: "1fr", height: "auto", gap: "12px" }}>
+    <div className="terminal-layout terminal-stack" style={{ gap: "12px" }}>
       <div className="terminal-main">
         <div style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", padding: "16px", marginBottom: "12px" }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", flexWrap: "wrap" }}>
@@ -238,7 +238,7 @@ export default function Earn({ isCopyable, setTab, leaderId, leaderFeeBps, setLe
               они попадают в <code style={{ color: "#a0a0a0" }}>follows</code>.
             </p>
           ) : (
-            <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
+            <div className="table-scroll">
             <table style={{ width: "100%", fontSize: "13px", minWidth: "500px" }}>
               <thead>
                 <tr style={{ textAlign: "left", fontSize: "11px", color: "#666", borderBottom: "1px solid #1e1e1e" }}>

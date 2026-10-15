@@ -1,8 +1,32 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Space+Grotesk:wght@700&display=swap');
+@import "tailwindcss";
 
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+/* Тема v4 живёт здесь, в CSS: tailwind.config.js в четвёртой версии не
+   подхватывается сам. Ниже только то, чем реально пользуется разметка —
+   шрифты и три появления. */
+@theme {
+  --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+
+  --animate-fade-in: fade-in 0.3s ease-out;
+  --animate-scale-in: scale-in 0.2s ease-out;
+  --animate-slide-up: slide-up 0.4s ease-out;
+
+  @keyframes fade-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+
+  @keyframes scale-in {
+    from { transform: scale(0.95); opacity: 0; }
+    to { transform: scale(1); opacity: 1; }
+  }
+
+  @keyframes slide-up {
+    from { transform: translateY(10px); opacity: 0; }
+    to { transform: translateY(0); opacity: 1; }
+  }
+}
 
 @layer base {
   :root {
@@ -23,6 +47,16 @@
     --blue: #3b82f6;
     --orange: #ff9500;
     --yellow: #fbbf24;
+    /* Компактные контролы держат 36px на десктопе и 44px на тач-экранах.
+       Значение живёт в переменной, потому что инлайн-стиль компонента
+       перебивает любое CSS-правило, а медиазапрос в инлайне не написать. */
+    --touch: 36px;
+  }
+
+  @media (max-width: 768px) {
+    :root {
+      --touch: 44px;
+    }
   }
 
   body {
@@ -49,12 +83,13 @@
 }
 
 @layer components {
-  /* Layout — used by every tab component */
+  /* Layout — used by every tab component.
+     Высота берётся из содержимого: фиксированный расчёт от 100dvh не учитывал
+     шапку, вкладки и баннер, и нижняя панель терминала уезжала за экран. */
   .terminal-layout {
     display: grid;
     grid-template-columns: 1fr 340px;
     gap: 1px;
-    height: calc(100vh - 60px);
     background: var(--border-subtle);
   }
 
@@ -66,6 +101,22 @@
     overflow: hidden;
   }
 
+  /* Вкладки без правой колонки: одна колонка. */
+  .terminal-layout.terminal-stack {
+    grid-template-columns: 1fr;
+  }
+
+  /* Полоса над каждой панелью: заголовок вкладки, строка фильтров, пустое
+     состояние. Компоненты задают в инлайне flexDirection/gap/flexWrap, которые
+     без display:flex не применяются. */
+  .terminal-header {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 12px 16px;
+    background: var(--bg-secondary);
+  }
+
   .terminal-asset-header {
     display: flex;
     align-items: center;
@@ -75,17 +126,21 @@
     flex-wrap: wrap;
   }
 
-  @media (max-width: 768px) {
-    .terminal-asset-header {
-      gap: 12px;
-      padding: 10px 12px;
-    }
+  /* Список рынков — 50 строк; без потолка он раздувал бы панель. */
+  .markets-list {
+    max-height: min(420px, 50dvh);
   }
 
+  /* Одна колонка: панели идут друг под другом. */
   @media (max-width: 1024px) {
     .terminal-layout {
       grid-template-columns: 1fr;
-      height: auto;
+    }
+
+    .terminal-header,
+    .terminal-asset-header {
+      gap: 12px;
+      padding: 10px 12px;
     }
   }
 
@@ -117,10 +172,6 @@
       padding: 12px 14px;
       font-size: 15px;
     }
-
-    .terminal-layout {
-      height: calc(100dvh - 60px);
-    }
   }
 
   @media (max-width: 480px) {
@@ -133,16 +184,30 @@
     }
   }
 
-  /* Table scroll wrapper — add to any parent of a data table */
+  /* Таблицы шире экрана: скролл внутри обёртки, а не всей страницы */
   .table-scroll {
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
   }
 
-  /* Touch-friendly interactive elements */
+  /* Потолок высоты модального окна: dvh, чтобы его не срезало панелью
+     мобильного браузера, и внутренний скролл вместо обрезанной кнопки. */
+  .modal-card {
+    max-height: min(560px, 85dvh);
+    overflow-y: auto;
+  }
+
+  /* Touch-friendly controls. Только элементные селекторы, чтобы не перебивать
+     друг друга слоем: компонент, которому нужна своя высота, задаёт её через
+     --touch. Чекбоксы и радиокнопки исключены — 44px ломает выравнивание
+     рядом с текстом. */
   @media (max-width: 768px) {
-    button, [role="button"], a, input, select, textarea {
-      min-height: 44px;
+    button,
+    [role="button"],
+    select,
+    textarea,
+    input:not([type="checkbox"]):not([type="radio"]) {
+      min-height: var(--touch);
     }
 
     input[type="number"], input[type="text"], input[type="email"], input[type="password"] {

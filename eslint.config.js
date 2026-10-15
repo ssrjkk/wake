@@ -8,7 +8,7 @@ import reactRefresh from "eslint-plugin-react-refresh";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
-  { ignores: ["dist", "node_modules", "playwright-report", "test-results"] },
+  { ignores: ["dist", "coverage", "node_modules", "playwright-report", "test-results"] },
   {
     files: ["src/**/*.{ts,tsx}"],
     extends: [

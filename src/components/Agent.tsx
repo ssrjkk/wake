@@ -129,7 +129,7 @@ export default function Agent({ followerId, subscription, currentMarket, setToas
   }
 
   return (
-    <div className="terminal-layout" style={{ gridTemplateColumns: "1fr", height: "auto" }}>
+    <div className="terminal-layout terminal-stack">
       <div className="terminal-main">
         <div className="terminal-header" style={{ flexDirection: "column", alignItems: "flex-start" }}>
           <h2 style={{ fontSize: "16px", fontWeight: 600, color: "#fafafa", margin: 0 }}>Агент</h2>
@@ -178,7 +178,7 @@ export default function Agent({ followerId, subscription, currentMarket, setToas
                     <button
                       key={r}
                       onClick={() => setResolution(r)}
-                      style={{ padding: "4px 8px", borderRadius: "3px", fontSize: "12px", fontFamily: "JetBrains Mono, monospace", background: resolution === r ? "#3b82f6" : "#1a1a1a", color: resolution === r ? "#fff" : "#a0a0a0", border: "none", cursor: "pointer", minHeight: "32px" }}
+                      style={{ padding: "4px 8px", borderRadius: "3px", fontSize: "12px", fontFamily: "JetBrains Mono, monospace", background: resolution === r ? "#3b82f6" : "#1a1a1a", color: resolution === r ? "#fff" : "#a0a0a0", border: "none", cursor: "pointer", minHeight: "var(--touch)" }}
                     >
                       {r}
                     </button>
@@ -264,7 +264,7 @@ export default function Agent({ followerId, subscription, currentMarket, setToas
               </div>
               <pre style={{ fontSize: "12px", color: "#a0a0a0", whiteSpace: "pre-wrap", fontFamily: "JetBrains Mono, monospace", marginBottom: "12px" }}>{memory.summary}</pre>
               {memory.open_trades.length > 0 && (
-                <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
+                <div className="table-scroll">
                 <table style={{ width: "100%", fontSize: "12px", minWidth: "400px" }}>
                   <thead>
                     <tr style={{ textAlign: "left", fontSize: "11px", color: "#666", borderBottom: "1px solid #1e1e1e" }}>

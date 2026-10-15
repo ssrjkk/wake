@@ -210,14 +210,14 @@ export default function Predict({ followerId, setToast, onConnect }: PredictProp
   }
 
   return (
-    <div className="terminal-layout" style={{ gridTemplateColumns: "1fr", height: "auto" }}>
+    <div className="terminal-layout terminal-stack">
       <div className="terminal-main">
         <div className="terminal-header" style={{ flexDirection: "column", alignItems: "flex-start" }}>
           <div style={{ display: "flex", alignItems: "center", gap: "12px", width: "100%" }}>
             <h2 style={{ fontSize: "16px", fontWeight: 600, color: "#fafafa", margin: 0 }}>Predict</h2>
             <button
               onClick={() => setNonce((n) => n + 1)}
-              style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: "6px", fontSize: "11px", color: "#888", background: "rgba(26, 26, 26, 0.5)", border: "1px solid #2a2a2a", borderRadius: "4px", padding: "8px 10px", cursor: "pointer", transition: "all 0.15s", minHeight: "36px" }}
+              style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: "6px", fontSize: "11px", color: "#888", background: "rgba(26, 26, 26, 0.5)", border: "1px solid #2a2a2a", borderRadius: "4px", padding: "8px 10px", cursor: "pointer", transition: "all 0.15s", minHeight: "var(--touch)" }}
               onMouseEnter={(e) => {
                 e.currentTarget.style.borderColor = "#3a3a3a";
                 e.currentTarget.style.color = "#aaa";
@@ -252,7 +252,7 @@ export default function Predict({ followerId, setToast, onConnect }: PredictProp
               border: status === f.id ? "1px solid rgba(59, 130, 246, 0.3)" : "1px solid #2a2a2a",
               cursor: "pointer",
               transition: "all 0.15s",
-              minHeight: "36px"
+              minHeight: "var(--touch)"
             }}
             onMouseEnter={(e) => {
               if (status !== f.id) {
@@ -287,7 +287,7 @@ export default function Predict({ followerId, setToast, onConnect }: PredictProp
           <div style={{ padding: "10px 16px", borderBottom: "1px solid #1e1e1e", fontSize: "10px", textTransform: "uppercase", letterSpacing: "0.05em", color: "#666", background: "rgba(26, 26, 26, 0.3)", fontWeight: 600 }}>
             Мои позиции
           </div>
-          <div style={{ overflowX: "auto" }}>
+          <div className="table-scroll">
             <table style={{ width: "100%", fontSize: "12px", borderCollapse: "collapse" }}>
               <thead>
                 <tr style={{ textAlign: "left", fontSize: "10px", textTransform: "uppercase", letterSpacing: "0.05em", color: "#666", background: "rgba(26, 26, 26, 0.2)" }}>
@@ -333,7 +333,7 @@ export default function Predict({ followerId, setToast, onConnect }: PredictProp
                         {p.claimable_usd > 0 && !p.claimed && (
                           <button
                             onClick={() => void claim(p)}
-                            style={{ background: "linear-gradient(135deg, #10b981 0%, #34d399 100%)", color: "#0a0a0a", fontSize: "11px", fontWeight: 600, padding: "8px 12px", border: "none", borderRadius: "4px", cursor: "pointer", transition: "all 0.15s", boxShadow: "0 1px 2px rgba(16, 185, 129, 0.2)", minHeight: "36px" }}
+                            style={{ background: "linear-gradient(135deg, #10b981 0%, #34d399 100%)", color: "#0a0a0a", fontSize: "11px", fontWeight: 600, padding: "8px 12px", border: "none", borderRadius: "4px", cursor: "pointer", transition: "all 0.15s", boxShadow: "0 1px 2px rgba(16, 185, 129, 0.2)", minHeight: "var(--touch)" }}
                             onMouseEnter={(e) => {
                               e.currentTarget.style.filter = "brightness(1.1)";
                               e.currentTarget.style.boxShadow = "0 2px 4px rgba(16, 185, 129, 0.3)";
@@ -484,6 +484,7 @@ export default function Predict({ followerId, setToast, onConnect }: PredictProp
           onClick={() => setTrade(null)}
         >
           <div
+            className="modal-card"
             style={{ width: "100%", maxWidth: "380px", background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", padding: "20px" }}
             onClick={(e) => e.stopPropagation()}
           >
@@ -500,13 +501,13 @@ export default function Predict({ followerId, setToast, onConnect }: PredictProp
               <div style={{ display: "flex", gap: "4px", marginBottom: "12px" }}>
                 <button
                   onClick={() => setSellMode(false)}
-                  style={{ flex: 1, fontSize: "11px", padding: "8px 0", borderRadius: "4px", background: !sellMode ? "#1a1a1a" : "transparent", color: !sellMode ? "#3b82f6" : "#ccc", border: !sellMode ? "1px solid #3b82f6" : "1px solid #2a2a2a", cursor: "pointer", minHeight: "36px" }}
+                  style={{ flex: 1, fontSize: "11px", padding: "8px 0", borderRadius: "4px", background: !sellMode ? "#1a1a1a" : "transparent", color: !sellMode ? "#3b82f6" : "#ccc", border: !sellMode ? "1px solid #3b82f6" : "1px solid #2a2a2a", cursor: "pointer", minHeight: "var(--touch)" }}
                 >
                   Покупка
                 </button>
                 <button
                   onClick={() => setSellMode(true)}
-                  style={{ flex: 1, fontSize: "11px", padding: "8px 0", borderRadius: "4px", background: sellMode ? "#1a1a1a" : "transparent", color: sellMode ? "#3b82f6" : "#ccc", border: sellMode ? "1px solid #3b82f6" : "1px solid #2a2a2a", cursor: "pointer", minHeight: "36px" }}
+                  style={{ flex: 1, fontSize: "11px", padding: "8px 0", borderRadius: "4px", background: sellMode ? "#1a1a1a" : "transparent", color: sellMode ? "#3b82f6" : "#ccc", border: sellMode ? "1px solid #3b82f6" : "1px solid #2a2a2a", cursor: "pointer", minHeight: "var(--touch)" }}
                 >
                   Продажа (держишь {trade.held})
                 </button>

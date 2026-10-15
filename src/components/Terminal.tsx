@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import { Radio, Search } from "lucide-react";
-import { AreaChart, Area, ResponsiveContainer } from "recharts";
+import { AreaChart, Area, YAxis, Tooltip, ResponsiveContainer } from "recharts";
 import { getCandles, getRecentTrades, getFundingRates, placeOrderViaSigningService, type LighterNetwork, type OrderBook, type Candle, type Trade } from "../lib/lighter";
 import { SIGNING_SERVICE_URL } from "../lib/config";
 import { errorText } from "../lib/backend";
@@ -111,7 +111,7 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
   const firstCandle = candles[0];
   const price = lastCandle?.c ?? null;
   const change = lastCandle && firstCandle ? ((lastCandle.c - firstCandle.o) / firstCandle.o) * 100 : null;
-  const chartData = candles.map((c, i) => ({ i, v: c.c }));
+  const chartData = candles.map((c, i) => ({ i, t: c.t, v: c.c }));
 
   const stats24h = useMemo(() => {
     if (candles.length < 2) return null;
@@ -250,14 +250,30 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
                 </div>
               )}
               <ResponsiveContainer width="100%" height="100%" minWidth={200} minHeight={150}>
-                <AreaChart data={chartData}>
+                <AreaChart data={chartData} margin={{ top: 8, right: 8, bottom: 8, left: 8 }}>
                   <defs>
                     <linearGradient id="chartGrad" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="0%" stopColor={up ? "#10b981" : "#ef4444"} stopOpacity={0.12} />
                       <stop offset="100%" stopColor={up ? "#10b981" : "#ef4444"} stopOpacity={0} />
                     </linearGradient>
                   </defs>
-                  <Area type="monotone" dataKey="v" stroke={up ? "#10b981" : "#ef4444"} strokeWidth={1.5} fill="url(#chartGrad)" />
+                  {/* Без YAxis recharts берёт домен [0, max]: кривая цены при 80k
+                      прилипает к верхней границе, и график выглядит пустым. */}
+                  <YAxis hide domain={["dataMin", "dataMax"]} padding={{ top: 12, bottom: 12 }} />
+                  <Tooltip
+                    cursor={{ stroke: "#333", strokeWidth: 1 }}
+                    content={({ active, payload }) => {
+                      const d = payload?.[0]?.payload as { t: number; v: number } | undefined;
+                      if (!active || !d) return null;
+                      return (
+                        <div style={{ background: "#0a0a0a", border: "1px solid #2a2a2a", borderRadius: "4px", padding: "6px 10px", fontFamily: MONO, fontSize: "11px", lineHeight: 1.5, pointerEvents: "none" }}>
+                          <div style={{ color: "#666" }}>{new Date(d.t * 1000).toLocaleString("ru-RU", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</div>
+                          <div style={{ color: "#e5e5e5" }}>${fmt(d.v, decimals)}</div>
+                        </div>
+                      );
+                    }}
+                  />
+                  <Area type="monotone" dataKey="v" stroke={up ? "#10b981" : "#ef4444"} strokeWidth={1.5} fill="url(#chartGrad)" dot={false} activeDot={{ r: 3, strokeWidth: 0 }} isAnimationActive={false} />
                 </AreaChart>
               </ResponsiveContainer>
             </>
@@ -425,7 +441,7 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
               />
             </div>
           </div>
-          <div style={{ flex: 1, overflowY: "auto", padding: "4px 0" }}>
+          <div className="markets-list" style={{ flex: 1, overflowY: "auto", padding: "4px 0" }}>
             {filteredMarkets.slice(0, 50).map((m) => (
               <button
                 key={m.market_id}
@@ -449,7 +465,7 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
 
       {showOrderConfirm && currentMarket && price != null && (
         <div style={{ position: "fixed", inset: 0, background: "rgba(0, 0, 0, 0.8)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: "24px" }}>
-          <div style={{ background: "#111", border: "1px solid #2a2a2a", borderRadius: "8px", padding: "24px", maxWidth: "420px", width: "100%" }}>
+          <div className="modal-card" style={{ background: "#111", border: "1px solid #2a2a2a", borderRadius: "8px", padding: "24px", maxWidth: "420px", width: "100%" }}>
             <h3 style={{ margin: "0 0 16px 0", fontSize: "16px", fontWeight: 600, color: "#fafafa" }}>Подтверждение ордера</h3>
             <div style={{ display: "flex", flexDirection: "column", gap: "12px", marginBottom: "20px" }}>
               <div style={{ display: "flex", justifyContent: "space-between", fontSize: "13px" }}>

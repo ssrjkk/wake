@@ -33,7 +33,7 @@ export class ErrorBoundary extends React.Component<Props, State> {
       }
 
       return (
-        <div style={{ minHeight: "100vh", width: "100%", background: "#0a0a0a", display: "flex", alignItems: "center", justifyContent: "center", padding: "24px" }}>
+        <div style={{ minHeight: "100dvh", width: "100%", background: "#0a0a0a", display: "flex", alignItems: "center", justifyContent: "center", padding: "24px" }}>
           <div style={{ maxWidth: "420px", width: "100%", background: "#111", border: "1px solid #5c1a1a", borderRadius: "6px", padding: "24px", textAlign: "center" }}>
             <div style={{ width: "48px", height: "48px", borderRadius: "50%", background: "rgba(239, 68, 68, 0.15)", border: "1px solid #7f1d1d", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 16px" }}>
               <svg width="24" height="24" fill="none" viewBox="0 0 24 24" stroke="#ef4444" strokeWidth={2}>

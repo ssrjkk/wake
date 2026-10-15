@@ -100,7 +100,7 @@ export default function Risk({ markets, setToast }: RiskProps) {
   }
 
   return (
-    <div className="terminal-layout" style={{ gridTemplateColumns: "1fr", height: "auto" }}>
+    <div className="terminal-layout terminal-stack">
       <div className="terminal-main">
         <div className="terminal-header" style={{ flexDirection: "column", alignItems: "flex-start" }}>
           <h2 style={{ fontSize: "16px", fontWeight: 600, color: "#fafafa", margin: 0 }}>Portfolio Risk</h2>
@@ -116,7 +116,7 @@ export default function Risk({ markets, setToast }: RiskProps) {
             <span style={{ fontSize: "11px", color: "#666", textTransform: "uppercase", letterSpacing: "0.5px" }}>Позиции для анализа</span>
             <button
               onClick={() => setRiskPickerOpen(true)}
-              style={{ background: "#1a1a1a", color: "#fafafa", fontSize: "12px", fontWeight: 500, padding: "8px 12px", borderRadius: "4px", border: "none", cursor: "pointer", minHeight: "36px" }}
+              style={{ background: "#1a1a1a", color: "#fafafa", fontSize: "12px", fontWeight: 500, padding: "8px 12px", borderRadius: "4px", border: "none", cursor: "pointer", minHeight: "var(--touch)" }}
             >
               + Добавить
             </button>
@@ -219,7 +219,7 @@ export default function Risk({ markets, setToast }: RiskProps) {
           style={{ position: "fixed", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50, padding: "16px", backgroundColor: "rgba(0,0,0,0.6)" }}
           onClick={() => setRiskPickerOpen(false)}
         >
-          <div style={{ width: "100%", maxWidth: "380px", background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", padding: "20px", maxHeight: "70vh", overflowY: "auto" }} onClick={(e) => e.stopPropagation()}>
+          <div className="modal-card" style={{ width: "100%", maxWidth: "380px", background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", padding: "20px" }} onClick={(e) => e.stopPropagation()}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "12px" }}>
               <h3 style={{ color: "#fafafa", fontWeight: 600, fontSize: "14px", margin: 0 }}>Добавить позицию</h3>
               <button onClick={() => setRiskPickerOpen(false)} aria-label="Закрыть" style={{ color: "#666", background: "none", border: "none", cursor: "pointer", padding: "12px", display: "flex" }}>

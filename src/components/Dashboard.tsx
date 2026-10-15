@@ -117,7 +117,7 @@ export default function Dashboard({ setTab, setAsset }: DashboardProps) {
   const missing = [...(overview?.no_market ?? []), ...(overview?.no_data ?? [])];
 
   return (
-    <div className="terminal-layout" style={{ gridTemplateColumns: "1fr", height: "auto" }}>
+    <div className="terminal-layout terminal-stack">
       <div className="terminal-main">
         <div className="terminal-header" style={{ flexDirection: "column", alignItems: "flex-start" }}>
           <div style={{ display: "flex", alignItems: "center", gap: "12px", width: "100%" }}>
@@ -181,7 +181,7 @@ export default function Dashboard({ setTab, setAsset }: DashboardProps) {
         </div>
       ) : (
         <div style={{ background: "linear-gradient(135deg, #111 0%, #0f0f0f 100%)", border: "1px solid #1e1e1e", borderRadius: "6px", overflow: "hidden", boxShadow: "0 1px 3px rgba(0, 0, 0, 0.2)" }}>
-          <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
+          <div className="table-scroll">
           <table style={{ width: "100%", fontSize: "12px", borderCollapse: "collapse", minWidth: "700px" }} aria-label="Таблица данных">
             <thead>
               <tr style={{ textAlign: "left", fontSize: "11px", color: "#666", borderBottom: "1px solid #1e1e1e", background: "rgba(26, 26, 26, 0.3)" }}>
@@ -304,7 +304,7 @@ export default function Dashboard({ setTab, setAsset }: DashboardProps) {
         </div>
       ) : (
         <div style={{ background: "linear-gradient(135deg, #111 0%, #0f0f0f 100%)", border: "1px solid #1e1e1e", borderRadius: "6px", overflow: "hidden", boxShadow: "0 1px 3px rgba(0, 0, 0, 0.2)" }}>
-          <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
+          <div className="table-scroll">
           <table style={{ width: "100%", fontSize: "12px", borderCollapse: "collapse", minWidth: "700px" }} aria-label="Таблица данных">
             <thead>
               <tr style={{ textAlign: "left", fontSize: "11px", color: "#666", borderBottom: "1px solid #1e1e1e", background: "rgba(26, 26, 26, 0.3)" }}>

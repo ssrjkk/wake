@@ -33,7 +33,7 @@ export default function Discover({ setCopyModal }: DiscoverProps) {
   }, []);
 
   return (
-    <div className="terminal-layout" style={{ gridTemplateColumns: "1fr", height: "auto" }}>
+    <div className="terminal-layout terminal-stack">
       <div className="terminal-main">
         <div className="terminal-header" style={{ flexDirection: "column", alignItems: "flex-start" }}>
           <h2 style={{ fontSize: "16px", fontWeight: 600, color: "#fafafa", margin: 0 }}>Кого копируют</h2>

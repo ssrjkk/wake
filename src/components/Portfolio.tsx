@@ -97,7 +97,7 @@ export default function Portfolio({ following, setTab, togglePause, unfollow, fo
   }
 
   return (
-    <div className="terminal-layout" style={{ gridTemplateColumns: "1fr", height: "auto", gap: "16px" }}>
+    <div className="terminal-layout terminal-stack" style={{ gap: "16px" }}>
       <section>
         <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: "12px" }}>
           <h2 style={{ fontSize: "16px", fontWeight: 600, color: "#fafafa", margin: 0 }}>Мои подписки</h2>
@@ -117,7 +117,7 @@ export default function Portfolio({ following, setTab, togglePause, unfollow, fo
             </button>
           </div>
         ) : (
-          <div style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", padding: "16px", overflowX: "auto" }}>
+          <div className="table-scroll" style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", padding: "16px" }}>
             <table style={{ width: "100%", fontSize: "13px" }}>
               <thead>
                 <tr style={{ textAlign: "left", fontSize: "11px", color: "#666", borderBottom: "1px solid #1e1e1e" }}>
@@ -146,7 +146,7 @@ export default function Portfolio({ following, setTab, togglePause, unfollow, fo
                     <td style={{ padding: "12px 0" }}>
                       <button
                         onClick={() => togglePause(t.followId)}
-                        style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11px", padding: "8px 10px", borderRadius: "4px", border: "none", cursor: "pointer", background: t.paused ? "#1a1a1a" : "#0a2a1a", color: t.paused ? "#666" : "#10b981", minHeight: "36px" }}
+                        style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11px", padding: "8px 10px", borderRadius: "4px", border: "none", cursor: "pointer", background: t.paused ? "#1a1a1a" : "#0a2a1a", color: t.paused ? "#666" : "#10b981", minHeight: "var(--touch)" }}
                       >
                         {t.paused ? <Play style={{ width: "12px", height: "12px" }} /> : <Pause style={{ width: "12px", height: "12px" }} />}
                         {t.paused ? "На паузе" : "Копирует"}
@@ -230,7 +230,7 @@ export default function Portfolio({ following, setTab, togglePause, unfollow, fo
             {openPositions.length === 0 ? (
               <p style={{ fontSize: "13px", color: "#666", margin: 0 }}>Открытых позиций нет — lighter возвращает строку на каждый рынок, который счёт когда-либо трогал.</p>
             ) : (
-              <div style={{ overflowX: "auto", WebkitOverflowScrolling: "touch" }}>
+              <div className="table-scroll">
               <table style={{ width: "100%", fontSize: "13px", minWidth: "600px" }}>
                 <thead>
                   <tr style={{ textAlign: "left", fontSize: "11px", color: "#666", borderBottom: "1px solid #1e1e1e" }}>
@@ -290,7 +290,7 @@ export default function Portfolio({ following, setTab, togglePause, unfollow, fo
                 <code style={{ color: "#a0a0a0" }}>POST /simulate-mirror</code>.
               </p>
             ) : (
-              <div style={{ overflowX: "auto" }}>
+              <div className="table-scroll">
                 <table style={{ width: "100%", fontSize: "13px" }}>
                   <thead>
                     <tr style={{ textAlign: "left", fontSize: "11px", color: "#666", borderBottom: "1px solid #1e1e1e" }}>
