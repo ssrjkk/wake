@@ -117,6 +117,15 @@ from the commit history rather than from a release.
   never existed — the number was taken from the Python client pin `redis>=8.1.0`,
   which is a separate version line. Both now run `redis:8-alpine`, and the
   documented local path (`docker compose up`) resolves as well as the gate does.
+- `.dockerignore` excluded `backend/alembic/` and `backend/alembic.ini`, which the
+  Dockerfile copies two lines later, so `docker build` failed on the migration
+  layer and no image — Railway or Compose — could ever contain `alembic upgrade
+  head`. The ignore list is a filter on the build context, not on the finished
+  image, so a stale entry there reads as "this file is junk" while the build says
+  "this file is missing".
+- The README linked the bot as `@wake_trade`; the handle registered with
+  @BotFather is `@waketrade_bot`, which is also what `data-telegram-login` has to
+  receive. Both mentions now carry the real handle.
 
 ## Pre-release history
 

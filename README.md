@@ -1,6 +1,6 @@
 # Wake
 
-Trading terminal for [Lighter](https://lighter.xyz) (zk perp DEX): a React web app, a FastAPI backend, and a Telegram bot ([@wake_trade](https://t.me/waketrade_bot)) with a Mini App — the bot and the site read and write the same backend.
+Trading terminal for [Lighter](https://lighter.xyz) (zk perp DEX): a React web app, a FastAPI backend, and a Telegram bot ([@waketrade_bot](https://t.me/waketrade_bot)) with a Mini App — the bot and the site read and write the same backend.
 
 Default configuration is **mainnet** with `WAKE_DRY_RUN=true`: real market data from the real network, and no order ever leaves the process until you turn dry-run off yourself.
 
@@ -14,7 +14,7 @@ Live backend: https://wake-backend-production-3483.up.railway.app
 ## Contact
 
 - **Telegram:** [@ssrjkk](https://t.me/ssrjkk)
-- **Wake Trade bot:** [@wake_trade](https://t.me/waketrade_bot)
+- **Wake Trade bot:** [@waketrade_bot](https://t.me/waketrade_bot)
 - **GitHub:** [@ssrjkk](https://github.com/ssrjkk)
 
 ## What each panel does

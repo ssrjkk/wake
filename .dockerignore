@@ -1,7 +1,8 @@
 # Контекст сборки уезжает на Docker-сервер целиком, а Dockerfile берёт из него
-# только backend/requirements.txt, backend/*.py и backend/api/. Без этого списка
-# в контекст попадают node_modules (385 МБ), .git и локальные базы данных —
-# минуты на загрузку ради файлов, которые в образ не войдут никогда.
+# backend/requirements.txt, backend/*.py, backend/api/ и миграции
+# (backend/alembic.ini, backend/alembic/). Без этого списка в контекст попадают
+# node_modules (385 МБ), .git и локальные базы данных — минуты на загрузку ради
+# файлов, которые в образ не войдут никогда.
 
 # Фронтенд и его инструменты
 node_modules/
@@ -53,6 +54,7 @@ backend/__pycache__/
 backend/.pytest_cache/
 backend/.ruff_cache/
 backend/.benchmarks/
-backend/alembic/
-backend/alembic.ini
 backend/api/__pycache__/
+
+# backend/alembic/ и backend/alembic.ini игнорировать нельзя: их копирует
+# Dockerfile, и без них одноразовому контейнеру migrate нечем создать схему.
