@@ -12,7 +12,7 @@ interface PortfolioProps {
   setTab: (tab: Tab) => void;
   togglePause: (followId: string) => void;
   unfollow: (followId: string) => void;
-  followerId: string | null;
+  signedIn: boolean;
   lighterAccountIndex: number | null;
   hasWallet: boolean;
   markets: OrderBook[];
@@ -26,7 +26,7 @@ const STATUS_STYLE: Record<MirrorLogRow["status"], { bg: string; color: string; 
   failed: { bg: "#2a0a0a", color: "#ef4444", border: "#3d1a1a" },
 };
 
-export default function Portfolio({ following, setTab, togglePause, unfollow, followerId, lighterAccountIndex, hasWallet, markets }: PortfolioProps) {
+export default function Portfolio({ following, setTab, togglePause, unfollow, signedIn, lighterAccountIndex, hasWallet, markets }: PortfolioProps) {
   const [account, setAccount] = useState<LighterAccount | null>(null);
   const [accountError, setAccountError] = useState<string | null>(null);
   const [mirrorLog, setMirrorLog] = useState<MirrorLogRow[] | null>(null);
@@ -58,14 +58,14 @@ export default function Portfolio({ following, setTab, togglePause, unfollow, fo
   }, [lighterAccountIndex]);
 
   useEffect(() => {
-    if (!followerId) {
+    if (!signedIn) {
       setMirrorLog(null);
       return;
     }
     let cancelled = false;
     async function load() {
       try {
-        const rows = await getMirrorLog(followerId!, 50);
+        const rows = await getMirrorLog(50);
         if (!cancelled) {
           setMirrorLog(rows);
           setMirrorLogError(null);
@@ -83,7 +83,7 @@ export default function Portfolio({ following, setTab, togglePause, unfollow, fo
       cancelled = true;
       clearInterval(id);
     };
-  }, [followerId, following.length]);
+  }, [signedIn, following.length]);
 
   const openPositions = account?.positions.filter((p) => Math.abs(p.size) > 0) ?? [];
   const unrealized = openPositions.reduce((s, p) => s + p.unrealizedPnl, 0);
@@ -104,15 +104,15 @@ export default function Portfolio({ following, setTab, togglePause, unfollow, fo
           <span style={{ fontSize: "11px", color: "#666", fontFamily: "JetBrains Mono, monospace" }}>таблица follows</span>
         </div>
         {following.length === 0 ? (
-          <div style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", padding: "40px 20px", display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center" }}>
+          <div className="empty-state">
             <p style={{ fontSize: "14px", color: "#a0a0a0", marginBottom: "4px" }}>
-              {followerId ? "Ты пока никого не копируешь" : "Войди через Telegram или кошелёк — подписки привязаны к follower_id"}
+              {signedIn ? "Ты пока никого не копируешь" : "Войди через Telegram или кошелёк — подписки привязаны к подтверждённому входу"}
             </p>
             <p style={{ fontSize: "12px", color: "#666", marginBottom: "16px", maxWidth: "400px" }}>
               Подписка — это строка в <code style={{ color: "#a0a0a0" }}>follows</code> с аллокацией и потолком плеча. Её читает копи-движок из{" "}
               <code style={{ color: "#a0a0a0" }}>mirror_engine.py</code>.
             </p>
-            <button onClick={() => setTab("discover")} style={{ color: "#3b82f6", fontSize: "14px", fontWeight: 500, display: "flex", alignItems: "center", gap: "4px", background: "none", border: "none", cursor: "pointer" }}>
+            <button className="link-action" onClick={() => setTab("discover")}>
               Найти трейдера <ChevronRight style={{ width: "16px", height: "16px" }} />
             </button>
           </div>
@@ -180,7 +180,7 @@ export default function Portfolio({ following, setTab, togglePause, unfollow, fo
           <span style={{ fontSize: "11px", color: "#666", fontFamily: "JetBrains Mono, monospace" }}>GET /api/v1/account?by=index</span>
         </div>
         {!hasWallet ? (
-          <div style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", padding: "32px 20px", display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center" }}>
+          <div className="empty-state">
             <div style={{ width: "28px", height: "28px", borderRadius: "50%", background: "#1a1a1a", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: "12px" }}>
               <Wallet style={{ width: "20px", height: "20px", color: "#666" }} />
             </div>
@@ -190,7 +190,7 @@ export default function Portfolio({ following, setTab, togglePause, unfollow, fo
             </p>
           </div>
         ) : lighterAccountIndex == null ? (
-          <div style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", padding: "32px 20px", display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center" }}>
+          <div className="empty-state">
             <p style={{ fontSize: "14px", color: "#a0a0a0", margin: 0 }}>Аккаунт на Lighter не найден</p>
             <p style={{ fontSize: "12px", color: "#666", marginTop: "4px", maxWidth: "400px" }}>
               Регистрация — на app.lighter.xyz. Wake читает только публичные данные счёта и никогда не просит приватный ключ.
@@ -269,7 +269,7 @@ export default function Portfolio({ following, setTab, togglePause, unfollow, fo
         )}
       </section>
 
-      {followerId && (
+      {signedIn && (
         <section>
           <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: "12px" }}>
             <h2 style={{ fontSize: "16px", fontWeight: 600, color: "#fafafa", margin: 0 }}>Журнал копи-движка</h2>

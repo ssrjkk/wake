@@ -28,7 +28,6 @@ Telegram-бот Wake: /price, /markets, /funding, /predict и кнопка на 
 
 import asyncio
 import datetime
-import os
 
 import httpx
 from aiogram import Bot, Dispatcher, F
@@ -41,11 +40,11 @@ from aiogram.types import (
 )
 
 import lighter_rest
-from config import LIGHTER_NETWORK, TELEGRAM_BOT_TOKEN
+from config import BACKEND_URL, LIGHTER_NETWORK, MINIAPP_URL, TELEGRAM_BOT_TOKEN
 from funding_arb import base_asset
 
-WAKE_MINIAPP_URL = os.environ.get("WAKE_MINIAPP_URL", "http://localhost:5173/")
-WAKE_BACKEND = os.environ.get("WAKE_BACKEND_URL", "http://localhost:8000")
+WAKE_MINIAPP_URL = MINIAPP_URL
+WAKE_BACKEND = BACKEND_URL
 
 # Бот создаётся в main(), а не на импорте: aiogram валидирует токен в конструкторе,
 # и без TELEGRAM_BOT_TOKEN модуль не удавалось даже импортировать в тестах.

@@ -6,7 +6,7 @@ import { fmt, usd } from "./utils";
 import type { Subscription } from "./types";
 
 interface AgentProps {
-  followerId: string | null;
+  signedIn: boolean;
   subscription: Subscription | null;
   currentMarket: OrderBook | undefined;
   setToast: (toast: string | null) => void;
@@ -44,7 +44,7 @@ const EXECUTION_STYLE: Record<string, { bg: string; color: string; border?: stri
   failed: { bg: "#2a0a0a", color: "#ef4444", border: "#3d1a1a" },
 };
 
-export default function Agent({ followerId, subscription, currentMarket, setToast, startTrial }: AgentProps) {
+export default function Agent({ signedIn, subscription, currentMarket, setToast, startTrial }: AgentProps) {
   const [resolution, setResolution] = useState<Resolution>("1h");
   const [candles, setCandles] = useState<Candle[] | null>(null);
   const [candlesError, setCandlesError] = useState<string | null>(null);
@@ -77,11 +77,11 @@ export default function Agent({ followerId, subscription, currentMarket, setToas
   }, [currentMarket?.market_id, resolution]);
 
   useEffect(() => {
-    if (!followerId) {
+    if (!signedIn) {
       setMemory(null);
       return;
     }
-    backendJson<MemoryView>(`/agent/memory/${followerId}`)
+    backendJson<MemoryView>("/agent/memory")
       .then((m) => {
         setMemory(m);
         setMemoryError(null);
@@ -90,18 +90,24 @@ export default function Agent({ followerId, subscription, currentMarket, setToas
         setMemory(null);
         setMemoryError(errorText(e));
       });
-  }, [followerId, lastDecision]);
+  }, [signedIn, lastDecision]);
 
   const prices = (candles ?? []).map((c) => c.c);
   const spot = prices.length ? prices[prices.length - 1] : null;
 
   async function runAgentStep() {
-    if (!followerId) {
+    if (!signedIn) {
       setToast("Сначала войди через Telegram или кошелёк");
       return;
     }
     if (!currentMarket || prices.length < 2) {
       setToast("Нет свечей Lighter по этому рынку — агенту не на чём считать момент");
+      return;
+    }
+    // Бэкенд отклоняет base_size_usd <= 0 валидацией (AgentStepRequest). Отказ
+    // верный, но в поле с нулём человек получил бы 422 без объяснения.
+    if (!(baseSizeUsd > 0)) {
+      setToast("Базовый размер должен быть больше нуля — агент считает от него размер копии");
       return;
     }
     setBusy(true);
@@ -110,7 +116,6 @@ export default function Agent({ followerId, subscription, currentMarket, setToas
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          user_id: followerId,
           market_id: currentMarket.market_id,
           recent_prices: prices.slice(-POINTS_SENT),
           size_decimals: currentMarket.supported_size_decimals,
@@ -140,7 +145,7 @@ export default function Agent({ followerId, subscription, currentMarket, setToas
         </div>
 
       {!subscription?.has_ai_agent ? (
-        <div style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", padding: "40px 20px", display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center" }}>
+        <div className="empty-state">
           <div style={{ width: "48px", height: "48px", borderRadius: "50%", background: "#1a1a1a", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: "12px" }}>
             <Zap style={{ width: "24px", height: "24px", color: "#666" }} />
           </div>
@@ -148,16 +153,14 @@ export default function Agent({ followerId, subscription, currentMarket, setToas
             {subscription?.tier === "free" ? "Пробный период закончился" : "Агент доступен на trial или Pro"}
           </p>
           <p style={{ fontSize: "12px", color: "#666", marginBottom: "12px", maxWidth: "320px" }}>
-            Статус подписки читается с <code style={{ color: "#a0a0a0" }}>GET /subscription/&lt;follower_id&gt;</code>; без входа через Telegram или
-            кошелёк её не на что заводить.
+            Статус подписки читается с <code style={{ color: "#a0a0a0" }}>GET /subscription</code> — того, кому он принадлежит, решает токен входа; без
+            Telegram или кошелька её не на что заводить.
           </p>
-          <button onClick={startTrial} style={{ background: "#3b82f6", color: "#fff", fontSize: "13px", fontWeight: 600, padding: "10px 16px", borderRadius: "4px", border: "none", cursor: "pointer", minHeight: "44px" }}>
-            Начать 14-дневный trial
-          </button>
+          <button className="btn-primary" onClick={startTrial}>Начать 14-дневный trial</button>
           <p style={{ fontSize: "11px", color: "#666", marginTop: "12px", maxWidth: "320px", lineHeight: 1.5 }}>
-            Trial заводится без оплаты. «pro» включает <code style={{ color: "#a0a0a0" }}>POST /subscription/&lt;follower_id&gt;/upgrade</code> прямо на
-            бэкенде — платёжного пути в репозитории нет, и кнопкой в интерфейсе это не делается. Строки подписки живут в памяти процесса
-            (<code style={{ color: "#a0a0a0" }}>api/agent.py</code>): после рестарта бэкенда подписка снова «none».
+            Trial заводится без оплаты, один раз на аккаунт. «pro» включает <code style={{ color: "#a0a0a0" }}>POST /subscription/&lt;user_id&gt;/upgrade</code>{" "}
+            на бэкенде под токеном куратора — платёжного пути в репозитории нет, и кнопкой в интерфейсе это не делается. Строки подписки лежат в{" "}
+            <code style={{ color: "#a0a0a0" }}>subscriptions</code> (<code style={{ color: "#a0a0a0" }}>agent_db.py</code>) и переживают рестарт сервиса.
           </p>
         </div>
       ) : (
@@ -294,8 +297,8 @@ export default function Agent({ followerId, subscription, currentMarket, setToas
             Решение считается на сервере (<code style={{ color: "#a0a0a0" }}>backend/agent_runner.py</code>), перед этим проходит{" "}
             <code style={{ color: "#a0a0a0" }}>risk_limits.check_order()</code>. При <code style={{ color: "#a0a0a0" }}>WAKE_DRY_RUN=true</code>{" "}
             (по умолчанию) ордер на Lighter не отправляется — статус <code style={{ color: "#a0a0a0" }}>dry_run</code>, но сделка записывается в память
-            агента, чтобы ветка с закрытием и win_rate тоже были живыми. Память и счётчик дневного объёма живут в процессе и обнуляются при рестарте
-            сервиса.
+            агента, чтобы ветка с закрытием и win_rate тоже были живыми. Память и дневной объём читаются из таблицы{" "}
+            <code style={{ color: "#a0a0a0" }}>agent_trades</code>: рестарт сервиса их не обнуляет.
           </p>
         </div>
       )}

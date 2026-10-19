@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { BACKEND_URL } from './config'
-import { setNetwork, getNetwork, getOrderBooks, getCandles, getRecentTrades, getAccountByL1Address, getMarketOverview, registerFollower, listFollowsForFollower } from './lighter'
+import { jsonBody } from '../test/request'
+import { setNetwork, getNetwork, getOrderBooks, getCandles, getRecentTrades, getAccountByL1Address, getMarketOverview, listOwnFollows, createFollow, setFollowPaused, deleteFollow, getMirrorLog, registerLeader } from './lighter'
 
 declare global {
   interface Window {
@@ -97,17 +98,18 @@ describe('lighter', () => {
         rows: [{ market_id: 1, symbol: 'BTC', funding_payer: 'long' }],
         no_market: ['TON'], no_data: ['MATIC']
       }
-      global.fetch = vi.fn().mockResolvedValue({
+      const fetchMock = vi.fn().mockResolvedValue({
         ok: true,
         json: () => Promise.resolve(mockOverview)
       })
+      global.fetch = fetchMock
 
       const result = await getMarketOverview()
       expect(result).toEqual(mockOverview)
       // Один запрос к Wake, а не 18 к Lighter: обзор считает бэкенд, и сайт с ботом
       // расходятся по числам ровно тогда, когда фронт пересчитывает их сам.
       expect(fetch).toHaveBeenCalledTimes(1)
-      expect(fetch).toHaveBeenCalledWith(`${BACKEND_URL}/markets/overview`, undefined)
+      expect(fetchMock.mock.calls[0][0]).toBe(`${BACKEND_URL}/markets/overview`)
     })
 
     it('throws on backend error instead of returning an empty overview', async () => {
@@ -200,35 +202,83 @@ describe('lighter', () => {
     })
   })
 
-  describe('registerFollower', () => {
-    it('registers follower and returns ID', async () => {
-      global.fetch = vi.fn().mockResolvedValue({
-        ok: true,
-        json: () => Promise.resolve({ follower_id: 'f123' })
-      })
+  describe('копи-трейд через Wake-бэкенд', () => {
+    // Мок возвращает форму ответов api/copy_trading.py: follow_id и leader_id —
+    // объекты, pause/resume — пустое тело, /follows — список строк таблицы follows.
+    function ok(data: unknown) {
+      global.fetch = vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve(data), text: () => Promise.resolve('') })
+      return global.fetch as ReturnType<typeof vi.fn>
+    }
 
-      const result = await registerFollower('0xabc')
-      expect(result).toBe('f123')
-      expect(fetch).toHaveBeenCalledWith(
-        expect.stringContaining('/followers'),
-        expect.objectContaining({ method: 'POST' })
-      )
+    it('reads the follows of the token holder, not of an id in the URL', async () => {
+      const rows = [{ id: 'f1', leader_id: 'l1', leader_handle: '@test', allocation_usd: 1000, max_leverage: 3, current_mirrored_size: 0, paused: 0, created_at: 1 }]
+      const fetchMock = ok(rows)
+
+      await expect(listOwnFollows()).resolves.toEqual(rows)
+      expect(fetchMock.mock.calls[0][0]).toBe(`${BACKEND_URL}/follows`)
     })
-  })
 
-  describe('listFollowsForFollower', () => {
-    it('lists follows for follower', async () => {
-      const mockFollows = [
-        { id: 'f1', leader_id: 'l1', leader_handle: '@test', allocation_usd: 1000 }
-      ]
+    it('creates a follow with the leader id in the body', async () => {
+      const fetchMock = ok({ follow_id: 'f9' })
+
+      await expect(createFollow('l1', 250, 3)).resolves.toBe('f9')
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+      expect(url).toBe(`${BACKEND_URL}/follows`)
+      expect(init.method).toBe('POST')
+      expect(jsonBody(init)).toEqual({ leader_id: 'l1', allocation_usd: 250, max_leverage: 3 })
+    })
+
+    // pause и resume — два разных маршрута, а не один с флагом: состояние меняется
+    // на сервере, и в запросе нечего подменять, чтобы получить противоположное.
+    it.each([
+      [true, 'pause'],
+      [false, 'resume'],
+    ])('posts /follows/{id}/%s for paused=%s', async (paused, route) => {
+      const fetchMock = ok({})
+
+      await setFollowPaused('f 1', paused)
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+      expect(url).toBe(`${BACKEND_URL}/follows/f%201/${route}`)
+      expect(init.method).toBe('POST')
+    })
+
+    it('unfollows with DELETE on the follow itself', async () => {
+      const fetchMock = ok({})
+
+      await deleteFollow('f1')
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+      expect(url).toBe(`${BACKEND_URL}/follows/f1`)
+      expect(init.method).toBe('DELETE')
+    })
+
+    it('reads the mirror log with a limit', async () => {
+      const fetchMock = ok([{ id: 'm1', follow_id: 'f1', market_id: 1, side: 'long', status: 'dry_run' }])
+
+      await getMirrorLog(30)
+      expect(fetchMock.mock.calls[0][0]).toBe(`${BACKEND_URL}/mirror-log?limit=30`)
+    })
+
+    // Индекс аккаунта в теле отсутствует сознательно: его берёт из записи входа
+    // бэкенд, и присланный клиентом индекс позволил бы опубликовать чужой аккаунт.
+    it('publishes a leader by handle and fee only', async () => {
+      const fetchMock = ok({ leader_id: 'l7' })
+
+      await expect(registerLeader('@sergey', 12)).resolves.toBe('l7')
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+      expect(url).toBe(`${BACKEND_URL}/leaders`)
+      expect(init.method).toBe('POST')
+      expect(jsonBody(init)).toEqual({ handle: '@sergey', fee_bps: 12 })
+    })
+
+    it('refuses to read follows when the session expired', async () => {
       global.fetch = vi.fn().mockResolvedValue({
-        ok: true,
-        json: () => Promise.resolve(mockFollows)
+        ok: false,
+        status: 401,
+        json: () => Promise.resolve(null),
+        text: () => Promise.resolve('{"error":{"code":"SESSION_EXPIRED","message":"Войди заново"}}'),
       })
 
-      const result = await listFollowsForFollower('f123')
-      expect(result).toEqual(mockFollows)
-      expect(fetch).toHaveBeenCalledWith(expect.stringContaining('/follows/by-follower/f123'), undefined)
+      await expect(listOwnFollows()).rejects.toThrow(/SESSION_EXPIRED/)
     })
   })
 })

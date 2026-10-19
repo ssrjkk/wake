@@ -1,11 +1,10 @@
 import { useState, useEffect, lazy, Suspense } from "react";
-import { useAccount, useConnect, useDisconnect, useEnsName } from "wagmi";
+import { useAccount, useConnect, useDisconnect, useEnsName, useSignMessage } from "wagmi";
 import { Zap, ChevronDown, ChevronRight, X, Check, ServerOff, RefreshCw, AlertTriangle, Info } from "lucide-react";
 import {
   getOrderBooks,
   getAccountByL1Address,
-  registerFollower,
-  listFollowsForFollower,
+  listOwnFollows,
   createFollow,
   setFollowPaused,
   deleteFollow,
@@ -16,13 +15,14 @@ import {
   type OrderBook,
 } from "./lib/lighter";
 import { LIGHTER_NETWORK } from "./lib/config";
-import { backendJson, errorText, probeBackend, type BackendHealth } from "./lib/backend";
+import { backendJson, errorText, probeBackend, SIGNED_OUT_EVENT, type BackendHealth } from "./lib/backend";
+import { clearSession, getSession, saveSession, type Session, type SignInResponse } from "./lib/session";
+import { verifyWalletOwnership } from "./lib/wallet";
 import { NavTab } from "./components/ui";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import type { Tab } from "./components/types";
 import { TelegramLogin } from "./components/TelegramLogin";
-import { verifyTelegramLogin, type TelegramUser } from "./lib/telegram";
-import { connectTelegramMiniApp, isTelegramWebView, type TelegramProfile } from "./lib/telegram";
+import { connectTelegramMiniApp, isTelegramWebView, miniAppDisplayName, verifyTelegramLogin, type TelegramUser } from "./lib/telegram";
 import { categorizeMarket, avatarColor, shortHandle, usd, fmt } from "./components/utils";
 import type { Leader, Following, Subscription } from "./components/types";
 
@@ -41,6 +41,7 @@ export default function App() {
   const { data: ensName } = useEnsName({ address, chainId: 1 });
   const { connectAsync, connectors, isPending } = useConnect();
   const { disconnect } = useDisconnect();
+  const { signMessageAsync } = useSignMessage();
 
   const [tab, setTab] = useState<Tab>("dashboard");
   const [walletMenuOpen, setWalletMenuOpen] = useState(false);
@@ -61,13 +62,16 @@ export default function App() {
   const [allocation, setAllocation] = useState(250);
   const [copyLeverage, setCopyLeverage] = useState(3);
 
-  const [followerId, setFollowerId] = useState<string | null>(null);
+  // Единственный источник «кто сейчас в сайте». Читается из хранилища при первом
+  // рендере: токен переживает перезагрузку страницы, а 401 от бэкенда его стирает.
+  const [session, setSession] = useState<Session | null>(() => getSession());
   const [backend, setBackend] = useState<BackendHealth | null>(null);
   const [backendChecked, setBackendChecked] = useState(false);
-  const [authSource, setAuthSource] = useState<"wallet" | "telegram" | null>(null);
-  const [telegramUser, setTelegramUser] = useState<TelegramProfile | null>(null);
   const [miniAppBusy, setMiniAppBusy] = useState(false);
+  const [walletBusy, setWalletBusy] = useState(false);
 
+  const userId = session?.userId ?? null;
+  const signedIn = session !== null;
   const backendUp = backend !== null;
 
   function checkBackend() {
@@ -81,21 +85,11 @@ export default function App() {
   useEffect(checkBackend, []);
 
   useEffect(() => {
-    if (!address) return;
-    registerFollower(address)
-      .then((id) => {
-        setFollowerId(id);
-        setAuthSource("wallet");
-      })
-      .catch((e) => setToast(`Кошелёк подключён, но Wake его не записал: ${errorText(e)}`));
-  }, [address]);
-
-  useEffect(() => {
-    if (!followerId) {
+    if (!userId) {
       setFollowing([]);
       return;
     }
-    listFollowsForFollower(followerId)
+    listOwnFollows()
       .then((rows) => {
         setFollowing(
           rows.map((r) => ({
@@ -112,7 +106,7 @@ export default function App() {
       // Пустой список при отказе — не «подписок нет», а «мы их не видим»: список
       // ниже по этому пути даёт кнопки pause/unfollow, а бэкенд их не подтвердил.
       .catch(() => setFollowing([]));
-  }, [followerId]);
+  }, [userId]);
 
   const [toast, setToastState] = useState<{ msg: string; variant: "success" | "error" | "info"; ts: number } | null>(null);
 
@@ -204,18 +198,18 @@ export default function App() {
     return () => clearTimeout(id);
   }, [toast]);
 
-  // Оба Telegram-входа сходятся в одну точку: profile приходит уже от бэкенда,
-  // проверившего подпись, поэтому имя в шапке — то, что подтвердил сервер.
-  function signInAsTelegram(profile: TelegramProfile) {
-    setFollowerId(profile.user_id);
-    setAuthSource("telegram");
-    setTelegramUser(profile);
+  // Три входа сходятся в одну точку. Личность определяет ответ бэкенда,
+  // проверившего подпись (Telegram-виджет, initData мини-аппа, подпись кошелька),
+  // а label — только надпись в шапке: по ней ничего не разрешается.
+  function applySignIn(res: SignInResponse, via: "wallet" | "telegram", label: string | null) {
+    setSession(saveSession(res, { via, label }));
     setConnectPickerOpen(false);
   }
 
   async function handleTelegramLogin(user: TelegramUser) {
     try {
-      signInAsTelegram(await verifyTelegramLogin(user));
+      const res = await verifyTelegramLogin(user);
+      applySignIn(res, "telegram", user.username ? `@${user.username}` : user.first_name);
       setToast(`Добро пожаловать, ${user.first_name}!`);
     } catch (e) {
       setToast(`Telegram не подтвердил вход: ${errorText(e)}`);
@@ -227,10 +221,12 @@ export default function App() {
   async function loginFromMiniApp(auto: boolean) {
     setMiniAppBusy(true);
     try {
-      const profile = await connectTelegramMiniApp();
-      if (profile) {
-        signInAsTelegram(profile);
-        if (!auto) setToast(`Вошёл как @${profile.username ?? profile.first_name}`);
+      const res = await connectTelegramMiniApp();
+      if (res) {
+        const tg = miniAppDisplayName();
+        const label = tg ? (tg.username ? `@${tg.username}` : tg.first_name) : null;
+        applySignIn(res, "telegram", label);
+        if (!auto) setToast(`Вошёл как ${label ?? res.user_id}`);
       } else if (!auto) {
         setToast("Telegram не передал подписанную initData — войди через виджет или кошелёк");
       }
@@ -241,17 +237,56 @@ export default function App() {
     }
   }
 
+  // Кошелёк подключён — это ещё не вход: адрес в браузере может назвать любой.
+  // Входом становится только подпись challenge, которую бэкенд восстановил в адрес.
+  async function signInWithWallet() {
+    if (!address) {
+      setToast("Сначала подключи кошелёк");
+      return;
+    }
+    setWalletBusy(true);
+    const label = ensName ?? `${address.slice(0, 6)}...${address.slice(-4)}`;
+    try {
+      const res = await verifyWalletOwnership(address, (message) => signMessageAsync({ message }));
+      applySignIn(res, "wallet", label);
+      setToast(
+        res.lighter_account_index == null
+          ? `Кошелёк подтверждён: ${label}. Аккаунт Lighter по нему не найден — публикации лидера не будет`
+          : `Кошелёк подтверждён: ${label}, Lighter #${res.lighter_account_index}`
+      );
+    } catch (e) {
+      setToast(`Кошелёк не подтверждён: ${errorText(e)}`);
+    } finally {
+      setWalletBusy(false);
+    }
+  }
+
   useEffect(() => {
     // Кнопка «Открыть Wake» в боте ведёт сюда же, на обычный сайт: внутри Telegram
     // вход идёт по initData, а не по виджету, который вебвью почти всегда не показывает.
     if (isTelegramWebView()) void loginFromMiniApp(true);
   }, []);
 
+  useEffect(() => {
+    // 401 из backendJson означает «этот токен больше не действителен», и приложение
+    // обязано показать не пустые панели, а предложение войти заново.
+    function onSignedOut() {
+      setSession(null);
+      setFollowing([]);
+      setSubscription(null);
+      setIsCopyable(false);
+      setLeaderId(null);
+    }
+    window.addEventListener(SIGNED_OUT_EVENT, onSignedOut);
+    return () => window.removeEventListener(SIGNED_OUT_EVENT, onSignedOut);
+  }, []);
+
   function signOut() {
+    // Отзыва на сервере нет (токен подписан и живёт свой срок), поэтому выход
+    // честен ровно на этом устройстве: здесь его перестают принимать за тебя.
+    clearSession();
     if (isConnected) disconnect();
-    setFollowerId(null);
-    setAuthSource(null);
-    setTelegramUser(null);
+    setSession(null);
     setFollowing([]);
     setSubscription(null);
     setIsCopyable(false);
@@ -261,12 +296,12 @@ export default function App() {
 
   async function confirmCopy() {
     if (!copyModal) return;
-    if (!followerId) {
+    if (!signedIn) {
       setToast("Сначала войди через Telegram или кошелёк — подписка пишется на твой аккаунт");
       return;
     }
     try {
-      const followId = await createFollow(followerId, copyModal.id, allocation, copyLeverage);
+      const followId = await createFollow(copyModal.id, allocation, copyLeverage);
       setFollowing((f) => [
         ...f,
         {
@@ -289,43 +324,54 @@ export default function App() {
     setCopyLeverage(3);
   }
 
+  // Переключение применяется к списку только после ответа бэкенда: пауза, которую
+  // база не приняла, не должна выглядеть записанной.
   function togglePause(followId: string) {
     const target = following.find((t) => t.followId === followId);
-    if (!target || !followerId) return;
+    if (!target || !userId) return;
     const next = !target.paused;
-    setFollowing((f) => f.map((t) => (t.followId === followId ? { ...t, paused: next } : t)));
-    setFollowPaused(followId, next, followerId).catch((e) => setToast(`Пауза не записана в базу: ${errorText(e)}`));
+    setFollowPaused(followId, next)
+      .then(() => setFollowing((f) => f.map((t) => (t.followId === followId ? { ...t, paused: next } : t))))
+      .catch((e) => setToast(`Пауза не записана в базу: ${errorText(e)}`));
   }
 
   function unfollow(followId: string) {
-    if (!followerId) return;
-    setFollowing((f) => f.filter((t) => t.followId !== followId));
-    deleteFollow(followId, followerId).catch((e) => setToast(`Не удалось отписать: ${errorText(e)}`));
+    if (!userId) return;
+    deleteFollow(followId)
+      .then(() => setFollowing((f) => f.filter((t) => t.followId !== followId)))
+      .catch((e) => setToast(`Не удалось отписать: ${errorText(e)}`));
   }
 
   const [leaderId, setLeaderId] = useState<string | null>(null);
   const [leaderFeeBps, setLeaderFeeBps] = useState(8);
 
   async function toggleCopyable() {
-    const next = !isCopyable;
-    setIsCopyable(next);
-    if (!next) {
+    if (isCopyable) {
+      setIsCopyable(false);
       setLeaderId(null);
+      return;
+    }
+    // Переключатель не включается, пока публикация заранее обречена: бэкенд берёт
+    // индекс Lighter из своей записи, а не из тела запроса.
+    if (!signedIn) {
+      setToast("Лидер публикуется на подтверждённый вход — войди через Telegram или кошелёк");
       return;
     }
     if (!backendUp) {
       setToast("Бэкенд не отвечает — подписки не запишутся");
       return;
     }
-    if (lighterAccountIndex == null) {
-      setToast("Нет аккаунта Lighter по этому адресу — лидер публикуется по index аккаунта");
+    if (session?.lighterAccountIndex == null) {
+      setToast("Нужен индекс аккаунта Lighter: подтверди вход кошельком в меню профиля");
       return;
     }
+    setIsCopyable(true);
     try {
-      const id = await registerLeader(lighterAccountIndex, ensName ?? `${address?.slice(0, 6)}...${address?.slice(-4)}`, leaderFeeBps);
+      const id = await registerLeader(identityLabel ?? userId ?? "wake", leaderFeeBps);
       setLeaderId(id);
-      setToast(`Стал лидером: индекс Lighter #${lighterAccountIndex}, комиссия ${(leaderFeeBps / 100).toFixed(2)}% за сделку`);
+      setToast(`Стал лидером: индекс Lighter #${session.lighterAccountIndex}, комиссия ${(leaderFeeBps / 100).toFixed(2)}% за сделку`);
     } catch (e) {
+      setIsCopyable(false);
       setToast(`Не удалось записаться в leaders: ${errorText(e)}`);
     }
   }
@@ -334,35 +380,33 @@ export default function App() {
 
   const [subscription, setSubscription] = useState<Subscription | null>(null);
 
+  // Субъект здесь — токен: /subscription и /subscription/trial не берут id ни из
+  // пути, ни из тела. Смена входа (или 401) перечитывает подписку заново.
   useEffect(() => {
-    if (!followerId) return;
-    backendJson<Subscription>(`/subscription/${followerId}`)
+    if (!userId) {
+      setSubscription(null);
+      return;
+    }
+    backendJson<Subscription>("/subscription")
       .then(setSubscription)
       .catch(() => setSubscription(null));
-  }, [followerId]);
+  }, [userId]);
 
   async function startTrial() {
-    if (!followerId) {
+    if (!userId) {
       setToast("Сначала войди через Telegram или кошелёк");
       return;
     }
     try {
-      await backendJson(`/subscription/${followerId}/start-trial`, { method: "POST" });
-      setSubscription(await backendJson<Subscription>(`/subscription/${followerId}`));
+      await backendJson("/subscription/trial", { method: "POST" });
+      setSubscription(await backendJson<Subscription>("/subscription"));
       setToast("Пробный период начат — 14 дней");
     } catch (e) {
       setToast(`Бэкенд не отвечает: ${errorText(e)}`);
     }
   }
 
-  const identityLabel =
-    authSource === "telegram" && telegramUser
-      ? telegramUser.username
-        ? `@${telegramUser.username}`
-        : telegramUser.first_name
-      : address
-      ? ensName ?? `${address.slice(0, 6)}...${address.slice(-4)}`
-      : null;
+  const identityLabel = session?.label ?? (address ? ensName ?? `${address.slice(0, 6)}...${address.slice(-4)}` : null);
 
   return (
     <div className="min-h-screen w-full font-sans">
@@ -403,32 +447,35 @@ export default function App() {
             </div>
 
             <div className="relative">
-              {address || followerId ? (
+              {signedIn || address ? (
                 <button
                   onClick={() => setWalletMenuOpen((v) => !v)}
                   className="flex items-center gap-2 bg-gradient-to-r from-[#1a1a1a] to-[#141414] border border-[#2a2a2a] hover:border-[#3a3a3a] hover:shadow-lg hover:shadow-black/20 rounded-full pl-1.5 pr-3 py-2 text-sm text-[#ccc] font-mono transition-all min-h-[var(--touch)]"
                 >
                   <span
                     className={`w-6 h-6 rounded-full ${
-                      authSource === "telegram" ? "bg-gradient-to-br from-[#ff6b35] to-[#ff8c5a]" : "bg-gradient-to-br from-[#10b981] to-[#34d399]"
+                      session?.via === "telegram" ? "bg-gradient-to-br from-[#ff6b35] to-[#ff8c5a]" : "bg-gradient-to-br from-[#10b981] to-[#34d399]"
                     } flex items-center justify-center text-[#0a0a0a] text-xs font-bold shadow-sm`}
                   >
                     {(identityLabel ?? "?").replace(/^@/, "").slice(0, 1).toUpperCase()}
                   </span>
                   {identityLabel ?? "Кошелёк подключён"}
+                  {!signedIn && <span className="w-1.5 h-1.5 rounded-full bg-[#fbbf24]"></span>}
                   <ChevronDown className="w-3.5 h-3.5 text-[#666]" />
                 </button>
               ) : (
-                <button onClick={() => setConnectPickerOpen(true)} className="btn-primary shadow-lg shadow-[#3b82f6]/20 hover:shadow-[#3b82f6]/30 hover:scale-[1.02] transition-all">
+                <button onClick={() => setConnectPickerOpen(true)} className="btn-primary shadow-lg shadow-[#ff6b35]/20 hover:shadow-[#ff6b35]/30 hover:scale-[1.02] transition-all">
                   Войти через TG или кошелёк
                 </button>
               )}
 
-              {walletMenuOpen && (address || followerId) && (
+              {walletMenuOpen && (signedIn || address) && (
                 <>
                   <div className="fixed inset-0 z-40" onClick={() => setWalletMenuOpen(false)} />
                   <div className="absolute right-0 mt-2 w-72 bg-[#1a1a1a] border border-[#2a2a2a] rounded-lg p-4 z-50 shadow-2xl animate-scale-in">
-                    <div className="text-xs text-[#666] mb-1">Вход через {authSource === "telegram" ? "Telegram" : "кошелёк"}</div>
+                    <div className="text-xs text-[#666] mb-1">
+                      {signedIn ? `Вход через ${session?.via === "telegram" ? "Telegram" : "кошелёк"}` : "Кошелёк подключён, вход не подтверждён"}
+                    </div>
                     <div className="text-sm text-[#ccc] font-medium mb-3">{identityLabel ?? "—"}</div>
                     {address && (
                       <>
@@ -446,14 +493,33 @@ export default function App() {
                         : "Аккаунт на Lighter не найден — зарегистрируйся на app.lighter.xyz"}
                     </div>
                     <div className="text-xs text-[#666] mb-4 font-mono">
-                      {followerId ? `follower_id: ${followerId}` : backendUp ? "" : "Бэкенд Wake не отвечает — подписки не запишутся"}
+                      {session
+                        ? `user_id: ${session.userId}`
+                        : backendUp
+                        ? "Бэкенд не подписывает вход по одному подключённому адресу."
+                        : "Бэкенд Wake не отвечает — подписки не запишутся"}
                     </div>
                     {backend && (
                       <div className="text-xs text-[#666] mb-3 font-mono">
                         бэкенд: {backend.network} · {backend.dry_run ? "dry-run — ордера не отправляются" : "реальные ордера"}
                       </div>
                     )}
-                    {address && !followerId && (
+                    {address && session?.via !== "wallet" && (
+                      <>
+                        <button
+                          onClick={() => void signInWithWallet()}
+                          disabled={walletBusy}
+                          className="w-full text-center text-sm text-[#0a0a0a] bg-[#10b981] hover:bg-emerald-400 disabled:opacity-50 rounded py-2 mb-2 transition-colors"
+                        >
+                          {walletBusy ? "Жду подпись в кошельке…" : "Подписать вход кошельком"}
+                        </button>
+                        <div className="text-xs text-[#666] leading-relaxed mb-3 font-mono">
+                          Это другой аккаунт Wake: бэкенд заводит запись по адресу, поэтому подписки Telegram-входа здесь не появятся. Нужен он для
+                          публикации лидера — индекс Lighter берётся из подтверждённого адреса.
+                        </div>
+                      </>
+                    )}
+                    {!signedIn && (
                       <button
                         onClick={() => setConnectPickerOpen(true)}
                         className="w-full text-center text-sm text-[#ccc] border border-[#2a2a2a] rounded py-2 mb-2 transition-colors hover:bg-[#141414]"
@@ -461,12 +527,24 @@ export default function App() {
                         Войти через Telegram
                       </button>
                     )}
-                    <button
-                      onClick={signOut}
-                      className="w-full text-center text-sm text-[#ef4444] hover:text-red-400 border border-red-900/50 rounded py-2 transition-colors hover:bg-[#141414]"
-                    >
-                      Выйти
-                    </button>
+                    {signedIn ? (
+                      <button
+                        onClick={signOut}
+                        className="w-full text-center text-sm text-[#ef4444] hover:text-red-400 border border-red-900/50 rounded py-2 transition-colors hover:bg-[#141414]"
+                      >
+                        Выйти
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => {
+                          disconnect();
+                          setWalletMenuOpen(false);
+                        }}
+                        className="w-full text-center text-sm text-[#888] hover:text-[#ccc] border border-[#2a2a2a] rounded py-2 transition-colors hover:bg-[#141414]"
+                      >
+                        Отключить кошелёк
+                      </button>
+                    )}
                   </div>
                 </>
               )}
@@ -494,7 +572,7 @@ export default function App() {
                               void loginFromMiniApp(false);
                             }}
                             disabled={miniAppBusy}
-                            className="btn-action w-full bg-[#ff6b35] hover:bg-orange-500 text-[#0a0a0a]"
+                            className="btn-action w-full bg-[#ff6b35] hover:bg-[#ff8c5a] text-[#0a0a0a]"
                           >
                             {miniAppBusy ? "Проверяю initData…" : "Войти через Telegram"}
                           </button>
@@ -524,28 +602,46 @@ export default function App() {
                       </div>
 
                       <div className="text-xs text-[#888] uppercase tracking-wide font-medium mb-2">Через кошелёк</div>
-                      <div className="space-y-2">
-                        {connectors.map((c) => (
+                      {address ? (
+                        <>
                           <button
-                            key={c.id}
-                            onClick={() => {
-                              connectAsync({ connector: c })
-                                .then(() => setConnectPickerOpen(false))
-                                .catch((e) => setToast(`Кошелёк не подключился: ${errorText(e)}`));
-                            }}
-                            disabled={isPending}
-                            className="w-full flex items-center justify-between bg-[#141414] border border-[#2a2a2a] hover:border-[#3a3a3a] rounded px-4 py-3 transition-colors"
+                            onClick={() => void signInWithWallet()}
+                            disabled={walletBusy}
+                            className="w-full flex items-center justify-between bg-[#141414] border border-[#2a2a2a] hover:border-[#3a3a3a] disabled:opacity-50 rounded px-4 py-3 transition-colors"
                           >
-                            <span className="text-[#ccc] text-sm font-medium">{c.name}</span>
-                            <ChevronRight className="w-4 h-4 text-[#666]" />
+                            <span className="text-[#ccc] text-sm font-medium">{walletBusy ? "Жду подпись в кошельке…" : "Подписать вход кошельком"}</span>
+                            <span className="text-[#666] text-xs font-mono">{`${address.slice(0, 6)}…${address.slice(-4)}`}</span>
                           </button>
-                        ))}
-                      </div>
-                      <p className="text-xs text-[#666] leading-relaxed font-mono">
-                        Список — то, что реально нашлось в этом окне. QR-подключение (WalletConnect) появляется только когда фронт собран с{" "}
-                        <code className="text-[#888]">VITE_WALLETCONNECT_PROJECT_ID</code>: без project id AppKit при старте ловит 400/403, поэтому
-                        коннектор не добавляется.
-                      </p>
+                          <p className="text-xs text-[#666] leading-relaxed font-mono">
+                            Одного подключённого адреса мало: его может назвать любой. Бэкенд выдаёт одноразовый текст, кошелёк подписывает его по{" "}
+                            <code className="text-[#888]">personal_sign</code>, а <code className="text-[#888]">POST /auth/wallet/verify</code>{" "}
+                            восстанавливает из подписи адрес и сверяет с заявленным.
+                          </p>
+                        </>
+                      ) : (
+                        <>
+                          <div className="space-y-2">
+                            {connectors.map((c) => (
+                              <button
+                                key={c.id}
+                                onClick={() => {
+                                  connectAsync({ connector: c }).catch((e) => setToast(`Кошелёк не подключился: ${errorText(e)}`));
+                                }}
+                                disabled={isPending}
+                                className="w-full flex items-center justify-between bg-[#141414] border border-[#2a2a2a] hover:border-[#3a3a3a] rounded px-4 py-3 transition-colors"
+                              >
+                                <span className="text-[#ccc] text-sm font-medium">{c.name}</span>
+                                <ChevronRight className="w-4 h-4 text-[#666]" />
+                              </button>
+                            ))}
+                          </div>
+                          <p className="text-xs text-[#666] leading-relaxed font-mono">
+                            Список — то, что реально нашлось в этом окне. QR-подключение (WalletConnect) появляется только когда фронт собран с{" "}
+                            <code className="text-[#888]">VITE_WALLETCONNECT_PROJECT_ID</code>: без project id AppKit при старте ловит 400/403, поэтому
+                            коннектор не добавляется. После подключения здесь же появится шаг с подписью.
+                          </p>
+                        </>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -654,7 +750,7 @@ export default function App() {
                   setTab={setTab}
                   togglePause={togglePause}
                   unfollow={unfollow}
-                  followerId={followerId}
+                  signedIn={signedIn}
                   lighterAccountIndex={lighterAccountIndex}
                   hasWallet={!!address}
                   markets={markets}
@@ -677,14 +773,14 @@ export default function App() {
 
             {tab === "predict" && (
               <ErrorBoundary fallback={<div style={{ padding: "24px", color: "#ef4444" }}>Ошибка загрузки Predict. <button onClick={() => window.location.reload()} style={{ color: "#3b82f6", background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>Обновить</button></div>}>
-                <Predict followerId={followerId} setToast={setToast} onConnect={() => setConnectPickerOpen(true)} />
+                <Predict signedIn={signedIn} setToast={setToast} onConnect={() => setConnectPickerOpen(true)} />
               </ErrorBoundary>
             )}
 
             {tab === "agent" && (
               <ErrorBoundary fallback={<div style={{ padding: "24px", color: "#ef4444" }}>Ошибка загрузки Agent. <button onClick={() => window.location.reload()} style={{ color: "#3b82f6", background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>Обновить</button></div>}>
                 <Agent
-                  followerId={followerId}
+                  signedIn={signedIn}
                   subscription={subscription}
                   currentMarket={currentMarket}
                   setToast={setToast}
@@ -847,7 +943,7 @@ export default function App() {
             <button
               onClick={() => void confirmCopy()}
               disabled={allocation <= 0}
-              className="btn-action w-full bg-[#ff6b35] hover:bg-orange-500 disabled:opacity-50 text-[#0a0a0a] py-3 rounded"
+              className="btn-action w-full bg-[#ff6b35] hover:bg-[#ff8c5a] disabled:opacity-50 text-[#0a0a0a] py-3 rounded"
             >
               Подписаться
             </button>

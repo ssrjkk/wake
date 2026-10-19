@@ -1,171 +1,230 @@
-"""python3 test_predict_db.py — прямой запуск с ассертами, тот же стиль, что test_db.py"""
+"""python -m unittest test_predict_db -v
 
-import os
-import tempfile
+predict_db.py на реальной PostgreSQL: валидация рынков, LMSR-сделки, позиции,
+запрет оверселла и торговли по резолвленному рынку, выплаты и защита от
+двойного claim — плюс ФОРМА ответа (resolve_at/created_at epoch-секундами,
+claimed 0/1), на которую завязан фронт.
+"""
+
 import time
+import unittest
 import uuid
+
+import testsupport
 import predict_db as pdb
 
-# tempfile вместо /tmp: на Windows фикстура с абсолютным unix-путём не создаётся,
-# и тест падал бы на open() ещё до первой проверки.
-TEST_DB = os.path.join(tempfile.mkdtemp(prefix="wake-predict-"), "predict.db")
+_run = testsupport.run
 
-pdb.init_predict_db(TEST_DB)
 
-# --- создание рынков ---
-with pdb.connect(TEST_DB) as conn:
-    pdb.create_market(
-        conn,
-        "m-price",
-        "price",
-        "BTC выше $120k к пятнице?",
-        resolve_at=time.time() + 86400,
-        b=100,
-        lighter_market_id=0,
-        threshold=120_000,
-        comparator=">=",
-    )
-    pdb.create_market(
-        conn,
-        "m-event",
-        "event",
-        "Победит ли команда А?",
-        resolve_at=time.time() + 86400,
-        b=50,
-    )
-
-    try:
-        pdb.create_market(
-            conn, "m-bad", "price", "без threshold", resolve_at=time.time(), b=10
+class PredictCase(unittest.TestCase):
+    def setUp(self):
+        testsupport.reset()
+        self.now = time.time()
+        _run(
+            pdb.create_market(
+                "m-price",
+                "price",
+                "BTC выше $120k к пятнице?",
+                resolve_at=self.now + 86400,
+                b=100,
+                lighter_market_id=0,
+                threshold=120_000,
+                comparator=">=",
+            )
         )
-        raise AssertionError(
-            "должно было упасть без threshold/comparator для price-рынка"
+        _run(
+            pdb.create_market(
+                "m-event",
+                "event",
+                "Победит ли команда А?",
+                resolve_at=self.now + 86400,
+                b=50,
+            )
         )
-    except ValueError:
-        print("validation: price-рынок без threshold корректно отклонён — OK")
 
-with pdb.connect(TEST_DB) as conn:
-    markets = pdb.list_open_markets(conn)
-    assert len(markets) == 2
-    print(f"list_open_markets: {len(markets)} рынков — OK")
+    def trade(self, user_id, market_id, outcome, shares):
+        return _run(
+            pdb.record_trade(str(uuid.uuid4()), user_id, market_id, outcome, shares)
+        )
 
-# --- сделки ---
-with pdb.connect(TEST_DB) as conn:
-    cost1 = pdb.record_trade(
-        conn, str(uuid.uuid4()), "user-alice", "m-price", "yes", 10
-    )
-    print(f"alice покупает 10 yes: cost=${cost1:.2f}")
-    assert cost1 > 0, "покупка должна стоить положительную сумму"
+    def resolve(self, market_id="m-price", outcome="yes"):
+        _run(
+            pdb.resolve_market(
+                market_id, outcome, resolved_by="curator", evidence_url=None
+            )
+        )
 
-with pdb.connect(TEST_DB) as conn:
-    m = pdb.get_market(conn, "m-price")
-    assert m["q_yes"] == 10.0, f"q_yes должен обновиться, получили {m['q_yes']}"
-    print(f"q_yes после покупки: {m['q_yes']} — OK")
 
-# --- повторная покупка того же исхода добавляется к позиции, не дублирует ---
-with pdb.connect(TEST_DB) as conn:
-    pdb.record_trade(conn, str(uuid.uuid4()), "user-alice", "m-price", "yes", 5)
+class TestMarkets(PredictCase):
+    def test_price_market_requires_threshold_and_comparator(self):
+        with self.assertRaises(ValueError):
+            _run(
+                pdb.create_market(
+                    "m-bad", "price", "без threshold", resolve_at=self.now, b=10
+                )
+            )
 
-with pdb.connect(TEST_DB) as conn:
-    pos = pdb.get_position(conn, "user-alice", "m-price", "yes")
-    assert pos["shares"] == 15.0, (
-        f"позиция должна суммироваться (10+5=15), получили {pos['shares']}"
-    )
-    print(
-        f"позиция alice после второй покупки: {pos['shares']} shares — OK (не дублировалась)"
-    )
+    def test_unknown_kind_is_rejected(self):
+        with self.assertRaises(ValueError):
+            _run(
+                pdb.create_market(
+                    "m-bad", "prediction", "неизвестный kind", resolve_at=self.now, b=10
+                )
+            )
 
-# --- продажа уменьшает позицию, возвращает деньги (отрицательный cost) ---
-with pdb.connect(TEST_DB) as conn:
-    cost_sell = pdb.record_trade(
-        conn, str(uuid.uuid4()), "user-alice", "m-price", "yes", -5
-    )
-    print(f"alice продаёт 5 yes: cost=${cost_sell:.2f} (должно быть отрицательным)")
-    assert cost_sell < 0, "продажа должна возвращать деньги — отрицательный cost"
+    def test_status_filter_and_wire_shape(self):
+        open_rows = _run(pdb.list_markets("open"))
+        self.assertEqual({m["id"] for m in open_rows}, {"m-price", "m-event"})
+        self.assertEqual(_run(pdb.list_markets("resolved")), [])
+        self.assertEqual(len(_run(pdb.list_markets("all"))), 2)
+        with self.assertRaises(ValueError):
+            _run(pdb.list_markets("closed"))
 
-with pdb.connect(TEST_DB) as conn:
-    pos = pdb.get_position(conn, "user-alice", "m-price", "yes")
-    assert pos["shares"] == 10.0, (
-        f"после продажи 5 из 15 должно остаться 10, получили {pos['shares']}"
-    )
-    print(f"позиция после продажи: {pos['shares']} — OK")
+        m = next(r for r in open_rows if r["id"] == "m-price")
+        self.assertIsInstance(m["resolve_at"], float)
+        self.assertGreater(
+            m["resolve_at"], 1_000_000_000, "epoch-секунды, не микросекунды"
+        )
+        self.assertGreater(m["created_at"], 1_000_000_000)
+        self.assertEqual(
+            m["lighter_market_id"], 0, "0 — валидный индекс рынка, не NULL"
+        )
+        self.assertEqual((m["threshold"], m["comparator"]), (120_000, ">="))
 
-# --- нельзя продать больше, чем есть ---
-with pdb.connect(TEST_DB) as conn:
-    try:
-        pdb.record_trade(conn, str(uuid.uuid4()), "user-alice", "m-price", "yes", -1000)
-        raise AssertionError("должно было упасть — продажа больше, чем есть в позиции")
-    except ValueError as e:
-        print(f"overselling корректно отклонён: {e}")
+    def test_resolved_market_stays_visible_and_carries_outcome(self):
+        self.resolve()
+        rows = _run(pdb.list_markets("resolved"))
+        self.assertEqual([m["id"] for m in rows], ["m-price"])
+        self.assertEqual(rows[0]["outcome"], "yes")
+        self.assertEqual(rows[0]["resolved_by"], "curator")
+        self.assertEqual([m["id"] for m in _run(pdb.list_markets("open"))], ["m-event"])
 
-# --- нельзя продать без позиции вообще ---
-with pdb.connect(TEST_DB) as conn:
-    try:
-        pdb.record_trade(conn, str(uuid.uuid4()), "user-bob", "m-price", "no", -1)
-        raise AssertionError("должно было упасть — продажа без позиции")
-    except ValueError as e:
-        print(f"продажа без позиции корректно отклонена: {e}")
+    def test_double_resolution_is_rejected(self):
+        self.resolve()
+        with self.assertRaises(ValueError):
+            _run(pdb.resolve_market("m-price", "no"))
 
-# --- два разных пользователя торгуют один рынок независимо ---
-with pdb.connect(TEST_DB) as conn:
-    pdb.record_trade(conn, str(uuid.uuid4()), "user-bob", "m-price", "no", 20)
+    def test_resolving_an_unknown_market_is_rejected(self):
+        with self.assertRaises(ValueError):
+            _run(pdb.resolve_market("no-such-market", "yes"))
 
-with pdb.connect(TEST_DB) as conn:
-    alice_pos = pdb.get_position(conn, "user-alice", "m-price", "yes")
-    bob_pos = pdb.get_position(conn, "user-bob", "m-price", "no")
-    assert alice_pos["shares"] == 10.0
-    assert bob_pos["shares"] == 20.0
-    print(
-        f"независимые позиции: alice={alice_pos['shares']} bob={bob_pos['shares']} — OK"
-    )
 
-# --- торговля на резолвленном рынке запрещена ---
-with pdb.connect(TEST_DB) as conn:
-    pdb.resolve_market(conn, "m-price", "yes", resolved_by=None, evidence_url=None)
+class TestTrading(PredictCase):
+    def test_buy_moves_the_pool_and_costs_positive(self):
+        cost = self.trade("user-alice", "m-price", "yes", 10)
+        self.assertGreater(cost, 0, "покупка должна стоить денег")
+        self.assertAlmostEqual(_run(pdb.get_market("m-price"))["q_yes"], 10.0)
 
-with pdb.connect(TEST_DB) as conn:
-    try:
-        pdb.record_trade(conn, str(uuid.uuid4()), "user-carol", "m-price", "yes", 1)
-        raise AssertionError("должно было упасть — торговля на резолвленном рынке")
-    except ValueError as e:
-        print(f"торговля на резолвленном рынке корректно отклонена: {e}")
+    def test_repeat_buy_adds_to_the_position_instead_of_duplicating_it(self):
+        self.trade("user-alice", "m-price", "yes", 10)
+        self.trade("user-alice", "m-price", "yes", 5)
+        self.assertEqual(
+            _run(pdb.get_position("user-alice", "m-price", "yes"))["shares"], 15.0
+        )
 
-# --- claim_winnings: победитель получает shares*$1, проигравший — $0 ---
-with pdb.connect(TEST_DB) as conn:
-    alice_payout = pdb.claim_winnings(
-        conn, "user-alice", "m-price"
-    )  # alice была на yes, рынок resolved yes
-    bob_payout = pdb.claim_winnings(
-        conn, "user-bob", "m-price"
-    )  # bob был на no, проиграл
-    print(
-        f"alice (yes, победила) payout=${alice_payout:.2f}, bob (no, проиграл) payout=${bob_payout:.2f}"
-    )
-    assert alice_payout == 10.0, (
-        f"alice должна получить 10 shares * $1 = $10, получили {alice_payout}"
-    )
-    assert bob_payout == 0.0, (
-        f"bob проиграл, payout должен быть 0, получили {bob_payout}"
-    )
+    def test_sell_returns_money_and_shrinks_the_position(self):
+        self.trade("user-alice", "m-price", "yes", 10)
+        self.trade("user-alice", "m-price", "yes", 5)
+        self.assertLess(self.trade("user-alice", "m-price", "yes", -5), 0)
+        self.assertEqual(
+            _run(pdb.get_position("user-alice", "m-price", "yes"))["shares"], 10.0
+        )
 
-# --- нельзя забрать дважды ---
-with pdb.connect(TEST_DB) as conn:
-    second_claim = pdb.claim_winnings(conn, "user-alice", "m-price")
-    assert second_claim == 0.0, "повторный claim должен вернуть 0, не повторную выплату"
-    print(
-        f"повторный claim: ${second_claim:.2f} — OK (защита от двойной выплаты сработала)"
-    )
+    def test_overselling_is_rejected(self):
+        self.trade("user-alice", "m-price", "yes", 10)
+        with self.assertRaises(ValueError):
+            self.trade("user-alice", "m-price", "yes", -1000)
+        self.assertEqual(
+            _run(pdb.get_position("user-alice", "m-price", "yes"))["shares"], 10.0
+        )
 
-# --- claim на нерезолвленном рынке запрещён ---
-with pdb.connect(TEST_DB) as conn:
-    try:
-        pdb.claim_winnings(conn, "user-alice", "m-event")
-        raise AssertionError("должно было упасть — claim на открытом рынке")
-    except ValueError as e:
-        print(f"claim на нерезолвленном рынке корректно отклонён: {e}")
+    def test_selling_without_a_position_is_rejected(self):
+        with self.assertRaises(ValueError):
+            self.trade("user-bob", "m-price", "no", -1)
 
-os.remove(TEST_DB)
-print()
-print("ВСЁ ПРОШЛО: predict_db.py — создание, торговля, независимые позиции,")
-print("overselling защита, запрет торговли после резолюции, честная выплата,")
-print("защита от двойного claim — все реально проверены.")
+    def test_failed_trade_leaves_the_pool_untouched(self):
+        before = _run(pdb.get_market("m-price"))
+        with self.assertRaises(ValueError):
+            self.trade("user-bob", "m-price", "no", -1)
+        after = _run(pdb.get_market("m-price"))
+        self.assertEqual(
+            (after["q_yes"], after["q_no"]), (before["q_yes"], before["q_no"])
+        )
+        self.assertEqual(
+            _run(pdb.market_stats()), {}, "отменённая сделка не должна попасть в объём"
+        )
+
+    def test_users_are_independent(self):
+        self.trade("user-alice", "m-price", "yes", 10)
+        self.trade("user-bob", "m-price", "no", 20)
+        self.assertEqual(
+            _run(pdb.get_position("user-alice", "m-price", "yes"))["shares"], 10.0
+        )
+        self.assertEqual(
+            _run(pdb.get_position("user-bob", "m-price", "no"))["shares"], 20.0
+        )
+
+    def test_trading_a_resolved_market_is_rejected(self):
+        self.trade("user-alice", "m-price", "yes", 10)
+        self.resolve()
+        with self.assertRaises(ValueError):
+            self.trade("user-carol", "m-price", "yes", 1)
+
+    def test_unknown_market_is_rejected(self):
+        with self.assertRaises(ValueError):
+            self.trade("user-alice", "m-нет", "yes", 1)
+
+    def test_market_stats_counts_buy_and_sell_volume(self):
+        self.trade("user-alice", "m-price", "yes", 10)
+        self.trade("user-alice", "m-price", "yes", -4)
+        stats = _run(pdb.market_stats())
+        self.assertEqual(stats["m-price"]["trade_count"], 2)
+        self.assertGreater(stats["m-price"]["volume_usd"], 0)
+        self.assertNotIn("m-event", stats, "у рынка без сделок нет строки в статистике")
+
+
+class TestPositionsAndClaims(PredictCase):
+    def test_position_list_shape(self):
+        self.trade("user-alice", "m-price", "yes", 10)
+        rows = _run(pdb.list_user_positions("user-alice"))
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertEqual(row["question"], "BTC выше $120k к пятнице?")
+        self.assertEqual(row["market_outcome"], None, "рынок ещё не резолвлен")
+        self.assertIn(row["claimed"], (0, 1), "фронт читает claimed как число")
+        self.assertGreater(row["net_cost"], 0, "net_cost — сколько реально уплачено")
+        self.assertIsInstance(row["resolve_at"], float)
+
+    def test_sold_out_position_disappears_from_the_list(self):
+        self.trade("user-alice", "m-price", "yes", 10)
+        self.trade("user-alice", "m-price", "yes", -10)
+        self.assertEqual(_run(pdb.list_user_positions("user-alice")), [])
+
+    def test_winner_is_paid_one_dollar_per_share(self):
+        self.trade("user-alice", "m-price", "yes", 10)
+        self.trade("user-bob", "m-price", "no", 20)
+        self.resolve("m-price", "yes")
+        self.assertEqual(_run(pdb.claim_winnings("user-alice", "m-price")), 10.0)
+        self.assertEqual(_run(pdb.claim_winnings("user-bob", "m-price")), 0.0)
+
+    def test_second_claim_pays_nothing(self):
+        self.trade("user-alice", "m-price", "yes", 10)
+        self.resolve()
+        _run(pdb.claim_winnings("user-alice", "m-price"))
+        self.assertEqual(_run(pdb.claim_winnings("user-alice", "m-price")), 0.0)
+        self.assertEqual(
+            _run(pdb.get_position("user-alice", "m-price", "yes"))["claimed"], 1
+        )
+
+    def test_claim_on_open_market_is_rejected(self):
+        self.trade("user-alice", "m-event", "yes", 10)
+        with self.assertRaises(ValueError):
+            _run(pdb.claim_winnings("user-alice", "m-event"))
+
+    def test_claim_without_a_position_pays_nothing(self):
+        self.resolve()
+        self.assertEqual(_run(pdb.claim_winnings("user-nikto", "m-price")), 0.0)
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

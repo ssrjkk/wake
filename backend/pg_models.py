@@ -128,6 +128,11 @@ class MirrorLog(Base):
 
 class PredictMarket(Base):
     __tablename__ = "predict_markets"
+    __table_args__ = (
+        # list_markets('open') фильтрует по статусу и сортирует по дедлайну —
+        # без этого индекса каждый список рынков досматривал бы таблицу целиком.
+        Index("idx_predict_markets_status", "status", "resolve_at"),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     kind: Mapped[str] = mapped_column(String, nullable=False)
@@ -174,6 +179,12 @@ class PredictPosition(Base):
 
 class PredictTrade(Base):
     __tablename__ = "predict_trades"
+    __table_args__ = (
+        # Сколько уплачено за исход, считается группировкой по сделкам
+        # (predict_db.list_user_positions); без индекса каждый такой запрос
+        # досматривает таблицу целиком.
+        Index("idx_predict_trades_user", "user_id", "market_id", "outcome"),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     user_id: Mapped[str] = mapped_column(String, nullable=False)
@@ -218,20 +229,30 @@ class AuditLog(Base):
 class AgentTrade(Base):
     """Персистентная версия TradeRecord из agent_memory.py.
 
-    In-memory AgentMemoryStore продолжает работать как быстрый кэш; этот
-    таблица — источник правды при рестарте процесса.
+    In-memory AgentMemoryStore продолжает работать как быстрый рабочий набор для
+    одного шага; эта таблица — источник правды при рестарте процесса.
+
+    user_id появился вместе с персистентностью: без него строки нельзя было
+    отнести владельцу, и память одного пользователя читалась бы как память
+    другого. status — чем закончился шаг (dry_run / sent / failed), иначе
+    симуляция и реальные ордера лежали бы в одной таблице неразличимо.
     """
 
     __tablename__ = "agent_trades"
-    __table_args__ = (Index("idx_agent_trades_market", "market_id", "opened_at"),)
+    __table_args__ = (
+        Index("idx_agent_trades_market", "market_id", "opened_at"),
+        Index("idx_agent_trades_user", "user_id", "opened_at"),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
+    user_id: Mapped[str] = mapped_column(String, nullable=False)
     market_id: Mapped[int] = mapped_column(Integer, nullable=False)
     side: Mapped[str] = mapped_column(String, nullable=False)
     entry_price: Mapped[float] = mapped_column(Float, nullable=False)
     size: Mapped[float] = mapped_column(Float, nullable=False)
     context_note: Mapped[str] = mapped_column(Text, nullable=False, default="")
     exit_price: Mapped[float | None] = mapped_column(Float)
+    status: Mapped[str] = mapped_column(String, nullable=False, default="dry_run")
     opened_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

@@ -74,6 +74,21 @@ def get_order_books(network: str = LIGHTER_NETWORK) -> list:
     return data.get("order_books", [])
 
 
+def get_account_index_by_l1(
+    l1_address: str, network: str = LIGHTER_NETWORK
+) -> int | None:
+    """Индекс аккаунта Lighter по его L1-адресу, None если аккаунта нет.
+
+    Нужен бэкенду, а не только фронту: вход кошелька привязывает к подписчику
+    индекс, извлечённый здесь, а не присланный клиентом. Иначе «опубликовать
+    лидера» можно было бы чужим индексом аккаунта, и Discover показывал бы чужую
+    статистику под чужим handle.
+    """
+    data = _get(f"{_base(network)}/account?by=l1_address&value={l1_address}")
+    accounts = data.get("accounts") or []
+    return int(accounts[0]["index"]) if accounts else None
+
+
 def get_mark_price(market_id: int, network: str = LIGHTER_NETWORK) -> float:
     """Последняя цена закрытия по market_id — close последней 1-минутной свечи.
     Для резолюции price-рынков достаточно точно; для чего-то более

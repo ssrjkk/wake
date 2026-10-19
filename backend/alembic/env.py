@@ -1,18 +1,21 @@
 """
 Alembic env.py — async-подключение к PostgreSQL через asyncpg.
 
-URL берётся из WAKE_DATABASE_URL (тот же источник, что и runtime-подключение
-в database.py), чтобы миграции и приложение всегда смотрели в одну базу.
+URL берётся из config.DATABASE_URL — тот же путь, что у runtime-подключения в
+database.py. Миграции и приложение обязаны смотреть в одну базу, поэтому схема с
+драйвером дописывается одним и тем же валидатором, а .env читаются обоими:
+собственный os.environ.get() здесь молчал бы про URL из .env и уехал в дефолт
+alembic.ini, пока приложение работает с другой базой.
 """
 
 import asyncio
-import os
 from logging.config import fileConfig
 
 from alembic import context
 from sqlalchemy import pool
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
+from config import DATABASE_URL
 from pg_models import Base
 
 config = context.config
@@ -22,8 +25,7 @@ if config.config_file_name is not None:
 
 target_metadata = Base.metadata
 
-db_url = os.environ.get("WAKE_DATABASE_URL", config.get_main_option("sqlalchemy.url"))
-config.set_main_option("sqlalchemy.url", db_url)
+config.set_main_option("sqlalchemy.url", DATABASE_URL)
 
 
 def run_migrations_offline() -> None:

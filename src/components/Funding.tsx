@@ -162,7 +162,7 @@ export default function Funding({ markets, setToast }: FundingProps) {
       <div className="terminal-main">
         <div className="terminal-header" style={{ flexDirection: "column", alignItems: "flex-start" }}>
           <div style={{ display: "flex", alignItems: "center", gap: "12px", width: "100%" }}>
-            <h2 style={{ fontSize: "16px", fontWeight: 600, color: "#fafafa", margin: 0 }}>Funding Arbitrage</h2>
+            <h2 style={{ fontSize: "16px", fontWeight: 600, color: "#fafafa", margin: 0 }}>Funding и carry</h2>
             <button
               onClick={() => {
                 void getFundingRates().then(setRates).catch((e) => setLoadError(errorText(e)));

@@ -28,6 +28,11 @@ WORKDIR /app
 COPY --from=builder /install /usr/local
 COPY backend/*.py ./
 COPY backend/api/ ./api/
+# Миграции живут в образе: `alembic upgrade head` выполняет одноразовый контейнер
+# migrate, тому нужны и alembic.ini, и каталог versions. Без них деплой поднимает
+# код, которому нечем создать схему.
+COPY backend/alembic.ini ./
+COPY backend/alembic/ ./alembic/
 
 RUN mkdir -p /app/data && chown -R wake:wake /app
 

@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { BACKEND_URL } from './config'
+import { jsonBody } from '../test/request'
 import {
   claimPredictMarket,
   getPredictMarkets,
@@ -80,27 +81,30 @@ describe('predict', () => {
       expect(asked()).toBe(`${BACKEND_URL}/predict/markets?status=open`)
     })
 
-    it('url-encodes the user id in positions and claims', async () => {
+    // Чей это список и кому платить — решает токен в заголовке, поэтому в адресах
+    // больше нет ?user_id=…: подмена query не может ни прочитать чужие позиции,
+    // ни забрать чужой выигрыш.
+    it('asks for positions and claims without naming a user', async () => {
       ok([])
-      await getPredictPositions('tg_123 / x')
-      expect(asked()).toBe(`${BACKEND_URL}/predict/positions?user_id=tg_123%20%2F%20x`)
-      await claimPredictMarket('m 1', 'a&b')
-      expect(asked(1)).toBe(`${BACKEND_URL}/predict/markets/m%201/claim?user_id=a%26b`)
-      expect(fetchMock.mock.calls[1][1]).toEqual({ method: 'POST' })
+      await getPredictPositions()
+      expect(asked()).toBe(`${BACKEND_URL}/predict/positions`)
+      await claimPredictMarket('m 1')
+      expect(asked(1)).toBe(`${BACKEND_URL}/predict/markets/m%201/claim`)
+      expect((fetchMock.mock.calls[1][1] as RequestInit).method).toBe('POST')
     })
 
     it('sells with negative shares on the same endpoint as buying', async () => {
       ok({ cost_usd: -4.2 })
-      await tradePredictMarket('m1', 'tg_1', 'yes', -3)
-      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit & { method: string; body: string }]
+      await tradePredictMarket('m1', 'yes', -3)
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
       expect(url).toBe(`${BACKEND_URL}/predict/markets/m1/trade`)
       expect(init.method).toBe('POST')
-      expect(JSON.parse(String(init.body))).toEqual({ user_id: 'tg_1', outcome: 'yes', shares: -3 })
+      expect(jsonBody(init)).toEqual({ outcome: 'yes', shares: -3 })
     })
 
     it('surfaces the backend reason, not a bare status code', async () => {
       fail(409, 'рынок уже резолвлен с исходом yes')
-      await expect(tradePredictMarket('m1', 'tg_1', 'yes', 5)).rejects.toThrow('уже резолвлен')
+      await expect(tradePredictMarket('m1', 'yes', 5)).rejects.toThrow('уже резолвлен')
     })
 
     it('falls back to the status code when the error body is empty', async () => {

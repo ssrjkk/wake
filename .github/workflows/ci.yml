@@ -88,11 +88,45 @@ jobs:
     permissions:
       contents: read
       actions: write
-    # Тесты герметичны и не требуют внешних сервисов: async-слой идёт через
-    # aiosqlite (тот же путь get_db, что и в проде на PostgreSQL), лимитер —
-    # через fakeredis, legacy-слой — через sqlite3. Никаких service-контейнеров:
-    # набор, который проходит на ноутбуке, проходит и здесь, без очередей на
-    # поднятие postgres/redis.
+    # База здесь настоящая. SQLite-подставка когда-то пропускала ровно то, что
+    # тесты и должны ловить: ON CONFLICT с указанием индекса, срез строки через
+    # FOR UPDATE, LIKE c учётом регистра, jsonb — на нём эти запросы просто не
+    # исполняются. fakeredis остаётся только там, где он закрыт отдельным тестом
+    # (test_rate_limiter.py).
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: wake
+          POSTGRES_PASSWORD: wake
+          POSTGRES_DB: wake_migrate
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U wake"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+      redis:
+        image: redis:8.1-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 5
+    env:
+      # wake_migrate — база, которую поднимает alembic (путь продакшна); wake_test
+      # — база pytest, её пересоздаёт testsupport. Раздельные, чтобы create_all из
+      # тестов не мог замаскировать дрейф миграций.
+      WAKE_DATABASE_URL: postgresql+asyncpg://wake:wake@localhost:5432/wake_migrate
+      WAKE_TEST_DATABASE_URL: postgresql+asyncpg://wake:wake@localhost:5432/wake_test
+      WAKE_REDIS_URL: redis://localhost:6379/0
+      # Одноразовые значения для ephemeral-сервисов CI. Секреты продакшна сюда не
+      # попадают: этот раннер ничего не подписывает и ни в какую базу кроме своей
+      # не стучится.
+      WAKE_SESSION_SECRET: ci-only-session-secret-0123456789abcdef
+      WAKE_CURATOR_TOKEN: ci-only-curator-token
+      TELEGRAM_BOT_TOKEN: "123456:ci-only-bot-token"
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -109,6 +143,19 @@ jobs:
           # в Dockerfile, а продакшн-образ должен ставить redis-клиент, а не его
           # подделку.
           pip install pytest allure-pytest fakeredis --quiet
+      - name: Create the pytest database
+        run: psql "postgresql://wake:wake@localhost:5432/postgres" -c "CREATE DATABASE wake_test"
+        env:
+          PGCONNECT_TIMEOUT: "10"
+      # Отдельный гейт, а не часть тестов: testsupport поднимает схему через
+      # create_all, поэтому без этого шага приложение могло бы жить на схеме,
+      # которой миграция не создаёт, и CI бы этого не заметил.
+      - name: Migrations build the production schema
+        working-directory: backend
+        run: alembic upgrade head
+      - name: Models match the migrated schema
+        working-directory: backend
+        run: alembic check
       - name: Run tests with Allure
         working-directory: backend
         run: |
@@ -129,6 +176,31 @@ jobs:
           name: allure-report
           path: allure-report
           if-no-files-found: ignore
+      # Пробег именно под uvicorn и именно по схеме из alembic: внутри тестов
+      # приложение поднимается через ASGITransport, а startup-хуки, реальный пул
+      # соединений и /ready с настоящим Redis при этом не исполняются никогда.
+      - name: Runtime smoke under uvicorn
+        working-directory: backend
+        run: |
+          python -m uvicorn app:app --host 127.0.0.1 --port 8000 >/tmp/uvicorn.log 2>&1 &
+          curl --silent --show-error --fail --retry 30 --retry-delay 2 \
+            --retry-connrefused http://127.0.0.1:8000/health >/dev/null || {
+              cat /tmp/uvicorn.log
+              exit 1
+            }
+          ready=$(curl --silent --fail http://127.0.0.1:8000/ready)
+          echo "$ready"
+          echo "$ready" | grep -q '"status":"ready"' || {
+              echo "/ready не ответил ready — зависимость приложения не жива"
+              exit 1
+            }
+          # Приватный роут без токена обязан отвечать своей формой ошибки, а не
+          # текстом фреймворка: на этом контракте держится фронт.
+          code=$(curl --silent --output /tmp/unauth.json --write-out '%{http_code}' \
+            http://127.0.0.1:8000/subscription)
+          cat /tmp/unauth.json
+          test "$code" = "401"
+          grep -q '"code":"SESSION_REQUIRED"' /tmp/unauth.json
 
   # ── Frontend linting + type checking ─────────────────────────────────────
   frontend-check:
@@ -162,18 +234,12 @@ jobs:
         run: npm run test:run -- --coverage
 
   # ── E2E tests (Playwright) ───────────────────────────────────────────────
+  # Только фронт против vite-dev-server: спека обрезает весь трафик вне своего
+  # origin, поэтому бэкенд, Redis и база этому джобу не нужны — они проверены в
+  # backend-tests (в том числе под uvicorn).
   e2e-tests:
     runs-on: ubuntu-latest
     needs: [frontend-check]
-    services:
-      redis:
-        image: redis:7-alpine
-        ports: ["6379:6379"]
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 5s
-          --health-timeout 3s
-          --health-retries 5
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -182,33 +248,6 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npx playwright install --with-deps chromium
-      - name: Build frontend
-        run: npm run build
-      - name: Start backend
-        working-directory: backend
-        # Middleware дергает Redis на каждом запросе, а async-слой (auth) идёт
-        # через SQLAlchemy-async — поэтому тут реальный redis-сервис и
-        # aiosqlite-URL (sync `sqlite:///` для async-engine не годится).
-        # Переменные объявлены на уровне шага: init_db() поднимает engine при
-        # импорте database.py, и без WAKE_DATABASE_URL он уходит на Postgres,
-        # которого в раннере нет.
-        env:
-          WAKE_DATABASE_URL: sqlite+aiosqlite:///wake_e2e.db
-          WAKE_REDIS_URL: redis://localhost:6379/0
-        run: |
-          pip install -r requirements.txt --quiet
-          python -c "import asyncio, database; asyncio.run(database.init_db())"
-          # python -m uvicorn, а не голый uvicorn: в этом job нет setup-python,
-          # и `-m` гарантирует, что модуль берётся из того же интерпретатора,
-          # куда pip поставил зависимости, — без ставки на ~/.local/bin в PATH.
-          uvicorn_log=/tmp/uvicorn.log
-          python -m uvicorn app:app --host 127.0.0.1 --port 8000 >"$uvicorn_log" 2>&1 &
-          # /health отвечает только после startup-хуков, поэтому ждём, а не спим.
-          curl --silent --show-error --fail --retry 30 --retry-delay 2 \
-            --retry-connrefused http://127.0.0.1:8000/health || {
-              cat "$uvicorn_log"
-              exit 1
-            }
       - name: Run E2E tests
         run: npm run test:e2e
 

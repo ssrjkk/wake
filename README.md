@@ -1,21 +1,11 @@
 # Wake
 
-[![CI](https://github.com/ssrjkk/wake/actions/workflows/ci.yml/badge.svg)](https://github.com/ssrjkk/wake/actions/workflows/ci.yml)
-[![python-3.12+](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/downloads/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-
-
-
 Trading terminal for [Lighter](https://lighter.xyz) (zk perp DEX): a React web app, a FastAPI backend, and a Telegram bot ([@wake_trade](https://t.me/waketrade_bot)) with a Mini App — the bot and the site read and write the same backend.
 
 Default configuration is **mainnet** with `WAKE_DRY_RUN=true`: real market data from the real network, and no order ever leaves the process until you turn dry-run off yourself.
 
 Live frontend: https://wake-7k6.pages.dev  
 Live backend: https://wake-backend-production-3483.up.railway.app
-
-## Screenshots
-
-<!-- TODO: Add demo screenshot -->
 
 ## Screenshots
 
@@ -45,11 +35,13 @@ Those three keep working with no backend, which is why the site does not go blan
 
 ## Connecting
 
-Two identity paths, both landing on the same follower record:
+Both identity paths end in the same thing: a signed session token, and every endpoint that touches someone's money takes the identity from that token, never from a field in the request.
 
 **Telegram.** The Login Widget button renders only when the frontend is built with `VITE_TELEGRAM_BOT_NAME` (bot username, no `@`) and the backend runs with `TELEGRAM_BOT_TOKEN`. The backend recomputes the widget's check string and compares HMACs (`POST /auth/telegram`), and validates Mini App `initData` separately (`POST /auth/telegram/init`). Without the token the panel states that Telegram login is off rather than showing a button that will 401.
 
-**Wallet.** Injected wallets (MetaMask, Rabby) work with no configuration; WalletConnect QR needs `VITE_WALLETCONNECT_PROJECT_ID`. The connected L1 address is registered as the follower (`POST /followers`), and positions are read back from Lighter by that address.
+**Wallet.** Injected wallets (MetaMask, Rabby) work with no configuration; WalletConnect QR needs `VITE_WALLETCONNECT_PROJECT_ID`. Ownership is proven, not asserted: `POST /auth/wallet/challenge` returns a one-off `personal_sign` text (5 minutes, single use), `POST /auth/wallet/verify` recovers the address from the signature and rejects it if it is not the address that asked. The follower record is created from that recovered checksummed address.
+
+**The token.** `{user_id, token, expires_at}` comes back from any successful sign-in; send it as `Authorization: Bearer <token>`. It is `wk1.<payload>.<HMAC-SHA256>` signed with `WAKE_SESSION_SECRET` and valid for `WAKE_SESSION_TTL_DAYS` (30 days by default) — there is no server-side state to lose, and no way to claim another user by editing an id in the request. Without `WAKE_SESSION_SECRET` the backend answers 503 instead of issuing tokens signed with a guessable key.
 
 ## Quick start
 
@@ -63,32 +55,45 @@ npm run dev             # http://localhost:5173
 
 ### Backend
 
+The backend needs PostgreSQL and Redis. The fastest correct way to get both is Compose — it also runs the migrations before the API starts:
+
 ```bash
+docker compose up postgres redis migrate
 cd backend
 pip install -r requirements.txt
-cp .env.example .env
+cp .env.example .env      # WAKE_SESSION_SECRET has no default: fill it in
+alembic upgrade head      # schema comes from migrations, never from the app
 uvicorn app:app --reload --port 8000
 ```
 
-Swagger UI at `http://localhost:8000/docs`, machine-readable schema (37 paths) at `/openapi.json`. Run it from `backend/`: the SQLite paths are relative to the working directory, so starting it from the repo root silently creates a second database.
+Swagger UI at `http://localhost:8000/docs`, machine-readable schema (38 paths) at `/openapi.json`; both list the bearer token and the curator header as authorisation. Run it from `backend/` — `config.py` reads `.env` relative to the working directory, so starting from the repo root silently runs with a different configuration.
 
 ### Copy trading without a seed script
 
-There is no demo-leader seeder. Register a leader through the API, then a follower:
+There is no demo-leader seeder. Sign in with a wallet, then register a leader and a follow — the identity is the token, so the examples below need it:
 
 ```bash
-curl -X POST http://localhost:8000/leaders \
+MESSAGE=$(curl -s -X POST http://localhost:8000/auth/wallet/challenge \
   -H 'Content-Type: application/json' \
-  -d '{"lighter_account_index": 12345, "handle": "your-handle", "fee_bps": 8}'
+  -d '{"l1_address": "0xYourAddress"}' | jq -r .message)
 
-curl -X POST http://localhost:8000/followers \
+# Sign $MESSAGE with your wallet (personal_sign), then:
+TOKEN=$(curl -s -X POST http://localhost:8000/auth/wallet/verify \
   -H 'Content-Type: application/json' \
-  -d '{"l1_address": "0xYourAddress"}'
+  -d "{\"message\": \"$MESSAGE\", \"signature\": \"0x…\"}" | jq -r .token)
+
+curl -X POST http://localhost:8000/leaders \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"handle": "your-handle", "fee_bps": 8}'
 
 curl -X POST http://localhost:8000/follows \
+  -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
-  -d '{"follower_id": "0xYourAddress", "leader_id": "<leader_id>", "allocation_usd": 500, "max_leverage": 3}'
+  -d '{"leader_id": "<leader_id>", "allocation_usd": 500, "max_leverage": 3}'
 ```
+
+`POST /leaders` takes no account index: it is read from the follower record the wallet sign-in wrote, so a leader card cannot show someone else's statistics. The Lighter index appears there only if the address was found on Lighter at sign-in — hence 403 `LIGHTER_ACCOUNT_NOT_LINKED` for a Telegram-only session.
 
 The listener that turns a leader's position changes into follower orders runs per leader:
 
@@ -145,58 +150,67 @@ Price markets close themselves at the deadline only while this process runs; oth
 
 | Variable | Default | What it gates |
 | --- | --- | --- |
+| `WAKE_DATABASE_URL` | `postgresql+asyncpg://wake:wake@localhost:5432/wake` | the only store: copy trading, Predict, subscriptions, agent history, audit. A plain `postgresql://…` from a hosting panel is accepted — the asyncpg driver is added at validation |
+| `WAKE_REDIS_URL` | `redis://localhost:6379/0` | token bucket and wallet challenges; without it `/ready` answers 503 and sign-in answers 503 |
 | `WAKE_LIGHTER_NETWORK` | `mainnet` | name → REST host, WS host and market ids together |
 | `WAKE_DRY_RUN` | `true` | `false` means live orders with real money |
+| `WAKE_MAINNET_LIVE` | `false` | second switch: `WAKE_DRY_RUN=false` on mainnet refuses to start without it |
 | `WAKE_CORS_ORIGINS` | `http://localhost:5173` | comma-separated list of frontends allowed to call the API |
-| `WAKE_CURATOR_TOKEN` | empty | empty answers 500 on every curator endpoint; a wrong `X-Curator-Token` answers 403 |
+| `WAKE_SESSION_SECRET` | empty | signs session tokens; empty means every sign-in answers 503 rather than using a guessable key |
+| `WAKE_SESSION_TTL_DAYS` | 30 | how long a token stays valid (1–180) |
+| `WAKE_CURATOR_TOKEN` | empty | empty answers 500 `CURATOR_NOT_CONFIGURED` on every operator endpoint; a wrong `X-Curator-Token` answers 403 |
+| `WAKE_TRUSTED_PROXY_IPS` | empty | which connection peers may supply `X-Forwarded-For`; empty means the socket address wins, so behind Railway everyone shares one bucket |
 | `TELEGRAM_BOT_TOKEN` | empty | bot process and Telegram login verification |
 | `WAKE_MASTER_KEY` | empty | encrypts the key store; keep it in a secrets manager, not on disk |
-| `WAKE_DB_PATH` / `WAKE_AUDIT_DB_PATH` | `wake.db` / `audit.db` | two separate SQLite files |
-| `WAKE_RATE_LIMIT_CAPACITY` / `WAKE_RATE_LIMIT_REFILL` | 40 / 20 | token bucket per client |
+| `WAKE_RATE_LIMIT_CAPACITY` / `WAKE_RATE_LIMIT_REFILL` | 40 / 20 | token bucket per signed-in user, per IP for anonymous traffic; a write costs 3 tokens |
 | `ANTHROPIC_API_KEY` | empty | only the LLM decision path; without it the agent runs the rule engine |
 
 ## Testing
 
 ```bash
-# backend — run from backend/
-python -m unittest discover          # 210 tests
-python test_db.py
-python test_predict_db.py
-python test_predict_integration.py
-python test_audit_log.py             # these four are standalone scripts, not part of discovery
+# backend — run from backend/; needs a scratch PostgreSQL database
+createdb wake_test
+export WAKE_TEST_DATABASE_URL=postgresql+asyncpg://wake:wake@localhost:5432/wake_test
+python -m unittest discover        # 296 tests, all through discovery
+python -m pytest -q                # the same set under pytest (+ Allure in CI)
 
 # frontend
 npx tsc --noEmit
-npx vitest run                       # 61 tests in 8 files
+npx vitest run
 npm run build
 
 # end-to-end (starts its own dev server; PW_PORT avoids a port clash)
-PW_PORT=5178 npx playwright test     # 6 tests, chromium
+PW_PORT=5178 npx playwright test
 ```
 
-`test_api_smoke.py` walks every API route over HTTP, so a router that fails to import or a path that 500s fails CI rather than the first click.
+`test_api_smoke.py` walks every API route over HTTP against a real PostgreSQL, including the parts of the security model that are easy to lose silently: no token, forged token, expired token, another user's record, a replayed wallet signature, a curator endpoint without the header. A route that regresses from 403 to 200 fails there, not on the first click.
 
 ## Architecture
 
 ### Backend (FastAPI)
 
-- `backend/app.py` — app, middleware (CORS, rate limiting by client IP, optional Sentry), router registration, `/health`
+- `backend/app.py` — app, middleware (CORS, security headers, Redis token bucket keyed by session subject and falling back to the client IP, optional Sentry), router registration, `/health` and `/ready`
+- `backend/session.py` — issues and verifies the `wk1.<payload>.<HMAC>` token; `backend/api/guards.py` — `require_user` / `require_curator` as router dependencies
+- `backend/wallet_auth.py` — EIP-191 challenge storage in Redis, single use, address recovery; `backend/net.py` — the client address when a proxy stands in front
 - `backend/api/` — HTTP routers by product area:
-  - `auth.py` — Telegram Login Widget and Mini App `initData` verification
+  - `auth.py` — Telegram Login Widget, Mini App `initData` and wallet sign-in
   - `markets.py` — `/markets/overview`: perp ranking by 24h quote volume
   - `copy_trading.py` — followers, leaders, follows, mirror log
   - `predict.py` — price and event markets, curator-gated resolution
   - `agent.py` — decisions, memory, subscriptions
   - `portfolio.py` — cross-asset risk and hedge
   - `funding.py` — venue comparison and carry calculations
-- Core logic lives in root modules and is tested on its own: `mirror_engine.py`, `leader_position_tracker.py`, `predict_amm.py`, `predict_resolution.py`, `portfolio_risk.py`, `funding_arb.py`, `agent_decision.py`, `agent_memory.py`, `risk_limits.py`, `rate_limiter.py`, `cache.py`, `db.py`, `predict_db.py`, `audit_log.py`
-- Configuration is read once in `backend/config.py`
+- Storage is one PostgreSQL base: `database.py` (async engine), `pg_models.py` (schema), `alembic/` (migrations), and the repositories `db.py`, `predict_db.py`, `agent_db.py`, `audit_log.py`, `subscription.py`
+- Core logic lives in root modules and is tested on its own: `mirror_engine.py`, `leader_position_tracker.py`, `predict_amm.py`, `predict_resolution.py`, `portfolio_risk.py`, `funding_arb.py`, `agent_decision.py`, `agent_memory.py`, `risk_limits.py`, `rate_limiter.py`, `cache.py`
+- Configuration is read once in `backend/config.py`, and every variable is validated there — a bad combination (live orders on mainnet without the second switch, a non-Postgres URL) stops the process at startup
 
 ### Frontend (React + TypeScript + Vite + Tailwind + wagmi)
 
 - `src/App.tsx` — tab shell, connection state, the backend health probe
 - `src/components/` — one file per panel
 - `src/lib/backend.ts` — the only place that calls the Wake backend; every error a panel shows is produced here
+- `src/lib/session.ts` — the session token from a sign-in, kept in `localStorage` under `wake.session.v1`; `backend.ts` reads it to set `Authorization`, and a 401 clears it and announces the sign-out
+- `src/lib/wallet.ts` — wallet sign-in: ask the backend for a challenge, sign it with `personal_sign`, send the signature back; the address is recovered server-side, so the client never claims an identity
 - `src/lib/lighter.ts` — Lighter public REST client
 - `src/lib/predict.ts`, `src/lib/telegram.ts`, `src/lib/leaders.ts`, `src/lib/config.ts`
 
@@ -221,17 +235,25 @@ npx wrangler pages deploy dist --project-name wake
 
 ### Backend: Railway (this is what runs)
 
-The backend runs on Railway via Docker (`Dockerfile` at the repo root, `railway.json` configures the build). Environment variables are set through the Railway dashboard or CLI.
+The image is built from the `Dockerfile` at the repo root (`railway.json` configures the build). Variables are set through the dashboard or the CLI:
 
 ```bash
-railway variables set WAKE_DRY_RUN=true WAKE_LIGHTER_NETWORK=mainnet
 railway variables set WAKE_CORS_ORIGINS="https://wake-7k6.pages.dev"
-railway service redeploy --service wake-backend
+railway variables set WAKE_SESSION_SECRET="$(python -c 'import secrets;print(secrets.token_urlsafe(32))')"
+railway variables set WAKE_CURATOR_TOKEN="$(python -c 'import secrets;print(secrets.token_urlsafe(32))')"
 ```
 
-See [RAILWAY_DEPLOY.md](docs/RAILWAY_DEPLOY.md) for the full setup guide.
+A PostgreSQL and a Redis service must be attached, and their connection strings go into `WAKE_DATABASE_URL` and `WAKE_REDIS_URL`. Without them the process still answers `/health` — that endpoint reports liveness only — while `/ready` reports the truth:
 
-**Alternative: Docker Compose (local or self-hosted)**
+```bash
+curl -s "$URL/ready"
+# {"status":"ready","checks":{"database":"ok","redis":"ok"}}      — attached
+# {"status":"not_ready","checks":{"database":"fail","redis":"fail"}} — not attached
+```
+
+The schema is created by `alembic upgrade head`, not by the app. On Railway run it as a one-off deploy command or as a separate service that exits (see [docs/RAILWAY_DEPLOY.md](docs/RAILWAY_DEPLOY.md) — the image ships `alembic.ini` and `alembic/` for exactly this).
+
+### Alternative: Docker Compose (local or self-hosted)
 
 ```bash
 docker compose up app              # :8000
@@ -240,26 +262,32 @@ docker compose up telegram-bot     # needs TELEGRAM_BOT_TOKEN
 docker compose up predict-resolver
 ```
 
-Databases persist in the `wake-data` volume; secrets come from `backend/.env`, which `docker-compose.yml` reads but does not require.
+`app`, `signing` and `predict-resolver` wait for the `migrate` service to exit successfully, so a fresh stack comes up with a migrated schema. Data lives in `postgres-data` and `redis-data`; `wake-data` holds only the encrypted key store. Secrets come from `backend/.env`, which `docker-compose.yml` reads but does not require — the compose file carries local-only session and curator values so the stack can be signed into out of the box.
 
 ## Known limits, stated plainly
 
 - `fee_bps` on a leader is validated (0–500) and stored, but nothing charges it — there is no payout path.
 - No payments of any kind. Subscription tiers and trials (`backend/subscription.py`) exist as state only.
-- Agent memory, subscriptions and risk state in `backend/api/agent.py` live in per-process dictionaries — they are gone on restart. The copy-trading and Predict data is in SQLite; this is not.
-- The LLM decision path (`backend/llm_agent.py`) has no automated test. It falls back to the tested rule engine when the call fails or no key is set.
+- Session tokens are not revocable: there is no server-side session store, so a leaked token is valid until `WAKE_SESSION_TTL_DAYS` passes and "log out" can only mean discarding it on the client. The trade-off was made deliberately for a backend that survives a Redis flush, and it is the reason the TTL is bounded at 180 days.
+- The rate limiter fails open when Redis is unreachable — a dead Redis must not take the terminal away from someone with open positions. `/ready` reports that state instead of hiding it.
+- Predict markets are an internal LMSR AMM: prices and payouts are computed against the pool in this database, not against a counterparty on an exchange.
+- The LLM decision path is covered by fallback tests (`test_llm_agent.py`) — no key, network error, malformed JSON, invalid action — but not by a call to a real model.
 - `leader_listener.py`'s websocket connection is not exercised by tests (they cover the snapshot-diffing logic around it); it needs a network to verify.
-- SQLite for local dev and copy-trading/Predict data; PostgreSQL is available for production (see `backend/database.py`, `backend/pg_models.py`, `alembic/`). Agent memory and subscriptions are per-process and lost on restart.
-- A leader's `handle` is whatever the registering user types; it is not matched to a verified Lighter account.
+- A leader's `handle` is whatever the registering user types. The account index behind it is not free-text any more — it is taken from the wallet-verified follower record — but the handle itself is unverified.
 - `/markets/overview` costs 18 candle requests per refresh and is cached for 60 seconds.
 
 ## Security
 
-- Secrets come from environment variables only; `backend/.env` is gitignored, as are `wake.db`, `audit.db`, `*.enc` and dev keystores.
-- `WAKE_DRY_RUN` defaults to `true`; order sizes always round down.
-- Curator endpoints require the `X-Curator-Token` header and compare it with `hmac.compare_digest`; if the token is not configured on the server they stay closed instead of allowing anonymous market creation or resolution.
-- SQL is parameterized throughout; CORS and the rate limiter are env-driven.
-- Keys are encrypted at rest (`encrypted_key_store.py`, optional KMS mode) — this is encryption, not an HSM.
+- Secrets come from environment variables only; `backend/.env` is gitignored, as are `*.db` and `*.enc`.
+- Identity is a signed token (`WAKE_SESSION_SECRET`), never an identifier in the request body: no endpoint lets a caller name whose positions, follows or subscription they want to read.
+- Wallet sign-in proves ownership with an EIP-191 signature over a single-use challenge; the address is recovered from the signature and the Lighter account index is read from the server-side record, not from the request.
+- `WAKE_DRY_RUN` defaults to `true`, and turning it off on mainnet additionally requires `WAKE_MAINNET_LIVE=true`; the process refuses to start otherwise. Order sizes always round down.
+- Every path that can reach Lighter — the signing service, the copy-trading listener and the agent runner — checks `WAKE_DRY_RUN` in its own process before touching the SDK. While it is on, `/place-order` returns the order it would have sent and nothing reaches the exchange; `/health` of both services reports which mode they are in.
+- Curator endpoints require the `X-Curator-Token` header, compared with `hmac.compare_digest` over bytes; if the token is not configured on the server they answer 500 instead of allowing anonymous market creation or resolution.
+- `X-Forwarded-For` is honoured only from `WAKE_TRUSTED_PROXY_IPS`, and only the rightmost address in the chain — otherwise a client could pick the IP that rate limits and audit records show for it.
+- Every SQL statement goes through SQLAlchemy Core/ORM with bound parameters; there is no string-built SQL in the backend.
+- Keys are encrypted at rest (`encrypted_key_store.py`) — this is encryption, not an HSM.
+- `/health` and `/ready` need no token; everything else that reads or writes state does. Errors are one JSON shape — `{error: {code, message}}` — so a client can branch on `code` instead of parsing a sentence.
 
 To use this with real funds: get an external security audit, replace the file keystore with HSM/KMS, and get legal advice for your jurisdiction. Report vulnerabilities privately through GitHub's security advisory feature rather than a public issue.
 
@@ -267,23 +295,10 @@ To use this with real funds: get an external security audit, replace the file ke
 
 - [README.ru.md](README.ru.md) — русская версия
 - [CONTRIBUTING.md](CONTRIBUTING.md)
+- [SECURITY.md](SECURITY.md) — trust boundaries and the production checklist
+- [CHANGELOG.md](CHANGELOG.md)
 - [LICENSE](LICENSE) — MIT
 
 ## License
 
 MIT — see [LICENSE](LICENSE).
-
-
-## Installation
-
-```bash
-git clone https://github.com/ssrjkk/wake.git
-cd wake
-pip install -r requirements.txt
-```
-
-## Usage
-
-```bash
-python main.py
-```

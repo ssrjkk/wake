@@ -7,12 +7,10 @@
 Запуск: python -m unittest test_leader_listener -v
 """
 
-import asyncio
-import os
-import tempfile
 import unittest
 import uuid
 
+import testsupport
 import db
 import leader_listener
 from mirror_engine import MarketConstraints
@@ -24,66 +22,46 @@ def _patch_module(module, name, value):
     return lambda: setattr(module, name, original)
 
 
-class ListenerDbCase(unittest.TestCase):
-    def setUp(self):
-        self.db_path = os.path.join(
-            tempfile.mkdtemp(prefix="wake-listener-"), "wake.db"
-        )
-        db.init_db(self.db_path)
-        # config читает env при импорте, поэтому подменяем уже связанный в модуле
-        # путь — handle_leader_event обращается к этому же глобальному имени.
-        patcher = _patch_module(leader_listener, "DB_PATH", self.db_path)
-        self.addCleanup(patcher)
+class ListenerDbCase(testsupport.PgCase):
+    async def asyncSetUp(self):
+        await super().asyncSetUp()
+        # DRY_RUN берётся из env при импорте; тест проверяет путь без реальных
+        # ордеров, поэтому фиксируем его здесь, а не надеемся на локальный .env.
+        self.addCleanup(_patch_module(leader_listener, "DRY_RUN", True))
         self.leader_id = "leader-live"
         self.follow_ids = {}
-        with db.connect(self.db_path) as conn:
-            db.upsert_leader(
-                conn,
-                self.leader_id,
-                lighter_account_index=7,
-                handle="@smoke",
-                fee_bps=8,
-            )
+        await db.upsert_leader(
+            self.leader_id,
+            lighter_account_index=7,
+            handle="@smoke",
+            fee_bps=8,
+        )
 
-    def add_follower(
+    async def add_follower(
         self, allocation_usd: float, current_mirrored_size: float = 0.0
     ) -> str:
         follower_id = f"f-{uuid.uuid4().hex[:8]}"
-        with db.connect(self.db_path) as conn:
-            db.upsert_follower(
-                conn,
-                follower_id,
-                l1_address="0x" + follower_id,
-                lighter_account_index=900,
-            )
-            follow_id = str(uuid.uuid4())
-            db.create_follow(
-                conn,
-                follow_id,
-                follower_id,
-                self.leader_id,
-                allocation_usd=allocation_usd,
-                max_leverage=5,
-            )
-            if current_mirrored_size:
-                db.update_mirrored_size(conn, follow_id, current_mirrored_size)
+        await db.upsert_follower(
+            follower_id,
+            l1_address="0x" + follower_id,
+            lighter_account_index=900,
+        )
+        follow_id = str(uuid.uuid4())
+        await db.create_follow(
+            follow_id,
+            follower_id,
+            self.leader_id,
+            allocation_usd=allocation_usd,
+            max_leverage=5,
+        )
+        if current_mirrored_size:
+            await db.update_mirrored_size(follow_id, current_mirrored_size)
         self.follow_ids[follower_id] = follow_id
         return follower_id
 
-    def mirror_log(self):
-        with db.connect(self.db_path) as conn:
-            return [
-                dict(r)
-                for r in conn.execute(
-                    "SELECT m.follow_id, m.market_id, m.side, m.base_amount, m.status, m.reason "
-                    "FROM mirror_log m ORDER BY m.created_at"
-                ).fetchall()
-            ]
-
-    def run_event(self, raw_event, constraints):
-        asyncio.run(
-            leader_listener.handle_leader_event(self.leader_id, raw_event, constraints)
-        )
+    async def mirror_log(self, follower_id):
+        # Читается ровно тот же репозиторный метод, что отдаёт журнал фронту.
+        return await db.mirror_log_for_follower(follower_id, limit=50)
 
 
 def raw_event(
@@ -106,7 +84,7 @@ def raw_event(
     }
 
 
-class TestBuildConstraints(ListenerDbCase):
+class TestBuildConstraints(unittest.TestCase):
     """Ошибкой было приложение BTC-шаблона ко всем рынкам: у каждого рынка свои
     min_base_amount и supported_size_decimals, неверный шаг — это неверный
     base_amount mirror-ордера на реальном счёте."""
@@ -162,14 +140,20 @@ class TestBuildConstraints(ListenerDbCase):
 
 
 class TestHandleLeaderEvent(ListenerDbCase):
-    def test_dry_run_writes_one_row_per_follower(self):
-        first = self.add_follower(1000.0)
-        second = self.add_follower(500.0)
-        self.run_event(
+    async def run_event(self, event, constraints):
+        await leader_listener.handle_leader_event(self.leader_id, event, constraints)
+
+    async def test_dry_run_writes_one_row_per_follower(self):
+        first = await self.add_follower(1000.0)
+        second = await self.add_follower(500.0)
+        await self.run_event(
             raw_event(), MarketConstraints(min_base_amount=0.001, size_decimals=3)
         )
 
-        rows = self.mirror_log()
+        rows = [
+            *(await self.mirror_log(first)),
+            *(await self.mirror_log(second)),
+        ]
         self.assertEqual(len(rows), 2)
         self.assertEqual(
             {r["follow_id"] for r in rows},
@@ -178,34 +162,36 @@ class TestHandleLeaderEvent(ListenerDbCase):
         self.assertEqual({r["status"] for r in rows}, {"dry_run"})
         self.assertTrue(all(r["base_amount"] > 0 for r in rows))
 
-    def test_skip_is_logged_with_follow_id_not_follower_id(self):
+    async def test_skip_is_logged_with_follow_id_not_follower_id(self):
         """Регрессия на IntegrityError в самом обычном пути: SkippedFollower несёт
         follower_id подписчика, а mirror_log.follow_id ссылается на follows(id) при
         включённых foreign keys. Прямая запись роняла листенер посреди стрима.
 
         Skip достигается аллокацией, которой не хватает на минимальный ордер, —
         это штатная ситуация для мелкого подписчика, не краевой случай."""
-        follower_id = self.add_follower(1.0)
-        self.run_event(
+        follower_id = await self.add_follower(1.0)
+        await self.run_event(
             raw_event(price=2000.0, size_delta=0.5, leader_equity_usd=50000.0),
             MarketConstraints(min_base_amount=10.0, size_decimals=2),
         )
 
-        rows = self.mirror_log()
+        rows = await self.mirror_log(follower_id)
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["status"], "skipped")
         self.assertEqual(rows[0]["reason"], "below_min_order_size")
         self.assertEqual(rows[0]["follow_id"], self.follow_ids[follower_id])
         self.assertNotEqual(rows[0]["follow_id"], follower_id)
 
-    def test_missing_constraints_skips_every_follower_without_touching_market(self):
+    async def test_missing_constraints_skips_every_follower_without_touching_market(
+        self,
+    ):
         """constraints=None — рынка нет в полученной книге. Угадать шаг нельзя,
         поэтому все подписчики уходят в skip с явной причиной, а не в ордер."""
-        a = self.add_follower(1000.0)
-        b = self.add_follower(2000.0)
-        self.run_event(raw_event(market_id=777), None)
+        a = await self.add_follower(1000.0)
+        b = await self.add_follower(2000.0)
+        await self.run_event(raw_event(market_id=777), None)
 
-        rows = self.mirror_log()
+        rows = [*(await self.mirror_log(a)), *(await self.mirror_log(b))]
         self.assertEqual(len(rows), 2)
         self.assertEqual({r["status"] for r in rows}, {"skipped"})
         self.assertEqual(
@@ -216,9 +202,9 @@ class TestHandleLeaderEvent(ListenerDbCase):
         )
         self.assertTrue(all(r["base_amount"] == 0 for r in rows))
 
-    def test_reduce_event_logs_reduce_only_order(self):
-        self.add_follower(1000.0, current_mirrored_size=0.4)
-        self.run_event(
+    async def test_reduce_event_logs_reduce_only_order(self):
+        follower_id = await self.add_follower(1000.0, current_mirrored_size=0.4)
+        await self.run_event(
             raw_event(
                 is_increase=False,
                 size_delta=0.4,
@@ -228,23 +214,18 @@ class TestHandleLeaderEvent(ListenerDbCase):
             MarketConstraints(min_base_amount=0.001, size_decimals=3),
         )
 
-        rows = self.mirror_log()
+        rows = await self.mirror_log(follower_id)
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["status"], "dry_run")
-        with db.connect(self.db_path) as conn:
-            reduce_only = conn.execute("SELECT reduce_only FROM mirror_log").fetchone()[
-                0
-            ]
-        self.assertEqual(reduce_only, 1)
+        self.assertEqual(rows[0]["reduce_only"], 1)
 
-    def test_paused_follower_is_not_mirrored(self):
-        follower_id = self.add_follower(1000.0)
-        with db.connect(self.db_path) as conn:
-            db.set_paused(conn, self.follow_ids[follower_id], True)
-        self.run_event(
+    async def test_paused_follower_is_not_mirrored(self):
+        follower_id = await self.add_follower(1000.0)
+        await db.set_paused(self.follow_ids[follower_id], True)
+        await self.run_event(
             raw_event(), MarketConstraints(min_base_amount=0.001, size_decimals=3)
         )
-        self.assertEqual(self.mirror_log(), [])
+        self.assertEqual(await self.mirror_log(follower_id), [])
 
 
 if __name__ == "__main__":

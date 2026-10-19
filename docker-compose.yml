@@ -1,3 +1,30 @@
+# Локальный стек: PostgreSQL + миграции, Redis, API, сервис подписи, Telegram-бот,
+# резолвер рынков и фронтенд в dev-режиме.
+#
+# Все backend-сервисы собираются из одного Dockerfile и отличаются только командой,
+# поэтому общие части вынесены в якорь: расхождение между ними (переменная, которой
+# нет у одного сервиса) — это баг, а не настройка.
+x-backend: &backend
+  build:
+    context: .
+    dockerfile: Dockerfile
+  env_file:
+    - path: backend/.env
+      required: false
+  environment:
+    - WAKE_DATABASE_URL=postgresql+asyncpg://wake:wake@postgres:5432/wake
+    - WAKE_REDIS_URL=redis://redis:6379/0
+    - WAKE_SIGNING_SERVICE_URL=http://signing:8787
+    - WAKE_KEYSTORE_PATH=/app/data/keystore.enc
+    - WAKE_LIGHTER_NETWORK=mainnet
+    # Локальные значения-заглушки: без секрета сессии вход отвечает 503, и стек
+    # нельзя потрогать руками. В проде их берёт из секрет-менеджера сам хост, а
+    # здесь — из root .env (Compose подставляет ${…} до чтения backend/.env).
+    - WAKE_SESSION_SECRET=${WAKE_SESSION_SECRET:-wake-local-dev-session-secret-not-for-production}
+    - WAKE_CURATOR_TOKEN=${WAKE_CURATOR_TOKEN:-wake-local-dev-curator-token}
+  volumes:
+    - wake-data:/app/data
+
 services:
   # ── Infrastructure ──────────────────────────────────────────────────────────
   postgres:
@@ -16,8 +43,11 @@ services:
       timeout: 3s
       retries: 5
 
+  # Мажорная версия совпадает с redis>=8.1.0 в requirements.txt и с CI: клиент и
+  # сервер на разных мажорах — это тесты, которые проходят локально и падают там,
+  # где настоящие Redis-команды.
   redis:
-    image: redis:7-alpine
+    image: redis:8.1-alpine
     ports:
       - "6379:6379"
     volumes:
@@ -28,93 +58,85 @@ services:
       timeout: 3s
       retries: 5
 
+  # ── Миграции ────────────────────────────────────────────────────────────────
+  # Schema поднимает alembic, а не приложение: у прод-кода нет прав на DDL, и
+  # «первый запрос создаст таблицы» — это путь к базе, структура которой
+  # расходится с миграциями. Сервис одноразовый, остальные ждут service_completed.
+  migrate:
+    <<: *backend
+    command: ["alembic", "upgrade", "head"]
+    healthcheck:
+      disable: true
+    volumes: []
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   # ── Backend ─────────────────────────────────────────────────────────────────
   app:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    <<: *backend
     ports:
       - "8000:8000"
-    environment:
-      - WAKE_DRY_RUN=true
-      - WAKE_LIGHTER_NETWORK=mainnet
-      - WAKE_DB_PATH=/app/data/wake.db
-      - WAKE_AUDIT_DB_PATH=/app/data/audit.db
-      - WAKE_CORS_ORIGINS=http://localhost:5173
-      - WAKE_SIGNING_SERVICE_URL=http://signing:8787
-      - WAKE_DATABASE_URL=postgresql+asyncpg://wake:wake@postgres:5432/wake
-      - WAKE_REDIS_URL=redis://redis:6379/0
-    env_file:
-      - path: backend/.env
-        required: false
-    volumes:
-      - wake-data:/app/data
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 
   signing:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    <<: *backend
     command: ["uvicorn", "signing_service:app", "--host", "0.0.0.0", "--port", "8787"]
+    # loopback, а не 0.0.0.0: у /place-order нет аутентификации (секрета для
+    # браузера не бывает), а процесс держит ключ подписи. Опубликовать его — значит
+    # отдать наружу endpoint, который двигает деньги аккаунта. Из контейнеров
+    # сервис и так виден по http://signing:8787.
     ports:
-      - "8787:8787"
-    environment:
-      - WAKE_LIGHTER_NETWORK=mainnet
-      - WAKE_DB_PATH=/app/data/wake.db
-      - WAKE_KEYSTORE_PATH=/app/data/keystore.enc
-      - WAKE_DATABASE_URL=postgresql+asyncpg://wake:wake@postgres:5432/wake
-    env_file:
-      - path: backend/.env
-        required: false
-    volumes:
-      - wake-data:/app/data
+      - "127.0.0.1:8787:8787"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8787/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 
   telegram-bot:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    <<: *backend
     command: ["python", "telegram_bot.py"]
-    environment:
-      - WAKE_BACKEND_URL=http://app:8000
-      - WAKE_LIGHTER_NETWORK=mainnet
-      - WAKE_DATABASE_URL=postgresql+asyncpg://wake:wake@postgres:5432/wake
-    env_file:
-      - path: backend/.env
-        required: false
+    healthcheck:
+      disable: true
+    volumes: []
     depends_on:
       - app
 
   predict-resolver:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    <<: *backend
     command: ["python", "predict_resolver.py", "--loop"]
-    environment:
-      - WAKE_LIGHTER_NETWORK=mainnet
-      - WAKE_DB_PATH=/app/data/wake.db
-      - WAKE_AUDIT_DB_PATH=/app/data/audit.db
-      - WAKE_DATABASE_URL=postgresql+asyncpg://wake:wake@postgres:5432/wake
-    env_file:
-      - path: backend/.env
-        required: false
-    volumes:
-      - wake-data:/app/data
+    healthcheck:
+      disable: true
+    volumes: []
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  # Копи-движок — процесс на лидера: отдельного сервиса нет, потому что аргументы
+  # (--leader-id, --account-index) задаются на каждого лидера своего.
+  #   docker compose run --rm app python leader_listener.py \
+  #     --leader-id <id из базы> --account-index <index лидера>
 
   # ── Frontend (dev) ──────────────────────────────────────────────────────────
   frontend:
     image: node:22-alpine
     working_dir: /app
-    command: sh -c "npm install && npm run dev -- --host 0.0.0.0"
+    command: sh -c "npm ci && npm run dev -- --host 0.0.0.0"
     ports:
       - "5173:5173"
     volumes:
@@ -123,9 +145,6 @@ services:
     environment:
       - VITE_BACKEND_URL=http://localhost:8000
       - VITE_SIGNING_SERVICE_URL=http://localhost:8787
-    env_file:
-      - path: .env
-        required: false
     depends_on:
       - app
 

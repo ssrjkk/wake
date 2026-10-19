@@ -3,7 +3,7 @@ REST-слой Wake backend. Тонкий файл: создаёт FastAPI, по�
 (CORS, rate limiting, security headers) и собирает роутеры из api/ — каждая
 продуктовая область живёт в своём модуле, а не в одном монолите:
 
-    api/auth.py         — Telegram Login Widget + Mini App auth
+    api/auth.py         — вход: Telegram Widget, Mini App, подпись кошелька
     api/copy_trading.py — followers/leaders/follows + /simulate-mirror
     api/predict.py      — предсказания (price/event рынки)
     api/agent.py        — AI-агент + подписка
@@ -13,15 +13,20 @@ REST-слой Wake backend. Тонкий файл: создаёт FastAPI, по�
 
 Математика и логика каждой области протестированы отдельно (см. test_*.py);
 этот слой и роутеры — только HTTP-обвязка. Обвязка тоже прогнана:
-`test_api_smoke.py` поднимает это приложение через FastAPI TestClient и проходит
-каждый роут, включая отказные пути (токен куратора, подпись Telegram,
-нерезолвленные рынки), так что список выше — не обещание, а проверенное состояние.
+`test_api_smoke.py` поднимает это приложение и проходит каждый роут, включая
+отказные пути (токен куратора, подпись Telegram, нерезолвленные рынки), так что
+список выше — не обещание, а проверенное состояние.
 
 Безопасность:
-- Redis-backed rate limiting (token bucket, per-IP)
+- Вход — подписанная сессия (session.py): роутеры читают пользователя из
+  токена, а не из тела запроса. Там, где право на запись решает владение
+  кошельком, вход идёт через challenge/response (wallet_auth.py).
+- Операторские роуты — отдельный токен куратора (api/guards.py).
+- Rate limiting — token bucket в Redis, на ключ пользователя или IP, с
+  повышенным весом на запись.
 - Security headers (X-Content-Type-Options, X-Frame-Options, CSP, ...)
 - Strict CORS (no wildcards, explicit origins only)
-- Unified error format: { "error": { "code": "...", "message": "..." } }
+- Единый формат ошибок: { "error": { "code": "...", "message": "..." } }
 
 Запуск:
     pip install -r requirements.txt
@@ -40,11 +45,10 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-import db
-import predict_db as pdb
-import audit_log as al
 import database
-from migrate import run_migrations
+import net
+import session
+import wallet_auth
 from config import settings
 from rate_limiter import RedisRateLimiter
 
@@ -66,12 +70,6 @@ if settings.sentry_dsn:
     )
 
 logger = logging.getLogger("wake.app")
-
-# Legacy SQLite init (until full PostgreSQL migration)
-db.init_db(settings.wake_db_path)
-pdb.init_predict_db(settings.wake_db_path)
-al.init_audit_db(settings.wake_audit_db_path)
-run_migrations(settings.wake_db_path)
 
 
 @asynccontextmanager
@@ -115,19 +113,41 @@ async def security_headers_middleware(request: Request, call_next):
     return response
 
 
-# Redis-backed rate limiting (token bucket, per-IP)
+# Redis-backed rate limiting (token bucket)
 _rate_limiter = RedisRateLimiter(
     capacity=settings.wake_rate_limit_capacity,
     refill_rate=settings.wake_rate_limit_refill,
     redis_url=settings.wake_redis_url,
 )
 
+# Запись дороже чтения: она трогает базу и Lighter, поэтому mutating-методы
+# списывают несколько токенов. Иначе лимит, рассчитанный на polling цен,
+# одинаково свободно разрешал бы долбить эндпоинты, которые решают чужие деньги.
+_WRITE_COST = 3.0
+
+
+def _bucket_key(request: Request) -> str:
+    """Ключ bucket'а: пользователь, если токен подписан нами, иначе — IP соединения.
+
+    По одному IP за Railway/Cloudflare нельзя: адрес соединения это адрес
+    прокси, и все клиенты делили бы один лимит. Подпись токена проверяется
+    второй раз (здесь и в зависимости роута) — HMAC по короткой строке стоит
+    микросекунды, а без неё отличить чужой трафик от своего нечем."""
+    header = request.headers.get("authorization", "")
+    if header.startswith("Bearer "):
+        try:
+            return f"user:{session.verify(header[7:].strip())}"
+        except session.SessionError:
+            pass
+    return f"ip:{net.client_ip(request)}"
+
 
 @app.middleware("http")
 async def rate_limit_middleware(request: Request, call_next):
-    key = request.client.host if request.client else "unknown"
-    if not await _rate_limiter.allow(key):
-        retry = await _rate_limiter.retry_after(key)
+    key = _bucket_key(request)
+    cost = _WRITE_COST if request.method in ("POST", "PUT", "PATCH", "DELETE") else 1.0
+    if not await _rate_limiter.allow(key, cost):
+        retry = await _rate_limiter.retry_after(key, cost)
         return JSONResponse(
             status_code=429,
             content={
@@ -186,6 +206,21 @@ async def http_exception_handler(request: Request, exc: HTTPException):
     return JSONResponse(status_code=exc.status_code, content=payload)
 
 
+def _validation_details(exc: RequestValidationError) -> list[dict]:
+    """Сообщения валидации, пригодные для JSON.
+
+    Pydantic кладёт в ctx исходный ValueError из field_validator, и json.dumps на
+    нём падает: без этой правки любой 422 с кастомной проверкой полей отдавался бы
+    как 500, а клиент видел бы «внутреннюю ошибку» вместо того, что он вбил."""
+    details = []
+    for error in exc.errors():
+        ctx = error.get("ctx")
+        if ctx:
+            error["ctx"] = {key: str(value) for key, value in ctx.items()}
+        details.append(error)
+    return details
+
+
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     return JSONResponse(
@@ -194,9 +229,29 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
             "error": {
                 "code": "VALIDATION_ERROR",
                 "message": "Некорректное тело запроса",
-                "details": exc.errors(),
+                "details": _validation_details(exc),
             }
         },
+    )
+
+
+# Отказ по сессии и по подписи кошелька приходит из зависимостей (api/guards.py)
+# и из wallet_auth как типизированное исключение со своим кодом и статусом.
+# Форматировать его здесь, а не в каждом роутере: иначе один и тот же «токен
+# протух» собирался бы в JSON по-разному в разных модулях.
+@app.exception_handler(session.SessionError)
+async def session_error_handler(request: Request, exc: session.SessionError):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"error": {"code": exc.code, "message": exc.message}},
+    )
+
+
+@app.exception_handler(wallet_auth.WalletAuthError)
+async def wallet_auth_error_handler(request: Request, exc: wallet_auth.WalletAuthError):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={"error": {"code": exc.code, "message": exc.message}},
     )
 
 

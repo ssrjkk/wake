@@ -18,7 +18,6 @@ backend/.coverage
 htmlcov/
 backend/.env
 backend/*.enc
-backend/dev_keystore*.json
 *.db
 
 # Logs

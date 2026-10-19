@@ -9,7 +9,6 @@ leader_listener.py: WAKE_DRY_RUN=true по умолчанию, реальный 
 agent_memory.py (14 тестов) и agent_decision.py (11 тестов).
 """
 
-import os
 import time
 import uuid
 import dataclasses
@@ -18,15 +17,11 @@ import urllib.request
 import json
 
 from agent_memory import AgentMemoryStore, TradeRecord
-from config import DRY_RUN
+from config import DRY_RUN, SIGNING_SERVICE_URL
 from llm_agent import llm_decision
 from risk_limits import RiskLimits, UserRiskState, check_order, record_executed
 
 logger = logging.getLogger("wake.agent")
-
-SIGNING_SERVICE_URL = os.environ.get(
-    "WAKE_SIGNING_SERVICE_URL", "http://localhost:8787"
-)
 
 
 def _place_order_via_signing_service(

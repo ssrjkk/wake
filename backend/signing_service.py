@@ -19,16 +19,31 @@ place_order_example.py).
 Фронтенд берёт адрес из VITE_SIGNING_SERVICE_URL (src/lib/config.ts, по умолчанию
 localhost:8787): если сервис не запущен, кнопка честно показывает ошибку, а не
 притворяется, что сработало.
+
+Граница риска — этот процесс, а не основной бэкенд: ключ подписи лежит здесь,
+поэтому именно здесь спрашивают WAKE_DRY_RUN. Сухой ход (значение по умолчанию)
+считает план и отдаёт его, ни разу не обратившись в Lighter, — ордер не покидает
+процесс, как и обещает README. Живой ход на mainnet требует второго переключателя,
+WAKE_MAINNET_LIVE=true; без него процесс не стартует (проверка в config.py).
+
+Аутентификации у /place-order нет, и для вызова из браузера её не придумать:
+секрет, зашитый в публичный бандл, секретом не является. Доступ ограничивается
+адресом — сервис опубликован на loopback (127.0.0.1:8787 в docker-compose.yml).
+Выпустить его в интернет значит отдать наружу endpoint, который двигает деньги
+этого аккаунта.
 """
 
+import logging
 import os
 import time
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import lighter
 
-from config import CORS_ORIGINS, LIGHTER_BASE_URL, LIGHTER_NETWORK
+from config import CORS_ORIGINS, DRY_RUN, LIGHTER_BASE_URL, LIGHTER_NETWORK
+
+logger = logging.getLogger("wake.signing")
 
 app = FastAPI(title="Wake signing service — Phase 1, solo only")
 
@@ -69,20 +84,31 @@ def _get_client() -> "lighter.SignerClient":
 
 
 class OrderRequest(BaseModel):
-    market_index: int
-    client_order_index: int
-    base_amount: int  # уже отмасштабировано под supported_size_decimals рынка — см. lib/lighter.ts
-    price: int  # уже отмасштабировано под supported_price_decimals рынка
+    # Граница, за которой начинается чужой счёт: отрицательный размер или цена
+    # уходят в SDK как есть и превращаются в ордер, которого человек не просил.
+    market_index: int = Field(ge=0)
+    client_order_index: int = Field(ge=0)
+    base_amount: int = Field(
+        gt=0
+    )  # уже отмасштабировано под decimals рынка — lib/lighter.ts
+    price: int = Field(gt=0)  # уже отмасштабировано под supported_price_decimals рынка
     is_ask: bool  # True = short/sell, False = long/buy
     reduce_only: bool = False
 
 
 @app.post("/place-order")
 async def place_order(req: OrderRequest):
+    if DRY_RUN:
+        # Сухой ход считает план и останавливается здесь. Проверять переключатель
+        # нужно в этом процессе: фронт зовёт /place-order напрямую, мимо бэкенда,
+        # и «бэкенд сухой» ничего не гарантирует для вызова, пришедшего сюда.
+        logger.info("dry-run: ордер не отправлен: %s", req.model_dump())
+        return {"tx_hash": None, "dry_run": True, "order": req.model_dump()}
+
     now = time.time()
     cached = _idempotency_cache.get(req.client_order_index)
     if cached and (now - cached[1]) < _IDEMPOTENCY_TTL:
-        return {"tx_hash": cached[0], "idempotent_replay": True}
+        return {"tx_hash": cached[0], "dry_run": False, "idempotent_replay": True}
 
     try:
         client = _get_client()
@@ -108,11 +134,18 @@ async def place_order(req: OrderRequest):
         raise HTTPException(status_code=400, detail=f"Lighter отклонил ордер: {err}")
 
     _idempotency_cache[req.client_order_index] = (tx_hash, now)
-    return {"tx_hash": tx_hash, "idempotent_replay": False}
+    return {"tx_hash": tx_hash, "dry_run": False, "idempotent_replay": False}
 
 
 @app.get("/health")
 async def health():
     # network в ответе — не косметика: фронт показывает, к какой сети уходит
-    # ордер, и расходится с сетью данных основного бэкенда только так.
-    return {"status": "ok", "network": LIGHTER_NETWORK, "base_url": BASE_URL}
+    # ордер, и расходится с сетью данных основного бэкенда только так. dry_run
+    # показан по той же причине: кнопка «Отправить» обязана говорить, уйдёт ли
+    # ордер в Lighter или этот процесс остановит его на себе.
+    return {
+        "status": "ok",
+        "network": LIGHTER_NETWORK,
+        "base_url": BASE_URL,
+        "dry_run": DRY_RUN,
+    }

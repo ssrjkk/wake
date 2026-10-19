@@ -1,7 +1,7 @@
 """
-Telegram authentication endpoints.
+Вход в Wake: три способа, один результат — подписанный токен сессии.
 
-Два разных Telegram-потока ведут на одну и ту же запись follower:
+Два Telegram-потока ведут на одну и ту же запись follower:
 - Login Widget (telegram.org/js/telegram-widget.js) — подпись по полям виджета,
   ключом служит SHA256 от токена бота;
 - Mini App (window.Telegram.WebApp.initData) — подпись по query-строке initData,
@@ -9,20 +9,38 @@ Telegram authentication endpoints.
 
 Вывод ключа в этих потоках разный, поэтому проверки — две отдельные функции.
 Обе отклоняют всё, что не смогли подтвердить токеном.
+
+Третий способ — кошелёк. Здесь слово клиента ничего не стоит, поэтому вход
+устроен как challenge/response (wallet_auth.py): бэкенд выдаёт текст, кошелёк
+его подписывает, бэкенд восстанавливает адрес из подписи и сверяет.
+
+Ответ любого подтверждённого входа — токен сессии (session.py). Дальше роутеры
+читают субъект из токена, а не из тела запроса: user_id, присланный клиентом,
+это ровно то, что клиент хочет, чтобы о нём подумали.
 """
 
 import hashlib
 import hmac
 import time
-from fastapi import APIRouter, Depends, HTTPException
+
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.concurrency import run_in_threadpool
 from aiogram.utils.web_app import check_webapp_signature, safe_parse_webapp_init_data
 
+import audit_log as al
+import net
+import session
+import wallet_auth
+
+# copy_db, а не db: в теле Telegram-эндпоинтов db — это сессия из Depends.
+import db as copy_db
+from config import LIGHTER_NETWORK, settings
 from database import get_db
+from lighter_rest import get_account_index_by_l1
 from pg_models import Follower
-from config import settings
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -45,6 +63,15 @@ class MiniAppAuthData(BaseModel):
     # Строка целиком, как её отдаёт window.Telegram.WebApp.initData: разбирать и
     # проверять должен бэкенд на своём токене, а не браузер.
     init_data: str
+
+
+class WalletChallengeRequest(BaseModel):
+    l1_address: str
+
+
+class WalletSignatureRequest(BaseModel):
+    message: str
+    signature: str
 
 
 def verify_telegram_auth(data: TelegramAuthData) -> bool:
@@ -169,46 +196,119 @@ async def _follower_for_telegram_user(db: AsyncSession, telegram_id: int) -> str
     return user_id
 
 
+async def _signed_in(user_id: str, via: str, request: Request) -> dict:
+    """Один ответ на все способы входа и одна запись в аудит.
+
+    Аудит по успешному входу нужен постфактум ровно в одном месте: без него
+    «кто вообще заходил в этот аккаунт» не выясняется ничем, а это первый вопрос
+    при разборе подозрительной сделки."""
+    token, expires_at = session.issue(user_id)
+    await al.log_action(
+        al.AuditEntry(
+            actor=user_id,
+            action="sign_in",
+            resource=f"follower:{user_id}",
+            details={
+                "via": via,
+                "ip": net.client_ip(request),
+            },
+            success=True,
+        )
+    )
+    return {"user_id": user_id, "token": token, "expires_at": expires_at}
+
+
 @router.post("/telegram")
 async def auth_telegram(
     data: TelegramAuthData,
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    """Authenticate via Telegram Login Widget, return user_id."""
+    """Вход через Login Widget: проверяет подпись, создаёт запись и отдаёт токен."""
     if not verify_telegram_auth(data):
+        await al.log_action(
+            al.AuditEntry(
+                actor=f"tg_{data.id}",
+                action="sign_in",
+                resource="telegram",
+                details={"via": "widget", "reason": "signature_rejected"},
+                success=False,
+            )
+        )
         raise HTTPException(
             status_code=401,
             detail={
                 "error": {
                     "code": "INVALID_TELEGRAM_AUTH",
-                    "message": "Invalid Telegram auth data",
+                    "message": "Telegram не подтвердил подпись полей входа",
                 }
             },
         )
 
     user_id = await _follower_for_telegram_user(db, data.id)
-
-    return {
-        "user_id": user_id,
-        "telegram_id": data.id,
-        "username": data.username,
-        "first_name": data.first_name,
-    }
+    return await _signed_in(user_id, "telegram_widget", request)
 
 
 @router.post("/telegram/init")
 async def auth_telegram_init(
     data: MiniAppAuthData,
+    request: Request,
     db: AsyncSession = Depends(get_db),
 ):
-    """Вход изнутри мини-аппа: проверяем initData и отдаём тот же user_id, что и виджет."""
+    """Вход изнутри мини-аппа: тот же follower и тот же токен, что у виджета."""
     parsed = verify_mini_app_init_data(data.init_data)
-
     user_id = await _follower_for_telegram_user(db, parsed.user.id)
+    return await _signed_in(user_id, "telegram_miniapp", request)
 
-    return {
-        "user_id": user_id,
-        "telegram_id": parsed.user.id,
-        "username": parsed.user.username,
-        "first_name": parsed.user.first_name,
-    }
+
+@router.post("/wallet/challenge")
+async def wallet_challenge(req: WalletChallengeRequest):
+    """Текст, который нужно подписать (personal_sign), и срок его действия.
+
+    Ответ не содержит ничего, чем можно воспользоваться без подписи: это
+    одноразовый challenge, который живёт пять минут и снимается первым же
+    /wallet/verify. Отказ (кривой адрес, мёртвый Redis) форматит обработчик в
+    app.py — у WalletAuthError уже есть и код, и статус.
+    """
+    message, expires_at = await wallet_auth.new_challenge(req.l1_address)
+    return {"message": message, "expires_at": expires_at}
+
+
+@router.post("/wallet/verify")
+async def wallet_verify(req: WalletSignatureRequest, request: Request):
+    """Проверяет подпись кошелька и выдаёт токен.
+
+    Индекс аккаунта Lighter берётся с Lighter по подтверждённому адресу, а не из
+    запроса: присланный клиентом индекс позволял опубликовать лидера под чужим
+    аккаунтом. Если Lighter не отвечает, вход всё равно остаётся входом — просто
+    без привязанного индекса, а публикация лидера до его появления отклоняется
+    явно.
+    """
+    try:
+        address = await wallet_auth.verify_signature(req.message, req.signature)
+    except wallet_auth.WalletAuthError as e:
+        await al.log_action(
+            al.AuditEntry(
+                actor="wallet",
+                action="sign_in",
+                resource="unverified",
+                details={"via": "wallet", "reason": e.code},
+                success=False,
+            )
+        )
+        raise
+
+    try:
+        account_index = await run_in_threadpool(
+            get_account_index_by_l1, address, LIGHTER_NETWORK
+        )
+    except RuntimeError:
+        account_index = None
+
+    await copy_db.upsert_follower(
+        id_=address, l1_address=address, lighter_account_index=account_index
+    )
+
+    body = await _signed_in(address, "wallet", request)
+    body["lighter_account_index"] = account_index
+    return body

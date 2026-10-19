@@ -16,7 +16,7 @@ import { fmtUsdCompact, usd } from "./utils";
 import { errorText } from "../lib/backend";
 
 interface PredictProps {
-  followerId: string | null;
+  signedIn: boolean;
   setToast: (toast: string | null) => void;
   onConnect: () => void;
 }
@@ -50,7 +50,7 @@ function conditionOf(m: PredictMarket): string | null {
   return `${sign} ${value} · mark-цена Lighter, рынок #${m.lighter_market_id}`;
 }
 
-export default function Predict({ followerId, setToast, onConnect }: PredictProps) {
+export default function Predict({ signedIn, setToast, onConnect }: PredictProps) {
   const [status, setStatus] = useState<PredictStatus>("open");
   const [markets, setMarkets] = useState<PredictMarket[] | null>(null);
   const [marketsError, setMarketsError] = useState<string | null>(null);
@@ -64,6 +64,9 @@ export default function Predict({ followerId, setToast, onConnect }: PredictProp
   const [previewError, setPreviewError] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const [tradeConfirmed, setTradeConfirmed] = useState(false);
+
+  // Одно место вместо четырёх копий условия в disabled, фоне, тексте и рамке кнопки.
+  const tradeBlocked = sending || preview == null || shares <= 0 || (sellMode && trade != null && shares > trade.held);
 
   useEffect(() => {
     if (!trade) return;
@@ -103,12 +106,12 @@ export default function Predict({ followerId, setToast, onConnect }: PredictProp
   }, [status, nonce]);
 
   useEffect(() => {
-    if (!followerId) {
+    if (!signedIn) {
       setPositions(null);
       return;
     }
     let live = true;
-    getPredictPositions(followerId)
+    getPredictPositions()
       .then((rows) => {
         if (live) {
           setPositions(rows);
@@ -124,7 +127,7 @@ export default function Predict({ followerId, setToast, onConnect }: PredictProp
     return () => {
       live = false;
     };
-  }, [followerId, nonce]);
+  }, [signedIn, nonce]);
 
   const heldByKey = useMemo(() => {
     const map = new Map<string, PredictPosition>();
@@ -136,7 +139,7 @@ export default function Predict({ followerId, setToast, onConnect }: PredictProp
   const now = new Date(clock);
 
   function openTrade(market: PredictMarket, outcome: "yes" | "no") {
-    if (!followerId) {
+    if (!signedIn) {
       onConnect();
       setToast("Войди через Telegram или кошелёк — позиция пишется на твой аккаунт Wake");
       return;
@@ -179,11 +182,11 @@ export default function Predict({ followerId, setToast, onConnect }: PredictProp
   }, [trade?.market.id, trade?.outcome, shares, sellMode]);
 
   async function confirmTrade() {
-    if (!trade || !followerId || preview == null) return;
+    if (!trade || !signedIn || preview == null) return;
     setSending(true);
     try {
       const qty = sellMode ? -Math.abs(shares) : Math.abs(shares);
-      const data = await tradePredictMarket(trade.market.id, followerId, trade.outcome, qty);
+      const data = await tradePredictMarket(trade.market.id, trade.outcome, qty);
       setToast(
         sellMode
           ? `Продано ${Math.abs(qty)} ${trade.outcome.toUpperCase()}: возвращено ${money(data.cost_usd)}`
@@ -199,9 +202,9 @@ export default function Predict({ followerId, setToast, onConnect }: PredictProp
   }
 
   async function claim(p: PredictPosition) {
-    if (!followerId) return;
+    if (!signedIn) return;
     try {
-      const data = await claimPredictMarket(p.market_id, followerId);
+      const data = await claimPredictMarket(p.market_id);
       setToast(`Забрано ${money(data.payout_usd)} по «${p.question}»`);
       setNonce((n) => n + 1);
     } catch (e) {
@@ -271,7 +274,7 @@ export default function Predict({ followerId, setToast, onConnect }: PredictProp
           </button>
         ))}
         <span style={{ fontSize: "11px", color: "#666", marginLeft: "auto" }}>
-          {positions ? `позиций: ${positions.length}` : followerId ? "позиции грузятся…" : "позиции — после входа"}
+          {positions ? `позиций: ${positions.length}` : signedIn ? "позиции грузятся…" : "позиции — после входа"}
           {claimable.length > 0 && <span style={{ color: "#10b981", fontWeight: 500 }}> · доступно к выплате {claimable.length}</span>}
         </span>
       </div>
@@ -380,7 +383,7 @@ export default function Predict({ followerId, setToast, onConnect }: PredictProp
       )}
 
       {markets && markets.length === 0 && !marketsError && (
-        <div style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", padding: "48px 24px", textAlign: "center" }}>
+        <div className="empty-state">
           <p style={{ fontSize: "12px", color: "#ccc", margin: "0 0 4px 0" }}>
             {status === "open" ? "Открытых рынков нет" : status === "resolved" ? "Резолвленных рынков пока нет" : "Рынков нет"}
           </p>
@@ -501,13 +504,13 @@ export default function Predict({ followerId, setToast, onConnect }: PredictProp
               <div style={{ display: "flex", gap: "4px", marginBottom: "12px" }}>
                 <button
                   onClick={() => setSellMode(false)}
-                  style={{ flex: 1, fontSize: "11px", padding: "8px 0", borderRadius: "4px", background: !sellMode ? "#1a1a1a" : "transparent", color: !sellMode ? "#3b82f6" : "#ccc", border: !sellMode ? "1px solid #3b82f6" : "1px solid #2a2a2a", cursor: "pointer", minHeight: "var(--touch)" }}
+                  style={{ flex: 1, fontSize: "11px", padding: "8px 0", borderRadius: "4px", background: !sellMode ? "#0a1a14" : "transparent", color: !sellMode ? "#10b981" : "#ccc", border: !sellMode ? "1px solid #10b981" : "1px solid #2a2a2a", cursor: "pointer", minHeight: "var(--touch)" }}
                 >
                   Покупка
                 </button>
                 <button
                   onClick={() => setSellMode(true)}
-                  style={{ flex: 1, fontSize: "11px", padding: "8px 0", borderRadius: "4px", background: sellMode ? "#1a1a1a" : "transparent", color: sellMode ? "#3b82f6" : "#ccc", border: sellMode ? "1px solid #3b82f6" : "1px solid #2a2a2a", cursor: "pointer", minHeight: "var(--touch)" }}
+                  style={{ flex: 1, fontSize: "11px", padding: "8px 0", borderRadius: "4px", background: sellMode ? "#1a0a0d" : "transparent", color: sellMode ? "#ef4444" : "#ccc", border: sellMode ? "1px solid #ef4444" : "1px solid #2a2a2a", cursor: "pointer", minHeight: "var(--touch)" }}
                 >
                   Продажа (держишь {trade.held})
                 </button>
@@ -561,8 +564,23 @@ export default function Predict({ followerId, setToast, onConnect }: PredictProp
                 }
                 void confirmTrade();
               }}
-              disabled={sending || preview == null || shares <= 0 || (sellMode && shares > trade.held)}
-              style={{ width: "100%", background: sending || preview == null || shares <= 0 || (sellMode && shares > trade.held) ? "#1a1a1a" : tradeConfirmed ? "#ef4444" : "#3b82f6", color: sending || preview == null || shares <= 0 || (sellMode && shares > trade.held) ? "#666" : "#fff", fontWeight: 600, borderRadius: "4px", padding: "12px 0", border: "none", cursor: "pointer", fontSize: "12px", minHeight: "44px" }}
+              disabled={tradeBlocked}
+              /* Цвет задаёт направление, как в тикете Терминала: покупка залита
+                 зелёным, продажа — красным контуром. Подтверждение всегда красный
+                 заливки, иначе второй шаг в режиме продажи ничем не отличался бы
+                 от первого. */
+              style={{
+                width: "100%",
+                background: tradeBlocked ? "#1a1a1a" : tradeConfirmed ? "#ef4444" : sellMode ? "transparent" : "#10b981",
+                color: tradeBlocked ? "#666" : tradeConfirmed || !sellMode ? "#0a0a0a" : "#ef4444",
+                border: sellMode && !tradeBlocked && !tradeConfirmed ? "1px solid #ef4444" : "none",
+                fontWeight: 600,
+                borderRadius: "4px",
+                padding: "12px 0",
+                cursor: "pointer",
+                fontSize: "12px",
+                minHeight: "44px",
+              }}
             >
               {sending
                 ? "Отправка…"
@@ -583,23 +601,18 @@ export default function Predict({ followerId, setToast, onConnect }: PredictProp
         </div>
       )}
 
-      {!followerId && (
+      {!signedIn && (
         <div style={{ marginTop: "16px", background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", padding: "16px", display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: "12px" }}>
           <div style={{ display: "flex", alignItems: "flex-start", gap: "10px" }}>
             <CheckCircle2 style={{ width: "14px", height: "14px", color: "#666", marginTop: "2px" }} />
             <div>
               <p style={{ fontSize: "12px", color: "#ccc", margin: 0 }}>Рынки видны без входа, а позиция и выплаты — нет.</p>
               <p style={{ fontSize: "10px", color: "#666", marginTop: "4px" }}>
-                Вход через Telegram или кошелёк: трейды пишутся на твой follower_id, выигрыш начисляется на него же.
+                Вход через Telegram или кошелёк: трейд и выплата записываются на аккаунт, подтверждённый токеном входа, — в запросе нет поля «чей это пользователь».
               </p>
             </div>
           </div>
-          <button
-            onClick={onConnect}
-            style={{ background: "#3b82f6", color: "#fff", fontSize: "12px", fontWeight: 600, padding: "10px 16px", border: "none", borderRadius: "4px", cursor: "pointer", minHeight: "44px" }}
-          >
-            Войти
-          </button>
+          <button className="btn-primary" onClick={onConnect}>Войти</button>
         </div>
       )}
       </div>

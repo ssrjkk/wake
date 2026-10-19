@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import { Radio, Search } from "lucide-react";
-import { AreaChart, Area, YAxis, Tooltip, ResponsiveContainer } from "recharts";
+import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { getCandles, getRecentTrades, getFundingRates, placeOrderViaSigningService, type LighterNetwork, type OrderBook, type Candle, type Trade } from "../lib/lighter";
 import { SIGNING_SERVICE_URL } from "../lib/config";
 import { errorText } from "../lib/backend";
@@ -113,6 +113,26 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
   const change = lastCandle && firstCandle ? ((lastCandle.c - firstCandle.o) / firstCandle.o) * 100 : null;
   const chartData = candles.map((c, i) => ({ i, t: c.t, v: c.c }));
 
+  // Засечки берём из самих свечей, равным шагом по индексам: предоставленный себе
+  // recharts поставил бы круглые метки времени, и при часовом окне часть из них
+  // оказалась бы за краями графика.
+  const timeTicks = useMemo(() => {
+    if (candles.length < 2) return [];
+    const n = Math.min(4, candles.length);
+    return Array.from({ length: n }, (_, k) => candles[Math.round((k * (candles.length - 1)) / (n - 1))].t);
+  }, [candles]);
+
+  // Окно длиннее суток — к времени нужен день, иначе подписи повторяются. Собираем
+  // строку вручную: toLocaleString с {day, month, hour} даёт «08.06, 03» — и дата,
+  // и час есть, но читается как обрывок.
+  const multiDay = (candles[candles.length - 1]?.t ?? 0) - (candles[0]?.t ?? 0) > 86_400_000;
+  const two = (n: number) => String(n).padStart(2, "0");
+  const tickTime = (t: number) => {
+    const d = new Date(t);
+    const hm = `${two(d.getHours())}:${two(d.getMinutes())}`;
+    return multiDay ? `${two(d.getDate())}.${two(d.getMonth() + 1)} ${hm}` : hm;
+  };
+
   const stats24h = useMemo(() => {
     if (candles.length < 2) return null;
     const last24 = candles.slice(-24);
@@ -153,6 +173,10 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
     setToast(`Отправляю на signing service (${SIGNING_SERVICE_URL})…`);
     try {
       const result = await placeOrderViaSigningService(currentMarket, side, size, price);
+      if (result.dry_run) {
+        setToast("Сервис подписи работает в сухом режиме: ордер в Lighter не ушёл");
+        return;
+      }
       setToast(`Ордер отправлен: ${result.tx_hash}`);
     } catch (e) {
       setToast(
@@ -221,7 +245,7 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
         {/* Chart */}
         <div style={{ background: "#111", padding: "16px", minHeight: "300px", position: "relative" }}>
           {lastCandlesUpdate && !candlesError && !dataError && (
-            <div style={{ position: "absolute", top: "8px", right: "8px", fontSize: "11px", color: "#525252", fontFamily: MONO, zIndex: 10 }}>
+            <div style={{ position: "absolute", top: "8px", left: "10px", fontSize: "11px", color: "#525252", fontFamily: MONO, zIndex: 10 }}>
               {lastCandlesUpdate.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
             </div>
           )}
@@ -244,22 +268,47 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
           ) : chartData.length > 1 ? (
             <>
               {candlesLoading && candles.length === 0 && (
-                <div style={{ position: "absolute", top: "8px", right: "8px", fontSize: "11px", color: "#666", display: "flex", alignItems: "center", gap: "4px" }}>
+                <div style={{ position: "absolute", top: "8px", left: "10px", fontSize: "11px", color: "#666", display: "flex", alignItems: "center", gap: "6px", zIndex: 10 }}>
                   <div style={{ width: "8px", height: "8px", border: "2px solid #3b82f6", borderTopColor: "transparent", borderRadius: "50%", animation: "spin 1s linear infinite" }} />
                   загрузка…
                 </div>
               )}
               <ResponsiveContainer width="100%" height="100%" minWidth={200} minHeight={150}>
-                <AreaChart data={chartData} margin={{ top: 8, right: 8, bottom: 8, left: 8 }}>
+                <AreaChart data={chartData} margin={{ top: 8, right: 4, bottom: 0, left: 4 }}>
                   <defs>
                     <linearGradient id="chartGrad" x1="0" y1="0" x2="0" y2="1">
                       <stop offset="0%" stopColor={up ? "#10b981" : "#ef4444"} stopOpacity={0.12} />
                       <stop offset="100%" stopColor={up ? "#10b981" : "#ef4444"} stopOpacity={0} />
                     </linearGradient>
                   </defs>
-                  {/* Без YAxis recharts берёт домен [0, max]: кривая цены при 80k
-                      прилипает к верхней границе, и график выглядит пустым. */}
-                  <YAxis hide domain={["dataMin", "dataMax"]} padding={{ top: 12, bottom: 12 }} />
+                  <CartesianGrid stroke="#171717" vertical={false} />
+                  {/* Ось цены справа и обязательно с доменом [dataMin, dataMax]: без
+                      YAxis recharts берёт [0, max], и кривая цены при 80k прилипает
+                      к верхней границе — график выглядит пустым. Правая сторона — как
+                      в терминалах: цена стоит против последней свечи, а не против
+                      пустой колонки слева. */}
+                  <YAxis
+                    orientation="right"
+                    width={62}
+                    domain={["dataMin", "dataMax"]}
+                    padding={{ top: 12, bottom: 12 }}
+                    tickCount={5}
+                    stroke="#242424"
+                    tick={{ fill: "#666", fontSize: 10, fontFamily: MONO }}
+                    tickFormatter={(v: number) => fmt(v, decimals)}
+                  />
+                  <XAxis
+                    dataKey="t"
+                    type="number"
+                    scale="time"
+                    domain={["dataMin", "dataMax"]}
+                    ticks={timeTicks}
+                    stroke="#242424"
+                    height={22}
+                    tickMargin={6}
+                    tick={{ fill: "#525252", fontSize: 10, fontFamily: MONO }}
+                    tickFormatter={tickTime}
+                  />
                   <Tooltip
                     cursor={{ stroke: "#333", strokeWidth: 1 }}
                     content={({ active, payload }) => {
@@ -267,7 +316,7 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
                       if (!active || !d) return null;
                       return (
                         <div style={{ background: "#0a0a0a", border: "1px solid #2a2a2a", borderRadius: "4px", padding: "6px 10px", fontFamily: MONO, fontSize: "11px", lineHeight: 1.5, pointerEvents: "none" }}>
-                          <div style={{ color: "#666" }}>{new Date(d.t * 1000).toLocaleString("ru-RU", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</div>
+                          <div style={{ color: "#666" }}>{new Date(d.t).toLocaleString("ru-RU", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</div>
                           <div style={{ color: "#e5e5e5" }}>${fmt(d.v, decimals)}</div>
                         </div>
                       );

@@ -1,6 +1,6 @@
 # Wake
 
-Торговый терминал для [Lighter](https://lighter.xyz) (zk perp DEX): React-приложение, FastAPI-бэкенд и Telegram-бот с Mini App — бот и сайт читают и пишут в один и тот же бэкенд.
+Торговый терминал для [Lighter](https://lighter.xyz) (zk perp DEX): React-приложение, FastAPI-бэкенд и Telegram-бот ([@wake_trade](https://t.me/waketrade_bot)) с Mini App — бот и сайт читают и пишут в один и тот же бэкенд.
 
 Конфигурация по умолчанию — **mainnet** и `WAKE_DRY_RUN=true`: настоящие рыночные данные из реальной сети, и ни один ордер не выходит из процесса, пока вы сами не выключите dry-run.
 
@@ -9,15 +9,7 @@
 
 ## Скриншоты
 
-### Веб-терминал
-
-![Wake Terminal](screenshots/terminal.png)
-
-### Telegram-бот
-
-Торговый бот: [@wake_trade](https://t.me/waketrade_bot)
-
-![Wake Bot](screenshots/bot.png)
+<!-- TODO: добавить снимок настоящего интерфейса -->
 
 ## Контакты
 
@@ -43,11 +35,13 @@
 
 ## Подключение
 
-Два пути идентичности, оба попадают в одну запись follower:
+Оба пути идентичности заканчиваются одинаково: подписанным токеном сессии. Каждый эндпоинт, который касается чужих денег, берёт личность из этого токена, а не из поля запроса.
 
 **Telegram.** Кнопка Login Widget рисуется, только если фронтенд собран с `VITE_TELEGRAM_BOT_NAME` (имя бота без `@`), а бэкенд запущен с `TELEGRAM_BOT_TOKEN`. Бэкенд пересобирает check-строку виджета и сравнивает HMAC (`POST /auth/telegram`), а `initData` мини-аппа проверяет отдельно (`POST /auth/telegram/init`). Без токена панель прямо говорит, что вход через Telegram выключен, вместо кнопки, которая ответит 401.
 
-**Кошелёк.** Injected-кошельки (MetaMask, Rabby) работают без всякой настройки; QR-коннектор WalletConnect требует `VITE_WALLETCONNECT_PROJECT_ID`. Подключённый L1-адрес регистрируется как follower (`POST /followers`), позиции читаются с Lighter по этому адресу.
+**Кошелёк.** Injected-кошельки (MetaMask, Rabby) работают без всякой настройки; QR-коннектор WalletConnect требует `VITE_WALLETCONNECT_PROJECT_ID`. Владение адресом доказывается, а не заявляется: `POST /auth/wallet/challenge` отдаёт одноразовый текст для `personal_sign` (5 минут, одно использование), `POST /auth/wallet/verify` восстанавливает адрес из подписи и отказывает, если это не тот адрес, что запрашивал. Запись follower создаётся из восстановленного checksum-адреса.
+
+**Токен.** Любой успешный вход отвечает `{user_id, token, expires_at}`; дальше — `Authorization: Bearer <токен>`. Это `wk1.<payload>.<HMAC-SHA256>` на ключе `WAKE_SESSION_SECRET`, срок — `WAKE_SESSION_TTL_DAYS` (по умолчанию 30 дней). Серверного состояния сессий нет, и назвать чужим id в запросе себя кем-то другим больше нельзя. Без `WAKE_SESSION_SECRET` бэкенд отвечает 503, а не подписывает токены угадываемым ключом.
 
 ## Быстрый старт
 
@@ -61,32 +55,45 @@ npm run dev             # http://localhost:5173
 
 ### Бэкенд
 
+Бэкенду нужны PostgreSQL и Redis. Самый быстрый способ поднять всё правильно — Compose: он сначала прогоняет миграции.
+
 ```bash
+docker compose up postgres redis migrate
 cd backend
 pip install -r requirements.txt
-cp .env.example .env
+cp .env.example .env      # у WAKE_SESSION_SECRET дефолта нет: впишите сами
+alembic upgrade head      # схему создаёт миграция, а не приложение
 uvicorn app:app --reload --port 8000
 ```
 
-Swagger UI — `http://localhost:8000/docs`, машиночитаемая схема (37 путей) — `/openapi.json`. Запускать нужно из `backend/`: пути к SQLite считаются от рабочей директории, поэтому запуск из корня репозитория молча создаёт вторую базу.
+Swagger UI — `http://localhost:8000/docs`, машиночитаемая схема (38 путей) — `/openapi.json`; в обоих видно, где нужен bearer-токен и где заголовок куратора. Запускать нужно из `backend/`: `config.py` читает `.env` относительно рабочей директории, поэтому запуск из корня репозитория молча работает с другой конфигурацией.
 
 ### Копи-трейдинг без сид-скрипта
 
-Скрипта с демо-лидерами нет. Лидера и подписчика регистрируют через API:
+Скрипта с демо-лидерами нет. Сначала вход кошельком, потом лидер и подписка — личность живёт в токене, поэтому примеры ниже без него не работают:
 
 ```bash
-curl -X POST http://localhost:8000/leaders \
+MESSAGE=$(curl -s -X POST http://localhost:8000/auth/wallet/challenge \
   -H 'Content-Type: application/json' \
-  -d '{"lighter_account_index": 12345, "handle": "your-handle", "fee_bps": 8}'
+  -d '{"l1_address": "0xYourAddress"}' | jq -r .message)
 
-curl -X POST http://localhost:8000/followers \
+# Подпишите $MESSAGE кошельком (personal_sign), затем:
+TOKEN=$(curl -s -X POST http://localhost:8000/auth/wallet/verify \
   -H 'Content-Type: application/json' \
-  -d '{"l1_address": "0xYourAddress"}'
+  -d "{\"message\": \"$MESSAGE\", \"signature\": \"0x…\"}" | jq -r .token)
+
+curl -X POST http://localhost:8000/leaders \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"handle": "your-handle", "fee_bps": 8}'
 
 curl -X POST http://localhost:8000/follows \
+  -H "Authorization: Bearer $TOKEN" \
   -H 'Content-Type: application/json' \
-  -d '{"follower_id": "0xYourAddress", "leader_id": "<leader_id>", "allocation_usd": 500, "max_leverage": 3}'
+  -d '{"leader_id": "<leader_id>", "allocation_usd": 500, "max_leverage": 3}'
 ```
+
+`POST /leaders` не принимает индекс аккаунта: он берётся из записи follower, которую создал вход кошельком, — иначе карточка лидера показывала бы чужую статистику. Индекс Lighter появляется там, только если адрес нашёлся на Lighter при входе, поэтому Telegram-сессия без кошелька получает 403 `LIGHTER_ACCOUNT_NOT_LINKED`.
 
 Листенер, который превращает изменения позиции лидера в ордера подписчиков, запускается на каждого лидера:
 
@@ -143,58 +150,67 @@ Price-рынки закрываются по дедлайну только по�
 
 | Переменная | Дефолт | На что влияет |
 | --- | --- | --- |
+| `WAKE_DATABASE_URL` | `postgresql+asyncpg://wake:wake@localhost:5432/wake` | единственное хранилище: копи-трейдинг, Predict, подписки, история агента, аудит. Строка `postgresql://…` от хостинга принимается — драйвер asyncpg дописывается на валидации |
+| `WAKE_REDIS_URL` | `redis://localhost:6379/0` | token bucket и wallet-challenge; без Redis `/ready` отвечает 503, и вход тоже 503 |
 | `WAKE_LIGHTER_NETWORK` | `mainnet` | из имени сети берутся REST-хост, WS-хост и market ids — вместе |
 | `WAKE_DRY_RUN` | `true` | `false` означает живые ордера на реальные деньги |
+| `WAKE_MAINNET_LIVE` | `false` | второй переключатель: `WAKE_DRY_RUN=false` на mainnet без него не стартует |
 | `WAKE_CORS_ORIGINS` | `http://localhost:5173` | список фронтендов через запятую |
-| `WAKE_CURATOR_TOKEN` | пусто | пусто — кураторские эндпоинты отвечают 500; неверный `X-Curator-Token` — 403 |
+| `WAKE_SESSION_SECRET` | пусто | подписывает токены сессии; пусто — любой вход отвечает 503, а не подписывает токены угадываемым ключом |
+| `WAKE_SESSION_TTL_DAYS` | 30 | сколько живёт токен (1–180) |
+| `WAKE_CURATOR_TOKEN` | пусто | пусто — операторские эндпоинты отвечают 500 `CURATOR_NOT_CONFIGURED`; неверный `X-Curator-Token` — 403 |
+| `WAKE_TRUSTED_PROXY_IPS` | пусто | каким соединениям разрешён `X-Forwarded-For`; пусто — побеждает адрес соединения, и за прокси весь сервис делит один bucket |
 | `TELEGRAM_BOT_TOKEN` | пусто | процесс бота и проверка подписи Telegram-входа |
 | `WAKE_MASTER_KEY` | пусто | шифрует хранилище ключей; хранить в секрет-менеджере, не на диске |
-| `WAKE_DB_PATH` / `WAKE_AUDIT_DB_PATH` | `wake.db` / `audit.db` | два отдельных файла SQLite |
-| `WAKE_RATE_LIMIT_CAPACITY` / `WAKE_RATE_LIMIT_REFILL` | 40 / 20 | token bucket на клиента |
+| `WAKE_RATE_LIMIT_CAPACITY` / `WAKE_RATE_LIMIT_REFILL` | 40 / 20 | token bucket на вошедшего пользователя, для анонимных — на IP; запись стоит 3 токена |
 | `ANTHROPIC_API_KEY` | пусто | только LLM-путь решений; без ключа агент работает на rule-движке |
 
 ## Тесты
 
 ```bash
-# бэкенд — из backend/
-python -m unittest discover          # 210 тестов
-python test_db.py
-python test_predict_db.py
-python test_predict_integration.py
-python test_audit_log.py             # эти четыре — отдельные скрипты, discover их не собирает
+# бэкенд — из backend/; нужна отдельная PostgreSQL-база для тестов
+createdb wake_test
+export WAKE_TEST_DATABASE_URL=postgresql+asyncpg://wake:wake@localhost:5432/wake_test
+python -m unittest discover        # 296 тестов, всё через discover
+python -m pytest -q                # тот же набор под pytest (в CI ещё и Allure)
 
 # фронтенд
 npx tsc --noEmit
-npx vitest run                       # 61 тест в 8 файлах
+npx vitest run
 npm run build
 
 # end-to-end (поднимает свой dev-сервер; PW_PORT спасает, когда 5173 занят)
-PW_PORT=5178 npx playwright test     # 6 тестов, chromium
+PW_PORT=5178 npx playwright test
 ```
 
-`test_api_smoke.py` проходит по всем роутам поверх HTTP, поэтому незаимпортированный роутер или эндпоинт, который отдаёт 500, падает в CI, а не под первым кликом.
+`test_api_smoke.py` проходит по всем роутам поверх HTTP против настоящей PostgreSQL — в том числе те части модели безопасности, которые тише всего ломаются: нет токена, токен подделан, токена истёк, чужая запись, повторная подпись кошелька, операторский эндпоинт без заголовка. Роут, который с 403 сползает на 200, падает здесь, а не под первым кликом.
 
 ## Архитектура
 
 ### Бэкенд (FastAPI)
 
-- `backend/app.py` — приложение, middleware (CORS, rate limiting по IP клиента, опциональный Sentry), регистрация роутеров, `/health`
+- `backend/app.py` — приложение, middleware (CORS, заголовки безопасности, token bucket в Redis с ключом по субъекту сессии и запасным вариантом по IP клиента, опциональный Sentry), регистрация роутеров, `/health` и `/ready`
+- `backend/session.py` — выдача и проверка токена `wk1.<payload>.<HMAC>`; `backend/api/guards.py` — `require_user` / `require_curator` как зависимости роутеров
+- `backend/wallet_auth.py` — хранение EIP-191 challenge в Redis, одноразовость, восстановление адреса; `backend/net.py` — адрес клиента, когда спереди стоит прокси
 - `backend/api/` — HTTP-роутеры по продуктовых областям:
-  - `auth.py` — проверка подписи Login Widget и `initData` мини-аппа
+  - `auth.py` — вход через Login Widget, `initData` мини-аппа и кошелёк
   - `markets.py` — `/markets/overview`: ранжирование перпов по 24ч-обороту
   - `copy_trading.py` — followers, leaders, follows, журнал зеркалирования
   - `predict.py` — рынки цен и событий, резолюция под токеном куратора
   - `agent.py` — решения, память, подписки
   - `portfolio.py` — кросс-ассетный риск и хедж
   - `funding.py` — сравнение площадок и расчёты carry
-- Ядро логики — в корневых модулях, и тестируется отдельно: `mirror_engine.py`, `leader_position_tracker.py`, `predict_amm.py`, `predict_resolution.py`, `portfolio_risk.py`, `funding_arb.py`, `agent_decision.py`, `agent_memory.py`, `risk_limits.py`, `rate_limiter.py`, `cache.py`, `db.py`, `predict_db.py`, `audit_log.py`
-- Конфигурация читается один раз — `backend/config.py`
+- Хранилище одно — PostgreSQL: `database.py` (async-движок), `pg_models.py` (схема), `alembic/` (миграции) и репозитории `db.py`, `predict_db.py`, `agent_db.py`, `audit_log.py`, `subscription.py`
+- Ядро логики — в корневых модулях, и тестируется отдельно: `mirror_engine.py`, `leader_position_tracker.py`, `predict_amm.py`, `predict_resolution.py`, `portfolio_risk.py`, `funding_arb.py`, `agent_decision.py`, `agent_memory.py`, `risk_limits.py`, `rate_limiter.py`, `cache.py`
+- Конфигурация читается один раз — `backend/config.py`, и каждая переменная там валидируется: недопустимое сочетание (живые ордера на mainnet без второго переключателя, не-PostgreSQL URL) останавливает процесс на старте
 
 ### Фронтенд (React + TypeScript + Vite + Tailwind + wagmi)
 
 - `src/App.tsx` — оболочка табов, состояние подключения, пробивка здоровья бэкенда
 - `src/components/` — по файлу на панель
 - `src/lib/backend.ts` — единственное место, откуда идут запросы в бэкенд Wake; каждое сообщение об ошибке на панели рождается здесь
+- `src/lib/session.ts` — токен сессии, полученный при входе, лежит в `localStorage` под ключом `wake.session.v1`; `backend.ts` читает его, чтобы подставить `Authorization`, а 401 токен стирает и объявляет выход
+- `src/lib/wallet.ts` — вход по кошельку: запросить у бэкенда текст, подписать его через `personal_sign`, отправить подпись обратно; адрес восстанавливает сервер, поэтому клиент не может сам объявить, кто он
 - `src/lib/lighter.ts` — клиент публичного REST Lighter
 - `src/lib/predict.ts`, `src/lib/telegram.ts`, `src/lib/leaders.ts`, `src/lib/config.ts`
 
@@ -219,17 +235,25 @@ npx wrangler pages deploy dist --project-name wake
 
 ### Бэкенд: Railway (именно он и работает)
 
-Бэкенд работает на Railway через Docker (`Dockerfile` в корне репо, `railway.json` настраивает сборку). Переменные окружения задаются через дашборд Railway или CLI.
+Образ собирается из `Dockerfile` в корне репозитория (`railway.json` настраивает сборку). Переменные задаются через дашборд Railway или CLI:
 
 ```bash
-railway variables set WAKE_DRY_RUN=true WAKE_LIGHTER_NETWORK=mainnet
 railway variables set WAKE_CORS_ORIGINS="https://wake-7k6.pages.dev"
-railway service redeploy --service wake-backend
+railway variables set WAKE_SESSION_SECRET="$(python -c 'import secrets;print(secrets.token_urlsafe(32))')"
+railway variables set WAKE_CURATOR_TOKEN="$(python -c 'import secrets;print(secrets.token_urlsafe(32))')"
 ```
 
-Полная инструкция — в [RAILWAY_DEPLOY.md](docs/RAILWAY_DEPLOY.md).
+К сервису должны быть подключены PostgreSQL и Redis, а их строки подключения — попасть в `WAKE_DATABASE_URL` и `WAKE_REDIS_URL`. Без них процесс по-прежнему отвечает на `/health` — этот эндпоинт говорит только о живости, — а `/ready` показывает правду:
 
-**Альтернатива: Docker Compose (локально или на своём хостинге)**
+```bash
+curl -s "$URL/ready"
+# {"status":"ready","checks":{"database":"ok","redis":"ok"}}       — подключено
+# {"status":"not_ready","checks":{"database":"fail","redis":"fail"}} — не подключено
+```
+
+Схему создаёт `alembic upgrade head`, а не приложение: на Railway миграции прогоняют одноразовым деплой-командой или отдельным сервисом, который завершается (образ включает `alembic.ini` и `alembic/` именно для этого).
+
+### Альтернатива: Docker Compose (локально или на своём хостинге)
 
 ```bash
 docker compose up app              # :8000
@@ -238,26 +262,32 @@ docker compose up telegram-bot     # нужен TELEGRAM_BOT_TOKEN
 docker compose up predict-resolver
 ```
 
-Базы лежат в volume `wake-data` и переживают рестарт контейнера; секреты берутся из `backend/.env`, который `docker-compose.yml` читает, но не требует.
+`app`, `signing` и `predict-resolver` ждут успешного завершения сервиса `migrate`, поэтому свежий стек поднимается на промигрированной схеме. Данные лежат в `postgres-data` и `redis-data`, в `wake-data` — только зашифрованное хранилище ключей. Секреты берутся из `backend/.env`, который `docker-compose.yml` читает, но не требует: в compose есть локальные значения для секрета сессии и токена куратора, чтобы в стек можно было войти сразу.
 
 ## Что не сделано — прямо
 
 - `fee_bps` лидера проверяется (0–500) и сохраняется, но никогда не списывается: пути выплат нет.
 - Никаких платежей. Тарифы и триалы (`backend/subscription.py`) существуют только как состояние.
-- Память агента, подписки и состояние риска в `backend/api/agent.py` живут в словарях процесса и теряются при рестарте. Данные копи-трейдинга и Predict — в SQLite; агент — нет.
-- LLM-путь решений (`backend/llm_agent.py`) не покрыт тестами. При ошибке вызова или отсутствующем ключе он откатывается на протестированный rule-движок.
+- Токены сессии не отзываются: серверного хранилища сессий нет, поэтому украденный токен жив до конца `WAKE_SESSION_TTL_DAYS`, а «выйти» означает только выбросить токен на клиенте. На это пошли сознательно ради бэкенда, который переживает flush Redis, — и поэтому срок ограничен 180 днями.
+- Rate limiter пропускает запросы, когда Redis недоступен: мёртвый Redis не должен отнимать терминал у того, у кого открыты позиции. `/ready` об этом сообщает, а не прячет.
+- Рынки Predict — внутренний LMSR-AMM: цены и выплаты считаются по пулу в этой базе, а не по контрагенту на бирже.
+- LLM-путь решений покрыт тестами на откаты (`test_llm_agent.py`) — нет ключа, сетевая ошибка, битый JSON, недопустимое действие, — но не реальным вызовом модели.
 - WebSocket-соединение в `leader_listener.py` автотестами не проверяется (логику сравнения снапшотов позиций — проверяют): нужна реальная сеть.
-- SQLite для локальной разработки и данных копи-трейдинга/Predict; PostgreSQL доступен для продакшена (см. `backend/database.py`, `backend/pg_models.py`, `alembic/`). Память агента и подписки живут в словаре процесса и теряются при рестарте.
-- `handle` лидера — то, что ввёл регистрирующийся; соответствие реальному аккаунту Lighter не сверяется.
+- `handle` лидера — то, что ввёл регистрирующийся. Индекс аккаунта за ним больше не свободный текст: он берётся из записи, подтверждённой входом кошелька, но сам handle не сверяется.
 - `/markets/overview` стоит 18 свечных запросов на обновление и кэшируется 60 секунд.
 
 ## Безопасность
 
-- Секреты только из переменных окружения; `backend/.env` в .gitignore, как и `wake.db`, `audit.db`, `*.enc` и dev-хранилища ключей.
-- `WAKE_DRY_RUN` по умолчанию `true`; размеры ордеров всегда округляются вниз.
-- Кураторские эндпоинты требуют заголовок `X-Curator-Token` и сравнивают его через `hmac.compare_digest`; если токен на сервере не задан, эндпоинты остаются закрытыми, а не создают и не резолвят рынки анонимно.
-- SQL везде параметризованный; CORS и rate limit настраиваются переменными окружения.
-- Ключи шифруются at rest (`encrypted_key_store.py`, есть режим KMS) — это шифрование, а не HSM.
+- Секреты только из переменных окружения; `backend/.env` в .gitignore, как и `*.db`, `*.enc`.
+- Личность — подписанный токен (`WAKE_SESSION_SECRET`), а не идентификатор из тела запроса: ни один эндпоинт не даёт указать, чьи позиции, подписки или тарифы хочется прочитать.
+- Вход кошельком доказывает владение адресом подписью EIP-191 к одноразовому challenge; адрес восстанавливается из подписи, а индекс аккаунта Lighter берётся из серверной записи, а не из запроса.
+- `WAKE_DRY_RUN` по умолчанию `true`, а выключить его на mainnet можно только вторым переключателем `WAKE_MAINNET_LIVE=true` — без него процесс не стартует. Размеры ордеров всегда округляются вниз.
+- Каждый путь, который дотягивается до Lighter, — сервис подписи, листенер копи-трейдинга и раннер агента — проверяет `WAKE_DRY_RUN` в собственном процессе, прежде чем трогать SDK. Пока он включён, `/place-order` возвращает тот ордер, который отправил бы, и на биржу ничего не уходит; `/health` обоих сервисов показывает, в каком они режиме.
+- Операторские эндпоинты требуют заголовок `X-Curator-Token` и сравнивают его через `hmac.compare_digest` по байтам; если токен на сервере не задан, они отвечают 500, а не создают и не резолвят рынки анонимно.
+- `X-Forwarded-For` принимается только от адресов из `WAKE_TRUSTED_PROXY_IPS` и только правый элемент цепочки — иначе клиент выбирал бы сам, какой IP записать в аудит и в какой bucket rate limit.
+- Весь SQL идёт через SQLAlchemy Core/ORM с связанными параметрами; строк SQL в бэкенде не собирают.
+- Ключи шифруются at rest (`encrypted_key_store.py`) — это шифрование, а не HSM.
+- `/health` и `/ready` не требуют токена; всё остальное, что читает или меняет состояние, требует. Ошибки приходят в одной форме — `{error: {code, message}}` — чтобы клиент ветвился по `code`, а не разбирал текст.
 
 Для работы с реальными средствами: внешний аудит безопасности, замена файлового хранилища ключей на HSM/KMS и юридическая консультация по вашей юрисдикции. Об уязвимостях сообщать приватно — через security advisory GitHub, а не публичным issue.
 
@@ -265,6 +295,8 @@ docker compose up predict-resolver
 
 - [README.md](README.md) — английская версия
 - [CONTRIBUTING.md](CONTRIBUTING.md)
+- [SECURITY.md](SECURITY.md) — границы доверия и чеклист перед запуском
+- [CHANGELOG.md](CHANGELOG.md)
 - [LICENSE](LICENSE) — MIT
 
 ## Лицензия

@@ -27,25 +27,28 @@ resolve_at <= now, тянем mark-цену с Lighter, сравниваем с 
 
 Запуск:
     python3 predict_resolver.py                # один проход (для cron)
-    python3 predict_resolver.py --loop        # постоянный процесс
+    python3 predict_resolver.py --loop         # постоянный процесс
+
+Схема берётся из alembic (alembic upgrade head) — процесс её не создаёт и не
+меняет, только читает открытые рынки и пишет исход.
 """
 
 import argparse
+import asyncio
 import logging
-import os
 import time
 
 import predict_db as pdb
 from predict_resolution import resolve_price_market, Comparator
-from config import DB_PATH, LIGHTER_NETWORK
+from config import LIGHTER_NETWORK, PREDICT_RESOLVER_TICK
 
 logger = logging.getLogger("wake.predict_resolver")
 
-TICK_SECONDS = int(os.environ.get("WAKE_PREDICT_RESOLVER_TICK", "300"))
+TICK_SECONDS = PREDICT_RESOLVER_TICK
 
 
-def resolve_due_markets(
-    conn, now: float, price_fn, network: str = LIGHTER_NETWORK
+async def resolve_due_markets(
+    now: float, price_fn, network: str = LIGHTER_NETWORK
 ) -> list[dict]:
     """Закрывает все просроченные открытые price-рынки. price_fn(market_id, network)
     возвращает mark-цену — инжектится, чтобы цикл можно было прогнать тестами без
@@ -53,7 +56,7 @@ def resolve_due_markets(
     открытым и будет повторён на следующем тике: лучше просроченная резолюция,
     чем исход, угаданный вместо данных."""
     closed = []
-    for m in pdb.list_markets(conn, "open"):
+    for m in await pdb.list_markets("open"):
         if m["kind"] != "price" or m["resolve_at"] > now:
             continue
         try:
@@ -65,8 +68,8 @@ def resolve_due_markets(
             logger.warning("рынок %s не закрыт: %s", m["id"], e)
             continue
         try:
-            pdb.resolve_market(
-                conn, m["id"], resolution.outcome, "auto:lighter_mark_price", None
+            await pdb.resolve_market(
+                m["id"], resolution.outcome, "auto:lighter_mark_price", None
             )
         except ValueError as e:
             # Кто-то закрыл рынок между list_markets и этим UPDATE (ручной триггер
@@ -102,15 +105,13 @@ def main():
         get_mark_price,
     )  # сетевой вызов — только когда реально доходим до дела
 
-    pdb.init_predict_db(DB_PATH)
     logging.basicConfig(
         level=logging.INFO, format="%(asctime)s %(levelname)s [%(name)s] %(message)s"
     )
-    logger.info("Резолвер Predict: сеть=%s, база=%s", LIGHTER_NETWORK, DB_PATH)
+    logger.info("Резолвер Predict: сеть=%s, тик=%ds", LIGHTER_NETWORK, TICK_SECONDS)
 
     while True:
-        with pdb.connect(DB_PATH) as conn:
-            closed = resolve_due_markets(conn, time.time(), get_mark_price)
+        closed = asyncio.run(resolve_due_markets(time.time(), get_mark_price))
         if closed:
             logger.info("закрыто рынков за тик: %d", len(closed))
         if not args.loop:

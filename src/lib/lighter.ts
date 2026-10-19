@@ -5,9 +5,13 @@
 // mainnet.zklighter.elliot.ai on 2026-10-02, not guessed from docs. Where the docs are
 // silent, the comment says what the live response actually returns.
 //
-// Everything in this file is public, read-only, unauthenticated data. No funds at risk.
-// Order placement (sendTx) and account-scoped endpoints need a Lighter API key + their
-// signer (see README — this is a different, separate signing scheme from the L1 wallet).
+// Запросы к Lighter — публичные, только чтение, без ключей: это котировки, а не
+// чужие деньги. Размещение ордеров (sendTx) и аккаунтные эндпоинты Lighter требуют
+// их API-ключ и свой signer (см. README — схема подписи там другая, чем у L1-кошелька).
+//
+// Вторая половина файла ходит в бэкенд Wake: часть маршрутов публичная (список
+// лидеров, статистика лидера), а всё, у чего есть владелец, уходит с токеном
+// сессии — заголовок подмешивает lib/backend.ts.
 
 // mainnet.zklighter.elliot.ai и testnet.zklighter.elliot.ai — оба подтверждены официальными
 // источниками Lighter (apidocs.lighter.xyz, GitHub elliottech/lighter-agent-kit).
@@ -63,7 +67,7 @@ export async function getOrderBooks(filter: "all" | "spot" | "perp" = "perp"): P
 }
 
 export type Candle = {
-  t: number; // timestamp
+  t: number; // epoch milliseconds — Lighter отдаёт именно миллисекунды
   o: number; // open
   h: number; // high
   l: number; // low
@@ -283,15 +287,6 @@ export async function getMarketOverview(): Promise<MarketOverview> {
   return backendJson<MarketOverview>("/markets/overview");
 }
 
-export async function registerFollower(l1Address: string): Promise<string> {
-  const data = await backendJson<{ follower_id: string }>("/followers", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ l1_address: l1Address }),
-  });
-  return data.follower_id;
-}
-
 export type BackendFollow = {
   id: string;
   follower_id: string;
@@ -304,25 +299,28 @@ export type BackendFollow = {
   created_at: number;
 };
 
-export async function listFollowsForFollower(followerId: string): Promise<BackendFollow[]> {
-  return backendJson<BackendFollow[]>(`/follows/by-follower/${followerId}`);
+// Чьё это состояние, решает токен в заголовке, а не id в адресе: /follows,
+// /mirror-log и /agent/memory отдают строки субъекта сессии. Параметр-follower_id
+// из этих функций убран вместе с маршрутом, который его принимал.
+export async function listOwnFollows(): Promise<BackendFollow[]> {
+  return backendJson<BackendFollow[]>("/follows");
 }
 
-export async function createFollow(followerId: string, leaderId: string, allocationUsd: number, maxLeverage = 3): Promise<string> {
+export async function createFollow(leaderId: string, allocationUsd: number, maxLeverage = 3): Promise<string> {
   const data = await backendJson<{ follow_id: string }>("/follows", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ follower_id: followerId, leader_id: leaderId, allocation_usd: allocationUsd, max_leverage: maxLeverage }),
+    body: JSON.stringify({ leader_id: leaderId, allocation_usd: allocationUsd, max_leverage: maxLeverage }),
   });
   return data.follow_id;
 }
 
-export async function setFollowPaused(followId: string, paused: boolean, followerId: string): Promise<void> {
-  await backendJson(`/follows/${followId}/${paused ? "pause" : "resume"}?follower_id=${encodeURIComponent(followerId)}`, { method: "POST" });
+export async function setFollowPaused(followId: string, paused: boolean): Promise<void> {
+  await backendJson(`/follows/${encodeURIComponent(followId)}/${paused ? "pause" : "resume"}`, { method: "POST" });
 }
 
-export async function deleteFollow(followId: string, followerId: string): Promise<void> {
-  await backendJson(`/follows/${followId}?follower_id=${encodeURIComponent(followerId)}`, { method: "DELETE" });
+export async function deleteFollow(followId: string): Promise<void> {
+  await backendJson(`/follows/${encodeURIComponent(followId)}`, { method: "DELETE" });
 }
 
 // mirror_log — то, чем закончился каждый прогон копи-движка (leader_listener.py).
@@ -341,15 +339,18 @@ export type MirrorLogRow = {
   leader_handle: string;
 };
 
-export async function getMirrorLog(followerId: string, limit = 50): Promise<MirrorLogRow[]> {
-  return backendJson<MirrorLogRow[]>(`/mirror-log/${followerId}?limit=${limit}`);
+export async function getMirrorLog(limit = 50): Promise<MirrorLogRow[]> {
+  return backendJson<MirrorLogRow[]>(`/mirror-log?limit=${limit}`);
 }
 
-export async function registerLeader(lighterAccountIndex: number, handle: string, feeBps = 8): Promise<string> {
+// Индекс аккаунта здесь не передаётся: его берёт из записи, привязанной входом
+// кошелька, сам бэкенд. Присланный индекс позволил бы опубликовать лидера под
+// чужим аккаунтом и чужой статистикой.
+export async function registerLeader(handle: string, feeBps = 8): Promise<string> {
   const data = await backendJson<{ leader_id: string }>("/leaders", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ lighter_account_index: lighterAccountIndex, handle, fee_bps: feeBps }),
+    body: JSON.stringify({ handle, fee_bps: feeBps }),
   });
   return data.leader_id;
 }
@@ -408,13 +409,16 @@ export async function listLeaders(): Promise<LeaderRow[]> {
 
 // Ордер подписывает и отправляет локальный backend/signing_service.py; адрес — из
 // VITE_SIGNING_SERVICE_URL. Если сервис не запущен, запрос падает явной ошибкой —
-// интерфейс не делает вид, что сделка прошла.
+// интерфейс не делает вид, что сделка прошла. Пока у сервиса включён сухой ход
+// (WAKE_DRY_RUN, значение по умолчанию), он возвращает план и dry_run: true, и в
+// Lighter ничего не уходит. Сухой ход (WAKE_DRY_RUN, значение по
+// умолчанию) возвращает план и tx_hash=null: в Lighter ничего не уходит.
 export async function placeOrderViaSigningService(
   market: OrderBook,
   side: "long" | "short",
   usdSize: number,
   price: number
-): Promise<{ tx_hash: string }> {
+): Promise<{ tx_hash: string | null; dry_run: boolean }> {
   const baseAmountFloat = usdSize / price;
   const baseAmount = Math.floor(baseAmountFloat * 10 ** market.supported_size_decimals);
   const priceInt = Math.round(price * 10 ** market.supported_price_decimals);
@@ -439,5 +443,5 @@ export async function placeOrderViaSigningService(
     const detail = await res.text().catch(() => res.statusText);
     throw new Error(detail);
   }
-  return json<{ tx_hash: string }>(res);
+  return json<{ tx_hash: string | null; dry_run: boolean }>(res);
 }

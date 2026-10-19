@@ -1,50 +1,97 @@
 """
-Копи-трейдинг: followers/leaders/follows + ручной прогон mirror_engine через
-HTTP (/simulate-mirror). Логика в db.py + mirror_engine.py, протестирована;
-этот слой — только HTTP-обвязка и Pydantic-модели.
+Копи-трейдинг: подписчики, лидеры, подписки, журнал зеркалирования и ручной
+прогон mirror_engine через HTTP.
 
-Перенесено из app.py при рефакторинге: было одним файлом-монолитом,
-стало отдельным роутером с явной границей по продукту.
+Логика доступа к базе — в db.py, сам движок — в mirror_engine.py; этот слой —
+HTTP-обвязка и Pydantic-модели, без SQL: запросы, уехавшие в эндпоинты, не
+проверяются на владении записью.
+
+Кто есть кто решает токен сессии (api/guards.py), а не поля запроса. Раньше
+follower_id приезжал в теле или query, и эндпоинт верил: зная чужой id, можно
+было прочитать чужой mirror-лог, поставить чужой подписке паузу и забрать её
+выигрыш. Теперь субъект токена — единственное, чем измеряется «своё».
+
+Индекс аккаунта Lighter тоже берется не из запроса: его привязывает вход
+кошелька (api/auth.py, proof-of-ownership), иначе опубликовать лидера можно было
+под чужим аккаунтом и его статистикой.
 """
 
+import math
 import uuid
-from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel
 
-import db
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel, field_validator
+from sqlalchemy.exc import IntegrityError
+
 import audit_log as al
+import db
+from api.guards import deny, require_curator, require_user
 from mirror_engine import (
-    LeaderEvent,
     FollowerConfig,
+    LeaderEvent,
     MarketConstraints,
     Side,
     compute_mirror_plan,
 )
-from config import DB_PATH, AUDIT_DB_PATH
 
 router = APIRouter()
 
-
-class RegisterFollower(BaseModel):
-    l1_address: str
-    lighter_account_index: int | None = None
+FEE_BPS_MAX = 500
+LEVERAGE_MAX = 50
 
 
 class RegisterLeader(BaseModel):
-    lighter_account_index: int
     handle: str
     fee_bps: int = 8
 
+    @field_validator("handle")
+    @classmethod
+    def handle_not_blank(cls, v: str) -> str:
+        v = v.strip()
+        if not 1 <= len(v) <= 48:
+            raise ValueError("handle: 1–48 символов без пробелов по краям")
+        return v
+
+    @field_validator("fee_bps")
+    @classmethod
+    def fee_in_range(cls, v: int) -> int:
+        if not 0 <= v <= FEE_BPS_MAX:
+            raise ValueError(f"fee_bps вне диапазона 0–{FEE_BPS_MAX} (0–5%)")
+        return v
+
 
 class CreateFollow(BaseModel):
-    follower_id: str
     leader_id: str
     allocation_usd: float
     max_leverage: float = 3
 
+    @field_validator("allocation_usd")
+    @classmethod
+    def allocation_positive(cls, v: float) -> float:
+        if not math.isfinite(v) or v <= 0:
+            raise ValueError("allocation_usd — положительное конечное число")
+        return v
+
+    @field_validator("max_leverage")
+    @classmethod
+    def leverage_in_range(cls, v: float) -> float:
+        if not math.isfinite(v) or not 1 <= v <= LEVERAGE_MAX:
+            raise ValueError(
+                f"max_leverage вне диапазона 1–{LEVERAGE_MAX}: "
+                "за этим пределом копия сделки — не копия, а верная ликвидация"
+            )
+        return v
+
 
 class UpdateLeaderFee(BaseModel):
     fee_bps: int
+
+    @field_validator("fee_bps")
+    @classmethod
+    def fee_in_range(cls, v: int) -> int:
+        if not 0 <= v <= FEE_BPS_MAX:
+            raise ValueError(f"fee_bps вне диапазона 0–{FEE_BPS_MAX} (0–5%)")
+        return v
 
 
 class SimulateMirrorRequest(BaseModel):
@@ -60,208 +107,181 @@ class SimulateMirrorRequest(BaseModel):
     size_decimals: int = 3
 
 
-@router.get("/follows/by-leader/{leader_id}")
-def list_follows_for_leader(leader_id: str):
-    with db.connect(DB_PATH) as conn:
-        rows = conn.execute(
-            "SELECT * FROM follows WHERE leader_id = ? AND paused = 0", (leader_id,)
-        ).fetchall()
-    total_aum = sum(r["allocation_usd"] for r in rows)
-    return {
-        "follower_count": len(rows),
-        "total_aum_usd": total_aum,
-        "follows": [dict(r) for r in rows],
-    }
+async def _own_account_index(user_id: str) -> int | None:
+    """Индекс Lighter, привязанный к этой записи подписчика входом кошелька."""
+    row = await db.follower(user_id)
+    if row is None:
+        raise deny(
+            401,
+            "SESSION_UNKNOWN_USER",
+            "Токен выдан для записи, которой больше нет в базе — войди заново",
+        )
+    return row["lighter_account_index"]
+
+
+# ── Публичное чтение: это витрина, она открыта без входа ──────────────────────
 
 
 @router.get("/leaders")
-def list_leaders():
-    with db.connect(DB_PATH) as conn:
-        rows = conn.execute("SELECT * FROM leaders ORDER BY created_at DESC").fetchall()
-    return [dict(r) for r in rows]
+async def list_leaders():
+    return await db.all_leaders()
 
 
-@router.get("/follows/by-follower/{follower_id}")
-def list_follows_for_follower(follower_id: str):
-    with db.connect(DB_PATH) as conn:
-        rows = conn.execute(
-            "SELECT f.*, l.handle as leader_handle FROM follows f "
-            "JOIN leaders l ON l.id = f.leader_id WHERE f.follower_id = ?",
-            (follower_id,),
-        ).fetchall()
-    return [dict(r) for r in rows]
+@router.get("/follows/by-leader/{leader_id}")
+async def list_follows_for_leader(leader_id: str):
+    rows = await db.follows_for_leader(leader_id)
+    return {
+        "follower_count": len(rows),
+        "total_aum_usd": sum(r["allocation_usd"] for r in rows),
+        "follows": rows,
+    }
 
 
-@router.delete("/follows/{follow_id}")
-def delete_follow(follow_id: str, follower_id: str = Query(...)):
-    with db.connect(DB_PATH) as conn:
-        follow = conn.execute(
-            "SELECT * FROM follows WHERE id = ? AND follower_id = ?",
-            (follow_id, follower_id),
-        ).fetchone()
-        if not follow:
-            raise HTTPException(
-                status_code=404, detail="follow not found or not owned by user"
-            )
-        conn.execute("DELETE FROM follows WHERE id = ?", (follow_id,))
-    return {"status": "deleted"}
-
-
-@router.get("/mirror-log/{follower_id}")
-def list_mirror_log(follower_id: str, limit: int = 50):
-    """Журнал решений копи-движка по подпискам этого подписчика: что mirror_engine
-    запланировал и чем это закончилось (dry_run / sent / skipped / failed) — с причиной
-    отказа. Пишет его leader_listener.py, здесь только чтение."""
-    capped = max(1, min(limit, 200))
-    with db.connect(DB_PATH) as conn:
-        rows = conn.execute(
-            "SELECT m.id, m.follow_id, m.market_id, m.side, m.base_amount, m.reduce_only, m.status, "
-            "m.reason, m.tx_hash, m.created_at, l.handle AS leader_handle "
-            "FROM mirror_log m "
-            "JOIN follows f ON f.id = m.follow_id "
-            "JOIN leaders l ON l.id = f.leader_id "
-            "WHERE f.follower_id = ? ORDER BY m.created_at DESC LIMIT ?",
-            (follower_id, capped),
-        ).fetchall()
-    return [dict(r) for r in rows]
-
-
-@router.post("/followers")
-def register_follower(req: RegisterFollower):
-    with db.connect(DB_PATH) as conn:
-        existing = conn.execute(
-            "SELECT id FROM followers WHERE l1_address = ?", (req.l1_address,)
-        ).fetchone()
-        if existing:
-            return {"follower_id": existing["id"]}
-        follower_id = str(uuid.uuid4())
-        db.upsert_follower(conn, follower_id, req.l1_address, req.lighter_account_index)
-    return {"follower_id": follower_id}
+# ── Всё, у чего есть владелец ────────────────────────────────────────────────
 
 
 @router.post("/leaders")
-def register_leader(req: RegisterLeader):
-    with db.connect(DB_PATH) as conn:
-        existing = conn.execute(
-            "SELECT id FROM leaders WHERE lighter_account_index = ?",
-            (req.lighter_account_index,),
-        ).fetchone()
-        if existing:
-            return {"leader_id": existing["id"]}
-        leader_id = str(uuid.uuid4())
-        db.upsert_leader(
-            conn, leader_id, req.lighter_account_index, req.handle, req.fee_bps
+async def register_leader(req: RegisterLeader, user_id: str = Depends(require_user)):
+    """Публикация лидера. Индекс аккаунта берётся из записи, привязанной входом
+    кошелька: без этого шага неясно, чью статистику покажет карточка в Discover."""
+    account_index = await _own_account_index(user_id)
+    if account_index is None:
+        raise deny(
+            403,
+            "LIGHTER_ACCOUNT_NOT_LINKED",
+            "Лидер публикуется по индексу аккаунта Lighter — войди ещё и кошельком, "
+            "чтобы адрес подтвердился подписью",
         )
-    with al.connect(AUDIT_DB_PATH) as audit_conn:
-        al.log_action(
-            audit_conn,
-            al.AuditEntry(
-                actor=f"leader:{leader_id}",
-                action="leader_registered",
-                resource=f"leader:{leader_id}",
-                details={
-                    "handle": req.handle,
-                    "fee_bps": req.fee_bps,
-                    "lighter_account_index": req.lighter_account_index,
-                },
-                success=True,
-            ),
+
+    existing = await db.leader_by_account_index(account_index)
+    if existing:
+        return {"leader_id": existing["id"]}
+
+    leader_id = str(uuid.uuid4())
+    await db.upsert_leader(leader_id, account_index, req.handle, req.fee_bps)
+    await al.log_action(
+        al.AuditEntry(
+            actor=user_id,
+            action="leader_registered",
+            resource=f"leader:{leader_id}",
+            details={
+                "handle": req.handle,
+                "fee_bps": req.fee_bps,
+                "lighter_account_index": account_index,
+            },
+            success=True,
         )
+    )
     return {"leader_id": leader_id}
 
 
 @router.patch("/leaders/{leader_id}/fee")
-def update_leader_fee(leader_id: str, req: UpdateLeaderFee):
+async def update_leader_fee(
+    leader_id: str, req: UpdateLeaderFee, user_id: str = Depends(require_user)
+):
     """Лидер меняет комиссию в любой момент. Влияет только на то, что подписчик
     увидит в Discover после изменения, — уже созданные строки follows не пересчитываются
     (в них нет комиссии: она хранится один раз в leaders.fee_bps)."""
-    if not 0 <= req.fee_bps <= 500:
-        raise HTTPException(
-            status_code=422, detail="fee_bps вне диапазона 0–500 (0–5%)"
+    row = await db.leader(leader_id)
+    if not row:
+        raise deny(404, "LEADER_NOT_FOUND", "Лидер не найден")
+    if row["lighter_account_index"] != await _own_account_index(user_id):
+        raise deny(
+            403,
+            "LEADER_NOT_OWNED",
+            "Комиссию меняет только тот, чей вход подтвердил этот аккаунт Lighter",
         )
-    with db.connect(DB_PATH) as conn:
-        row = conn.execute(
-            "SELECT lighter_account_index, handle FROM leaders WHERE id = ?",
-            (leader_id,),
-        ).fetchone()
-        if not row:
-            raise HTTPException(status_code=404, detail="Лидер не найден")
-        db.upsert_leader(
-            conn, leader_id, row["lighter_account_index"], row["handle"], req.fee_bps
+    await db.upsert_leader(
+        leader_id, row["lighter_account_index"], row["handle"], req.fee_bps
+    )
+    await al.log_action(
+        al.AuditEntry(
+            actor=user_id,
+            action="leader_fee_changed",
+            resource=f"leader:{leader_id}",
+            details={"fee_bps": req.fee_bps},
+            success=True,
         )
-    with al.connect(AUDIT_DB_PATH) as audit_conn:
-        al.log_action(
-            audit_conn,
-            al.AuditEntry(
-                actor=f"leader:{leader_id}",
-                action="leader_fee_changed",
-                resource=f"leader:{leader_id}",
-                details={"fee_bps": req.fee_bps},
-                success=True,
-            ),
-        )
+    )
     return {"leader_id": leader_id, "fee_bps": req.fee_bps}
 
 
+@router.get("/follows")
+async def list_own_follows(user_id: str = Depends(require_user)):
+    return await db.follows_for_follower(user_id)
+
+
 @router.post("/follows")
-def create_follow(req: CreateFollow):
+async def create_follow(req: CreateFollow, user_id: str = Depends(require_user)):
     follow_id = str(uuid.uuid4())
     try:
-        with db.connect(DB_PATH) as conn:
-            db.create_follow(
-                conn,
-                follow_id,
-                req.follower_id,
-                req.leader_id,
-                req.allocation_usd,
-                req.max_leverage,
-            )
-    except Exception:
-        # Скорее всего UNIQUE(follower_id, leader_id) — уже подписан на этого лидера.
+        await db.create_follow(
+            follow_id,
+            user_id,
+            req.leader_id,
+            req.allocation_usd,
+            req.max_leverage,
+        )
+    except IntegrityError:
+        # Скорее всего UNIQUE(follower_id, leader_id) — уже подписан на этого
+        # лидера. Реже — FK: подписчика или лидера не существует. Форма отказа
+        # одна: различие клиенту опереть не на что, оба случая значат «так нельзя».
         raise HTTPException(
             status_code=400,
             detail="Подписка уже существует или невалидны данные",
-        )
+        ) from None
     return {"follow_id": follow_id}
 
 
 @router.post("/follows/{follow_id}/pause")
-def pause_follow(follow_id: str, follower_id: str = Query(...)):
-    with db.connect(DB_PATH) as conn:
-        follow = conn.execute(
-            "SELECT * FROM follows WHERE id = ? AND follower_id = ?",
-            (follow_id, follower_id),
-        ).fetchone()
-        if not follow:
-            raise HTTPException(
-                status_code=404, detail="follow not found or not owned by user"
-            )
-        db.set_paused(conn, follow_id, True)
+async def pause_follow(follow_id: str, user_id: str = Depends(require_user)):
+    if not await db.owned_follow(follow_id, user_id):
+        raise deny(
+            404, "FOLLOW_NOT_FOUND", "Подписка не найдена или не принадлежит тебе"
+        )
+    await db.set_paused(follow_id, True)
     return {"status": "paused"}
 
 
 @router.post("/follows/{follow_id}/resume")
-def resume_follow(follow_id: str, follower_id: str = Query(...)):
-    with db.connect(DB_PATH) as conn:
-        follow = conn.execute(
-            "SELECT * FROM follows WHERE id = ? AND follower_id = ?",
-            (follow_id, follower_id),
-        ).fetchone()
-        if not follow:
-            raise HTTPException(
-                status_code=404, detail="follow not found or not owned by user"
-            )
-        db.set_paused(conn, follow_id, False)
+async def resume_follow(follow_id: str, user_id: str = Depends(require_user)):
+    if not await db.owned_follow(follow_id, user_id):
+        raise deny(
+            404, "FOLLOW_NOT_FOUND", "Подписка не найдена или не принадлежит тебе"
+        )
+    await db.set_paused(follow_id, False)
     return {"status": "active"}
 
 
-@router.post("/simulate-mirror")
-def simulate_mirror(req: SimulateMirrorRequest):
+@router.delete("/follows/{follow_id}")
+async def remove_follow(follow_id: str, user_id: str = Depends(require_user)):
+    if not await db.delete_follow(follow_id, user_id):
+        raise deny(
+            404, "FOLLOW_NOT_FOUND", "Подписка не найдена или не принадлежит тебе"
+        )
+    return {"status": "deleted"}
+
+
+@router.get("/mirror-log")
+async def list_mirror_log(
+    limit: int = Query(50, ge=1, le=200), user_id: str = Depends(require_user)
+):
+    return await db.mirror_log_for_follower(user_id, limit)
+
+
+# ── Операторский инструмент ──────────────────────────────────────────────────
+
+
+@router.post("/simulate-mirror", dependencies=[Depends(require_curator)])
+async def simulate_mirror(req: SimulateMirrorRequest):
     """Ручной прогон mirror_engine через HTTP — без живого WS-события от лидера.
     Полезно, чтобы своими глазами увидеть MirrorPlan для конкретных подписчиков
-    из базы, не поднимая leader_listener.py целиком."""
-    with db.connect(DB_PATH) as conn:
-        rows = db.active_follows_for_leader(conn, req.leader_id)
+    из базы, не поднимая leader_listener.py целиком.
+
+    Под токеном куратора: ответ перечисляет аллокации и зеркаленные размеры всех
+    подписчиков лидера, а это не публичные данные.
+    """
+    rows = await db.active_follows_for_leader(req.leader_id)
 
     followers = [
         FollowerConfig(

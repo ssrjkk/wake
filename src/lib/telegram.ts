@@ -4,7 +4,12 @@
 //
 // Проверка подписи живёт на бэкенде (api/auth.py: POST /auth/telegram/init),
 // потому что любой, кто откроет консоль, может подменить initDataUnsafe.user.
+//
+// Ответ любого входа здесь — SignInResponse из lib/session.ts: user_id, токен и
+// срок. Сохраняет его приложение (App.tsx), а не эта функция: три входа различаются
+// только способом подтвердить личность, а дальше обязаны сделать одно и то же.
 import { backendJson } from "./backend";
+import type { SignInResponse } from "./session";
 
 export interface TelegramUser {
   id: number;
@@ -16,16 +21,9 @@ export interface TelegramUser {
   hash: string;
 }
 
-export interface TelegramProfile {
-  user_id: string;
-  telegram_id: number;
-  username: string | null;
-  first_name: string;
-}
-
 // SDK Telegram подсовывает window.Telegram.WebApp. Типизирован минимально: нужен
 // ровно initData, а не весь интерфейс мини-аппа.
-type MiniApp = { initData?: string; ready?: () => void };
+type MiniApp = { initData?: string; ready?: () => void; initDataUnsafe?: { user?: TelegramUser } };
 declare global {
   interface Window {
     Telegram?: { WebApp?: MiniApp };
@@ -71,21 +69,28 @@ export function ensureTelegramSdk(ua?: string): Promise<MiniApp | null> {
   return sdkPromise;
 }
 
-export async function connectTelegramMiniApp(ua?: string): Promise<TelegramProfile | null> {
+// Подпись проверяется по initData, а это поле — разбор той же строки на клиенте.
+// Годится только как надпись в шапке: личность определяет user_id из ответа
+// бэкенда, и подмена имени здесь меняет лишь то, что видит сам подменивший.
+export function miniAppDisplayName(): TelegramUser | null {
+  return window.Telegram?.WebApp?.initDataUnsafe?.user ?? null;
+}
+
+export async function connectTelegramMiniApp(ua?: string): Promise<SignInResponse | null> {
   const app = await ensureTelegramSdk(ua);
   if (!app || !hasMiniAppUser(app.initData)) return null;
 
-  return backendJson<TelegramProfile>("/auth/telegram/init", {
+  return backendJson<SignInResponse>("/auth/telegram/init", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ init_data: app.initData }),
   });
 }
 
-export async function verifyTelegramLogin(user: TelegramUser): Promise<TelegramProfile> {
+export async function verifyTelegramLogin(user: TelegramUser): Promise<SignInResponse> {
   // Ответ бэкенда — единственное, что показывается в интерфейсе: до проверки подписи
   // поля виджета это ещё данные браузера.
-  return backendJson<TelegramProfile>("/auth/telegram", {
+  return backendJson<SignInResponse>("/auth/telegram", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(user),

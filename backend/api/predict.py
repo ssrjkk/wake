@@ -5,43 +5,32 @@ test_predict_db.py, test_predict_integration.py — полный цикл
 create->trade->resolve->claim, test_predict_resolver.py — закрытие price-рынков).
 Этот слой — только HTTP-обвязка.
 
+Чем защищён этот слой:
+- создание рынков и резолюция — токен куратора (api/guards.py);
+- трейд, позиции и claim — субъект токена сессии. Пока user_id приезжал в теле,
+  «сыграть на чужом месте» и «забрать чужой выигрыш» стоили одну строку JSON:
+  market_id публичен, а user_id достаточно подсмотреть в чужих позициях.
+
 Перенесено из app.py при рефакторинге — см. api/copy_trading.py.
 """
 
-import hmac
-import os
+import math
 import time as _time
 import uuid
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, field_validator
+from starlette.concurrency import run_in_threadpool
 
 import predict_db as pdb
 import audit_log as al
+from api.guards import require_curator, require_user
 from predict_amm import LMSRMarket
 from predict_resolution import resolve_price_market, resolve_event_market, Comparator
-from config import DB_PATH, AUDIT_DB_PATH, LIGHTER_NETWORK
+from config import LIGHTER_NETWORK
 
 router = APIRouter()
-
-
-def _require_curator(request: Request):
-    """Создание рынков (price и event) и резолюция событий — только доверенные кураторы.
-    Простой секретный токен в заголовке X-Curator-Token, сравнение через
-    hmac.compare_digest (защита от timing-атак). Price-рынки под тем же гейтом,
-    иначе любой может создать рынок с произвольным порогом и зарезолвить его
-    против своей позиции. В проде заменить на полноценный auth-слой."""
-    curator_token = os.environ.get("WAKE_CURATOR_TOKEN", "")
-    if not curator_token:
-        raise HTTPException(
-            status_code=500, detail="WAKE_CURATOR_TOKEN не настроен на сервере"
-        )
-    auth_header = request.headers.get("X-Curator-Token", "")
-    if not hmac.compare_digest(auth_header, curator_token):
-        raise HTTPException(
-            status_code=403, detail="Недостаточно прав: требуется токен куратора"
-        )
 
 
 class CreatePriceMarket(BaseModel):
@@ -88,15 +77,14 @@ class CreateEventMarket(BaseModel):
 
 
 class TradeRequest(BaseModel):
-    user_id: str
     outcome: Literal["yes", "no"]
     shares: float
 
     @field_validator("shares")
     @classmethod
     def shares_nonzero(cls, v: float) -> float:
-        if v == 0:
-            raise ValueError("shares must not be zero")
+        if v == 0 or not math.isfinite(v):
+            raise ValueError("shares — ненулевое конечное число")
         return v
 
 
@@ -110,10 +98,10 @@ class ResolvePriceRequest(BaseModel):
     network: str = LIGHTER_NETWORK
 
 
-def _with_prices(row, stats: dict) -> dict:
+def _with_prices(row: dict, stats: dict) -> dict:
     amm = LMSRMarket(b=row["b"], q_yes=row["q_yes"], q_no=row["q_no"])
     s = stats.get(row["id"], {})
-    return dict(row) | {
+    return row | {
         "price_yes": amm.price_yes(),
         "price_no": amm.price_no(),
         "max_subsidy": amm.max_subsidy(),
@@ -123,48 +111,47 @@ def _with_prices(row, stats: dict) -> dict:
 
 
 @router.post("/predict/markets/price")
-def create_price_market(req: CreatePriceMarket, request: Request):
-    _require_curator(request)
+async def create_price_market(
+    req: CreatePriceMarket, _curator: None = Depends(require_curator)
+):
     market_id = str(uuid.uuid4())
-    with pdb.connect(DB_PATH) as conn:
-        pdb.create_market(
-            conn,
-            market_id,
-            "price",
-            req.question,
-            req.resolve_at,
-            req.b,
-            lighter_market_id=req.lighter_market_id,
-            threshold=req.threshold,
-            comparator=req.comparator,
-        )
+    await pdb.create_market(
+        market_id,
+        "price",
+        req.question,
+        req.resolve_at,
+        req.b,
+        lighter_market_id=req.lighter_market_id,
+        threshold=req.threshold,
+        comparator=req.comparator,
+    )
     return {"market_id": market_id}
 
 
 @router.post("/predict/markets/event")
-def create_event_market(req: CreateEventMarket, request: Request):
-    _require_curator(request)
+async def create_event_market(
+    req: CreateEventMarket, _curator: None = Depends(require_curator)
+):
     market_id = str(uuid.uuid4())
-    with pdb.connect(DB_PATH) as conn:
-        pdb.create_market(conn, market_id, "event", req.question, req.resolve_at, req.b)
+    await pdb.create_market(market_id, "event", req.question, req.resolve_at, req.b)
     return {"market_id": market_id}
 
 
 @router.get("/predict/markets")
-def list_predict_markets(status: str = Query("open", pattern="^(open|resolved|all)$")):
-    with pdb.connect(DB_PATH) as conn:
-        rows = pdb.list_markets(conn, status)
-        stats = pdb.market_stats(conn)
+async def list_predict_markets(
+    status: str = Query("open", pattern="^(open|resolved|all)$"),
+):
+    rows = await pdb.list_markets(status)
+    stats = await pdb.market_stats()
     return [_with_prices(r, stats) for r in rows]
 
 
 @router.get("/predict/positions")
-def list_positions(user_id: str):
-    """Позиции юзера по всем рынкам — включая резолвленные, где уже можно забрать
-    выигрыш. Считается по predict_trades, поэтому это данные о его же сделках,
-    а не чужой статистика: эндпоинт не раскрывает позиции других."""
-    with pdb.connect(DB_PATH) as conn:
-        rows = pdb.list_user_positions(conn, user_id)
+async def list_positions(user_id: str = Depends(require_user)):
+    """Позиции текущего пользователя по всем рынкам — включая резолвленные, где
+    уже можно забрать выигрыш. Список берётся из его же сделок, поэтому это его
+    данные, а не чужая статистика: чужой user_id сюда подставить нечем."""
+    rows = await pdb.list_user_positions(user_id)
     result = []
     for r in rows:
         amm = LMSRMarket(b=r["b"], q_yes=r["q_yes"], q_no=r["q_no"])
@@ -201,21 +188,24 @@ def list_positions(user_id: str):
 
 
 @router.get("/predict/markets/{market_id}")
-def get_predict_market(market_id: str):
-    with pdb.connect(DB_PATH) as conn:
-        m = pdb.get_market(conn, market_id)
-        if m is None:
-            raise HTTPException(status_code=404, detail="рынок не найден")
-        stats = pdb.market_stats(conn)
+async def get_predict_market(market_id: str):
+    m = await pdb.get_market(market_id)
+    if m is None:
+        raise HTTPException(status_code=404, detail="рынок не найден")
+    stats = await pdb.market_stats()
     return _with_prices(m, stats)
 
 
 @router.get("/predict/markets/{market_id}/preview")
-def preview_trade(market_id: str, outcome: str, shares: float):
-    with pdb.connect(DB_PATH) as conn:
-        m = pdb.get_market(conn, market_id)
-        if m is None:
-            raise HTTPException(status_code=404, detail="рынок не найден")
+async def preview_trade(market_id: str, outcome: Literal["yes", "no"], shares: float):
+    """Расчёт цены сделки без записи в базу. shares проверяется так же, как в
+    TradeRequest: ноль и NaN здесь дают не «пустой ответ», а число в карточке
+    рынка, которое человек принимает за настоящую цену."""
+    m = await pdb.get_market(market_id)
+    if m is None:
+        raise HTTPException(status_code=404, detail="рынок не найден")
+    if not math.isfinite(shares) or shares == 0:
+        raise HTTPException(status_code=400, detail="shares — ненулевое конечное число")
     amm = LMSRMarket(b=m["b"], q_yes=m["q_yes"], q_no=m["q_no"])
     try:
         cost = amm.cost_to_trade(outcome, shares)
@@ -225,59 +215,54 @@ def preview_trade(market_id: str, outcome: str, shares: float):
 
 
 @router.post("/predict/markets/{market_id}/trade")
-def trade_predict_market(market_id: str, req: TradeRequest):
+async def trade_predict_market(
+    market_id: str, req: TradeRequest, user_id: str = Depends(require_user)
+):
     trade_id = str(uuid.uuid4())
-    with pdb.connect(DB_PATH) as conn:
-        try:
-            cost = pdb.record_trade(
-                conn, trade_id, req.user_id, market_id, req.outcome, req.shares
-            )
-        except ValueError as e:
-            with al.connect(AUDIT_DB_PATH) as aconn:
-                al.log_action(
-                    aconn,
-                    al.AuditEntry(
-                        actor=req.user_id,
-                        action="trade_executed",
-                        resource=market_id,
-                        details={
-                            "outcome": req.outcome,
-                            "shares": req.shares,
-                            "error": str(e),
-                        },
-                        success=False,
-                    ),
-                )
-            raise HTTPException(status_code=400, detail=str(e))
-    with al.connect(AUDIT_DB_PATH) as aconn:
-        al.log_action(
-            aconn,
+    try:
+        cost = await pdb.record_trade(
+            trade_id, user_id, market_id, req.outcome, req.shares
+        )
+    except ValueError as e:
+        await al.log_action(
             al.AuditEntry(
-                actor=req.user_id,
+                actor=user_id,
                 action="trade_executed",
                 resource=market_id,
                 details={
                     "outcome": req.outcome,
                     "shares": req.shares,
-                    "cost_usd": cost,
-                    "trade_id": trade_id,
+                    "error": str(e),
                 },
-                success=True,
-            ),
+                success=False,
+            )
         )
+        raise HTTPException(status_code=400, detail=str(e))
+    await al.log_action(
+        al.AuditEntry(
+            actor=user_id,
+            action="trade_executed",
+            resource=market_id,
+            details={
+                "outcome": req.outcome,
+                "shares": req.shares,
+                "cost_usd": cost,
+                "trade_id": trade_id,
+            },
+            success=True,
+        )
+    )
     return {"trade_id": trade_id, "cost_usd": cost}
 
 
 @router.post("/predict/markets/{market_id}/resolve-event")
-def resolve_event(market_id: str, req: ResolveEventRequest, request: Request):
-    _require_curator(request)
-    with pdb.connect(DB_PATH) as conn:
-        current = pdb.get_market(conn, market_id)
+async def resolve_event(
+    market_id: str, req: ResolveEventRequest, _curator: None = Depends(require_curator)
+):
+    current = await pdb.get_market(market_id)
     if current is None:
         raise HTTPException(status_code=404, detail="рынок не найден")
     if current["status"] != "open":
-        # Проверка до audit_log: запись о резолюции, которая не состоялась,
-        # ухудшает аудит хуже, чем её отсутствие.
         raise HTTPException(
             status_code=409,
             detail=f"рынок уже резолвлен с исходом {current['outcome']}",
@@ -288,17 +273,31 @@ def resolve_event(market_id: str, req: ResolveEventRequest, request: Request):
         )
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
-    with pdb.connect(DB_PATH) as conn:
-        try:
-            pdb.resolve_market(
-                conn,
-                market_id,
-                resolution.outcome,
-                resolution.resolved_by,
-                resolution.evidence_url,
-            )
-        except ValueError as e:
-            raise HTTPException(status_code=409, detail=str(e))
+    try:
+        await pdb.resolve_market(
+            market_id,
+            resolution.outcome,
+            resolution.resolved_by,
+            resolution.evidence_url,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    # Аудит — после того, как исход записан. Запись о резолюции, которая
+    # не состоялась (409 от параллельного резолвера), ухудшает аудит сильнее,
+    # чем её отсутствие.
+    await al.log_action(
+        al.AuditEntry(
+            actor=resolution.resolved_by,
+            action="market_resolution",
+            resource=market_id,
+            details={
+                "outcome": resolution.outcome,
+                "evidence_url": resolution.evidence_url,
+                "resolved_at": resolution.resolved_at,
+            },
+            success=True,
+        )
+    )
     return {
         "outcome": resolution.outcome,
         "resolved_by": resolution.resolved_by,
@@ -307,7 +306,9 @@ def resolve_event(market_id: str, req: ResolveEventRequest, request: Request):
 
 
 @router.post("/predict/markets/{market_id}/resolve-price")
-def resolve_price(market_id: str, req: ResolvePriceRequest, request: Request):
+async def resolve_price(
+    market_id: str, req: ResolvePriceRequest, _curator: None = Depends(require_curator)
+):
     """Ручной триггер того же пути, что проходит predict_resolver.py по таймеру,
     для случая «резолвер ещё не поднят как процесс».
 
@@ -316,35 +317,38 @@ def resolve_price(market_id: str, req: ResolvePriceRequest, request: Request):
     по которому решается его же ставка. Резолвер закрывает рынок в течение
     WAKE_PREDICT_RESOLVER_TICK после дедлайна, так что ручным триггером куратор
     догоняет пропущенные тики, а не пересоздаёт исход."""
-    _require_curator(request)
     from lighter_rest import get_mark_price
 
     now = _time.time()
-    with pdb.connect(DB_PATH) as conn:
-        m = pdb.get_market(conn, market_id)
-        if m is None:
-            raise HTTPException(status_code=404, detail="рынок не найден")
-        if m["kind"] != "price":
-            raise HTTPException(status_code=400, detail="не price-рынок")
-        if m["status"] != "open":
-            raise HTTPException(
-                status_code=409, detail=f"рынок уже резолвлен с исходом {m['outcome']}"
-            )
-        if now < m["resolve_at"]:
-            raise HTTPException(
-                status_code=409,
-                detail=f"дедлайн рынка ещё не наступил (resolve_at={int(m['resolve_at'])}, сейчас {int(now)})",
-            )
-        try:
-            observed = get_mark_price(m["lighter_market_id"], req.network)
-        except RuntimeError as e:
-            raise HTTPException(status_code=502, detail=str(e))
-        resolution = resolve_price_market(
-            observed, m["threshold"], Comparator(m["comparator"])
+    m = await pdb.get_market(market_id)
+    if m is None:
+        raise HTTPException(status_code=404, detail="рынок не найден")
+    if m["kind"] != "price":
+        raise HTTPException(status_code=400, detail="не price-рынок")
+    if m["status"] != "open":
+        raise HTTPException(
+            status_code=409, detail=f"рынок уже резолвлен с исходом {m['outcome']}"
         )
-        pdb.resolve_market(
-            conn, market_id, resolution.outcome, "auto:lighter_mark_price", None
+    if now < m["resolve_at"]:
+        raise HTTPException(
+            status_code=409,
+            detail=f"дедлайн рынка ещё не наступил (resolve_at={int(m['resolve_at'])}, сейчас {int(now)})",
         )
+    # Сетевой вызов вне сессии БД и вне event loop: соединение с пулом не
+    # держится открытым через запрос к Lighter, а блокирующий urllib не
+    # останавливает остальные запросы.
+    try:
+        observed = await run_in_threadpool(
+            get_mark_price, m["lighter_market_id"], req.network
+        )
+    except RuntimeError as e:
+        raise HTTPException(status_code=502, detail=str(e))
+    resolution = resolve_price_market(
+        observed, m["threshold"], Comparator(m["comparator"])
+    )
+    await pdb.resolve_market(
+        market_id, resolution.outcome, "auto:lighter_mark_price", None
+    )
     return {
         "outcome": resolution.outcome,
         "observed_price": observed,
@@ -354,10 +358,21 @@ def resolve_price(market_id: str, req: ResolvePriceRequest, request: Request):
 
 
 @router.post("/predict/markets/{market_id}/claim")
-def claim_predict(market_id: str, user_id: str):
-    with pdb.connect(DB_PATH) as conn:
-        try:
-            payout = pdb.claim_winnings(conn, user_id, market_id)
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
+async def claim_predict(market_id: str, user_id: str = Depends(require_user)):
+    """Выплата по резолвнутому рынку. Субъект берётся из токена: до этого claim
+    принимал user_id в query, и достаточно было знать чужой id (он виден в
+    публичной статистике рынка), чтобы забрать чужой выигрыш."""
+    try:
+        payout = await pdb.claim_winnings(user_id, market_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    await al.log_action(
+        al.AuditEntry(
+            actor=user_id,
+            action="predict_claim",
+            resource=market_id,
+            details={"payout_usd": payout},
+            success=payout > 0,
+        )
+    )
     return {"payout_usd": payout}

@@ -52,7 +52,7 @@ export default function Discover({ setCopyModal }: DiscoverProps) {
             ))}
           </div>
         ) : leaders.length === 0 ? (
-          <div style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", padding: "48px 24px", textAlign: "center" }}>
+          <div className="empty-state">
             <Users style={{ width: "24px", height: "24px", color: "#666", marginBottom: "12px" }} />
             <p style={{ fontSize: "12px", color: "#ccc", margin: "0 0 4px 0" }}>В базе пока нет ни одного лидера</p>
             <p style={{ fontSize: "10px", color: "#666", margin: 0, maxWidth: "500px", marginLeft: "auto", marginRight: "auto" }}>

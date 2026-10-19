@@ -55,9 +55,11 @@ export function getPredictMarkets(status: PredictStatus = "open"): Promise<Predi
 
 // Позиции юзера: бэкенд отдаёт только строки с shares > 0, поэтому полностью
 // проданная позиция исчезает из списка — это не ошибка выборки, а следствие того,
-// что держать нечего.
-export function getPredictPositions(userId: string): Promise<PredictPosition[]> {
-  return backendJson<PredictPosition[]>(`/predict/positions?user_id=${encodeURIComponent(userId)}`);
+// что держать нечего. Чей это список, решает токен в заголовке, а не user_id в
+// адресе: позиции видны в публичной статистике рынка, и до перехода на сессию
+// их можно было прочитать и сыграть на чужом месте одной подменой query.
+export function getPredictPositions(): Promise<PredictPosition[]> {
+  return backendJson<PredictPosition[]>("/predict/positions");
 }
 
 export function previewPredictTrade(marketId: string, outcome: "yes" | "no", shares: number): Promise<{ cost_usd: number }> {
@@ -66,16 +68,18 @@ export function previewPredictTrade(marketId: string, outcome: "yes" | "no", sha
 
 // shares < 0 — продажа части позиции; бэкенд считает по той же LMSR-кривой и
 // возвращает отрицательный cost, то есть деньги возвращаются юзеру.
-export function tradePredictMarket(marketId: string, userId: string, outcome: "yes" | "no", shares: number): Promise<{ cost_usd: number }> {
+export function tradePredictMarket(marketId: string, outcome: "yes" | "no", shares: number): Promise<{ cost_usd: number }> {
   return backendJson(`/predict/markets/${encodeURIComponent(marketId)}/trade`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ user_id: userId, outcome, shares }),
+    body: JSON.stringify({ outcome, shares }),
   });
 }
 
-export function claimPredictMarket(marketId: string, userId: string): Promise<{ payout_usd: number }> {
-  return backendJson(`/predict/markets/${encodeURIComponent(marketId)}/claim?user_id=${encodeURIComponent(userId)}`, { method: "POST" });
+// Выплата идёт субъекту токена: до сессии сюда приезжал user_id, и, зная чужой
+// id, можно было забрать чужой выигрыш.
+export function claimPredictMarket(marketId: string): Promise<{ payout_usd: number }> {
+  return backendJson(`/predict/markets/${encodeURIComponent(marketId)}/claim`, { method: "POST" });
 }
 
 // Доля от $1: share победившего исхода стоит $1 после резолюции, проигравшего — $0.

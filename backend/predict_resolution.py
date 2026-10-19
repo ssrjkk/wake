@@ -13,13 +13,13 @@ resolve_event_market() — НЕ автоматическая. Для "кто п�
 "кто выиграет матч" и т.п. нет источника правды внутри Lighter или внутри этого
 кода — нужен человек-куратор (или в будущем — что-то вроде UMA Optimistic
 Oracle с dispute-периодом, как у настоящего Polymarket; здесь этого нет,
-намеренно не притворяюсь, что есть). Функция ниже — тонкая, откровенно
-"trust me" обёртка с обязательной записью КТО резолвил и КОГДА — минимум
-для аудита, не замена реальному decentralized dispute-механизму.
+намеренно не притворяюсь, что есть). Функция возвращает исход с обязательными
+КТО и КОГДА — минимум для аудита, не замена реальному dispute-механизму. Сама
+она ничего не пишет: это чистая проверка данных, а запись в аудит-лог делает
+тот, кто резолюцию применяет (api/predict.py), — иначе в аудит попадали бы и
+исходы, которые не состоялись.
 """
 
-import audit_log as al
-from config import AUDIT_DB_PATH
 from dataclasses import dataclass
 from enum import Enum
 
@@ -90,21 +90,9 @@ def resolve_event_market(
         raise ValueError(
             "evidence_url обязателен — резолюция без источника не создаётся"
         )
-    resolution = EventResolution(
+    return EventResolution(
         outcome=outcome,
         resolved_by=resolved_by,
         resolved_at=resolved_at,
         evidence_url=evidence_url,
     )
-    with al.connect(AUDIT_DB_PATH) as audit_conn:
-        al.log_action(
-            audit_conn,
-            al.AuditEntry(
-                actor=resolved_by,
-                action="market_resolution",
-                resource=f"event_market:{outcome}",
-                details={"evidence_url": evidence_url, "resolved_at": resolved_at},
-                success=True,
-            ),
-        )
-    return resolution

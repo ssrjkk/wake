@@ -6,11 +6,39 @@
 // Наивный res.json() на этом отвечает SyntaxError с куском разметки в тексте, и это
 // сообщение юзер видит в панели вместо внятной причины.
 import { BACKEND_URL } from "./config";
+import { authHeader, clearSession } from "./session";
+
+// Событие уходит, когда бэкенд отверг токен: приложение чистит состояние входа,
+// а не ждёт, пока пользователь сам сообразит, почему панели пустые.
+export const SIGNED_OUT_EVENT = "wake:signed-out";
+
+function signedOut() {
+  clearSession();
+  if (typeof window !== "undefined") window.dispatchEvent(new Event(SIGNED_OUT_EVENT));
+}
+
+// message из {error: {code, message}} — то, что бэкенд написал для человека;
+// голый JSON в тосте читается как поломка клиента.
+function backendMessage(body: string, status: number): string {
+  try {
+    const parsed = JSON.parse(body) as { error?: { code?: string; message?: string } };
+    if (parsed.error?.message) {
+      return parsed.error.code ? `${parsed.error.message} (${parsed.error.code})` : parsed.error.message;
+    }
+  } catch {
+    // тело не JSON (прокси, страница ошибки хостинга) — показываем его как есть
+  }
+  return body || `Бэкенд Wake ${status}`;
+}
 
 export async function backendJson<T>(path: string, init?: RequestInit): Promise<T> {
   let res: Response;
   try {
-    res = await fetch(`${BACKEND_URL}${path}`, init);
+    // Токен подмешивается сюда, а не в каждый вызов: иначе из десяти мест один
+    // обязательно забыл бы заголовок, и ошибка выглядела бы как «нет данных».
+    const headers = new Headers(init?.headers);
+    for (const [key, value] of Object.entries(authHeader())) headers.set(key, value);
+    res = await fetch(`${BACKEND_URL}${path}`, { ...init, headers });
   } catch (e) {
     // Не показываем localhost URL пользователю — это выглядит непрофессионально на продакшене
     const isLocalhost = BACKEND_URL.includes("localhost") || BACKEND_URL.includes("127.0.0.1");
@@ -19,10 +47,16 @@ export async function backendJson<T>(path: string, init?: RequestInit): Promise<
       : `${BACKEND_URL} не отвечает (${e instanceof Error ? e.message : String(e)}). Wake — отдельный сервис, в сборку сайта он не входит.`;
     throw new Error(message);
   }
+  if (res.status === 401) {
+    // Токен просрочен или подписан другим секретом: держать его дальше нельзя,
+    // каждый следующий запрос получил бы тот же 401.
+    signedOut();
+    throw new Error(backendMessage(await readText(res), res.status));
+  }
   if (!res.ok) {
     // Текст ошибки от бэкенда говорящий (409 «рынок уже резолвлен», 400 «недостаточно
     // shares»), поэтому он идёт в сообщение, а не голый код состояния.
-    throw new Error((await readText(res)) || `Бэкенд Wake ${res.status}`);
+    throw new Error(backendMessage(await readText(res), res.status));
   }
   try {
     return (await res.json()) as T;

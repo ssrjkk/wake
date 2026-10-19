@@ -45,7 +45,14 @@
     --green: #00d4aa;
     --red: #ff3b5c;
     --blue: #3b82f6;
-    --orange: #ff9500;
+    /* --orange = цвет логотипа. В компонентах он прописан литералом #ff6b35 в
+       местах, где Tailwind-класс не может сослаться на токен; hover-оттенок
+       #ff8c5a — вторая половина того же градиента.
+       Три уровня акцента, чтобы они не спорили: оранжевый — идентичность и
+       глобальное действие (логотип, активная сеть, подчёркивание вкладки,
+       .btn-primary, вход); синий — выбор внутри панели (фильтр, слайдер,
+       выбранная строка) и ссылки; зелёный/красный — только направление сделки. */
+    --orange: #ff6b35;
     --yellow: #fbbf24;
     /* Компактные контролы держат 36px на десктопе и 44px на тач-экранах.
        Значение живёт в переменной, потому что инлайн-стиль компонента
@@ -129,6 +136,39 @@
   /* Список рынков — 50 строк; без потолка он раздувал бы панель. */
   .markets-list {
     max-height: min(420px, 50dvh);
+  }
+
+  /* Пустое состояние панели. Восемь копий инлайновой разметки разошлись по
+     отступам (32/40/48px), и каждая выглядела как недогрузившийся блок. */
+  .empty-state {
+    background: var(--bg-secondary);
+    border: 1px solid #1e1e1e;
+    border-radius: 6px;
+    padding: 40px 20px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+  }
+
+  /* Переход в другую вкладку из пустой панели — не кнопка, а ссылка:
+     настоящее действие («Начать trial», «Войти») остаётся .btn-primary. */
+  .link-action {
+    color: var(--blue);
+    font-size: 14px;
+    font-weight: 500;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 0;
+  }
+
+  .link-action:hover {
+    color: #60a5fa;
   }
 
   /* Одна колонка: панели идут друг под другом. */
@@ -248,10 +288,13 @@
     border-color: var(--blue);
   }
 
-  /* Buttons — used in App.tsx header and modals */
+  /* Buttons — used in App.tsx header and modals.
+     Первичное действие — цвет логотипа, а не дефолтный синий: синяя плашка в шапке
+     читалась как чужая кнопка на графитовом интерфейсе. Текст тёмный, как на
+     фиче ордера, — на оранжевом белый контрастит меньше 3:1. */
   .btn-primary {
-    background: var(--blue);
-    color: white;
+    background: var(--orange);
+    color: #0a0a0a;
     font-weight: 600;
     padding: 8px 16px;
     border-radius: 6px;
@@ -259,7 +302,7 @@
   }
 
   .btn-primary:hover {
-    background: #2563eb;
+    background: #ff8c5a;
   }
 
   .btn-action {

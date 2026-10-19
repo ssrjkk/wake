@@ -103,7 +103,7 @@ export default function Risk({ markets, setToast }: RiskProps) {
     <div className="terminal-layout terminal-stack">
       <div className="terminal-main">
         <div className="terminal-header" style={{ flexDirection: "column", alignItems: "flex-start" }}>
-          <h2 style={{ fontSize: "16px", fontWeight: 600, color: "#fafafa", margin: 0 }}>Portfolio Risk</h2>
+          <h2 style={{ fontSize: "16px", fontWeight: 600, color: "#fafafa", margin: 0 }}>Риск корзины</h2>
           <p style={{ fontSize: "12px", color: "#666", margin: "4px 0 0" }}>
             Единая маржа Lighter: риск считается по всему набору позиций разом, а не по одной ноге. Выбираешь позиции из{" "}
             {markets.length ? `${markets.length} живых рынков ` : "списка живых рынков "}

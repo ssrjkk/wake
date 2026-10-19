@@ -1,49 +1,65 @@
 """
-Smoke-тест всего HTTP-слоя через FastAPI TestClient — реально поднимает
-приложение и гоняет каждый роут. Закрывает главный известный пробел проекта
-(«FastAPI-эндпоинты написаны, но не прогнаны»): теперь они прогнаны.
+Smoke-тест всего HTTP-слоя: реально поднимает приложение и гоняет каждый роут.
+Закрывает главный известный пробел проекта («FastAPI-эндпоинты написаны, но не
+прогнаны»): теперь они прогнаны.
 
-Запуск: python -m unittest test_api_smoke -v
+Проверяется и то, чем эти роуты защищены: доступ к чужим деньгам решается
+токеном сессии, а не полем запроса, поэтому сюда входят и отказные пути
+(forged-токен, чужая подписка, вход кошельком с чужой подписью).
+
+HTTP идёт через httpx.AsyncClient + ASGITransport, а не через TestClient: у
+TestClient на каждый запрос свой event loop в отдельном потоке, а соединение
+asyncpg привязано к циклу, в котором открыто, — второй запрос подряд получал бы
+соединение из мёртвого цикла. Здесь запрос, приложение и проверка базы живут в
+одном цикле теста, то есть пул работает ровно так же, как под uvicorn.
+
+Запуск: WAKE_TEST_DATABASE_URL=postgresql+asyncpg://wake:wake@localhost:5432/wake_test \\
+        python -m unittest test_api_smoke -v
 """
 
 import os
-import asyncio
 import hashlib
 import hmac
 import json
+import logging
 import time
-import tempfile
 import unittest
+import uuid
 from urllib.parse import urlencode
 
-# Изолированная БД, чтобы не трогать dev-данные
-_tmp = tempfile.mkdtemp()
-os.environ["WAKE_DB_PATH"] = os.path.join(_tmp, "wake.db")
-os.environ["WAKE_AUDIT_DB_PATH"] = os.path.join(_tmp, "audit.db")
-# Async-слой (api/auth.py → database.get_db) в продле нацелен на PostgreSQL, и
-# в CI он идёт через service-контейнер. Здесь тот же код должен выполняться без
-# внешнего сервера, поэтому подставляем aiosqlite: движок настоящий, путь
-# get_db тот же, просто файл во временном каталоге.
-_PG_DB_FILE = os.path.join(_tmp, "wake_pg.db")
-os.environ["WAKE_DATABASE_URL"] = f"sqlite+aiosqlite:///{_PG_DB_FILE}"
+# config читает env при импорте, поэтому все подмены — до импорта testsupport
+# (он импортирует config и database) и до импорта app.
 os.environ["WAKE_CURATOR_TOKEN"] = "smoke-test-token"
+os.environ["WAKE_SESSION_SECRET"] = "smoke-test-session-secret-0123456789abcdef"
 os.environ["TELEGRAM_BOT_TOKEN"] = "123456:smoke-test-bot-token"
-# Все запросы идут с одного test-client IP, поэтому несколько классов подряд
+# llm_agent читает ключ при импорте и без него решает по правилу. Пустая строка
+# тут не «выключить фичу», а закрыть зависимость результата теста от того, что
+# случайно окажется в окружении запускающего.
+os.environ["ANTHROPIC_API_KEY"] = ""
+# Все запросы идут с одного client IP, поэтому несколько классов подряд
 # выбивают дефолтное ведро (40) и роуты начинают отдавать 429 вместо своих
 # 200/401/404. Сам лимитер проверен в test_rate_limiter.py — здесь он не предмет
 # теста, а помеха.
 os.environ["WAKE_RATE_LIMIT_CAPACITY"] = "100000"
 os.environ["WAKE_RATE_LIMIT_REFILL"] = "100000"
 
-from fastapi.testclient import TestClient
+import httpx  # noqa: E402
+import testsupport  # noqa: E402
+import agent_db  # noqa: E402
 import app  # noqa: E402
+import api.auth as api_auth  # noqa: E402
 import audit_log as al  # noqa: E402
-import database  # noqa: E402
+import db  # noqa: E402
+import session  # noqa: E402
+
+# httpx пишет в лог каждый запрос; на этом прогоне это 60 строк шума, а предмет
+# теста — ответы роутов, не сам факт запроса.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
 class NullRateLimiter:
     """Всегда пропускает. Сам лимитер проверен в test_rate_limiter.py; здесь
-    он не предмет теста, а помеха — TestClient не стартует Redis."""
+    он не предмет теста, а помеха — тесты не поднимают Redis."""
 
     async def allow(self, key, cost=1.0):
         return True
@@ -54,29 +70,125 @@ class NullRateLimiter:
     async def ping(self):
         return True
 
-    async def close(self):
-        pass
-
 
 app._rate_limiter = NullRateLimiter()
 
-# Инициализируем audit_log в временной БД
-al.init_audit_db(os.environ["WAKE_AUDIT_DB_PATH"])
+
+class HttpCase(testsupport.PgCase):
+    """Клиент + чистая база на каждый тест: таблицы переживают тест, а тесты
+    пишут в одну и ту же wake_test."""
+
+    # индекс аккаунта Lighter, который «отвечает» подменённый lighter_rest
+    wallet_account_index = 7
+
+    async def asyncSetUp(self):
+        await super().asyncSetUp()
+        self.client = httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app.app), base_url="http://testserver"
+        )
+        self.addAsyncCleanup(self.client.aclose)
+
+    async def sign_in_telegram(self, telegram_id: int) -> dict:
+        """Вход виджетом — самый дешёвый способ получить настоящий токен.
+
+        Хелпер отдаёт заголовки, потому что почти каждый приватный роут теперь
+        читает субъекта из Authorization; собирать токен вручную через
+        session.issue() здесь нельзя — тест проверял бы не то, что выдаёт вход."""
+        r = await self.client.post(
+            "/auth/telegram", json=telegram_login_payload(user_id=telegram_id)
+        )
+        self.assertEqual(r.status_code, 200, r.text)
+        return auth(r.json()["token"])
+
+    def patch_wallet_infra(self) -> None:
+        """Подменяет ровно две вещи, которых в песочнице нет: Redis, где лежит
+        challenge (fakeredis), и ответ Lighter про индекс аккаунта. Всё остальное,
+        включая восстановление адреса из подписи, идёт кодом прода.
+
+        Повторный вызов ничего не пересохраняет: иначе cleanup второго вызова
+        вернул бы первый fake вместо настоящего клиента."""
+        if hasattr(self, "_wallet_originals"):
+            return
+        import fakeredis.aioredis
+        import wallet_auth
+
+        self._wallet_originals = (wallet_auth._client, api_auth.get_account_index_by_l1)
+        wallet_auth._client = fakeredis.aioredis.FakeRedis(decode_responses=True)
+        api_auth.get_account_index_by_l1 = lambda address, network=None: (
+            self.wallet_account_index
+        )
+
+        def restore():
+            wallet_auth._client, api_auth.get_account_index_by_l1 = (
+                self._wallet_originals
+            )
+
+        self.addCleanup(restore)
+
+    async def wallet_challenge(self, l1_address: str) -> str:
+        self.patch_wallet_infra()
+        r = await self.client.post(
+            "/auth/wallet/challenge", json={"l1_address": l1_address}
+        )
+        self.assertEqual(r.status_code, 200, r.text)
+        return r.json()["message"]
+
+    async def sign_in_wallet(
+        self, account_index: int = 7, account=None
+    ) -> tuple[dict, object]:
+        """Вход кошельком по-настоящему: challenge подписывается тем же ключом,
+        из которого кошелёк получил адрес.
+
+        Возвращает (заголовки, аккаунт): аккаунт нужен тестам на подпись, где
+        подписывает не тот, кто запрашивал вход.
+        """
+        from eth_account import Account
+
+        self.patch_wallet_infra()
+        self.wallet_account_index = account_index
+        account = account or Account.create()
+        message = await self.wallet_challenge(account.address)
+        signature = sign_challenge(message, account.key)
+
+        r = await self.client.post(
+            "/auth/wallet/verify", json={"message": message, "signature": signature}
+        )
+        self.assertEqual(r.status_code, 200, r.text)
+        body = r.json()
+        self.assertEqual(body["user_id"], account.address)
+        self.assertEqual(body["lighter_account_index"], account_index)
+        return auth(body["token"]), account
 
 
-async def _create_pg_schema() -> None:
-    """Создаёт таблицы async-слоя во временной aiosqlite-БД и освоболяет пул.
-
-    dispose() важен: иначе соединение, открытое в этом event loop, попадёт в пул
-    и на первом запросе TestClient (другой loop) вылезет «attached to a
-    different loop». Файл БД остаётся — схемы переживают dispose."""
-    await database.init_db()
-    await database.close_db()
+def auth(token: str) -> dict:
+    return {"Authorization": f"Bearer {token}"}
 
 
-asyncio.run(_create_pg_schema())
+def sign_challenge(message: str, private_key) -> str:
+    """Подпись challenge так же, как её делает кошелёк по personal_sign: EIP-191 с
+    тем же encode_defunct, что использует проверка на бэкенде.
 
-client = TestClient(app.app)
+    Формат ответа — 0x-_prefixed hex: ровно то, что отдаёт браузерный кошелёк и
+    что принимает recover_message.
+    """
+    from eth_account import Account
+    from eth_account.messages import encode_defunct
+
+    signature = Account.sign_message(
+        encode_defunct(text=message), private_key=private_key
+    ).signature
+    return "0x" + signature.hex()
+
+
+def forged_token(user_id: str = "tg_999") -> str:
+    """Токен правильной формы, но с подделанной подписью.
+
+    Именно так выглядит атака из консоли браузера: структуру wk1 придумывать не
+    нужно, достаточно взять выданный токен и поменять один символ."""
+    token, _ = session.issue(user_id)
+    prefix, payload, signature = token.split(".")
+    flipped = ("a" if signature[-1] != "a" else "b") + signature[:-1]
+    return f"{prefix}.{payload}.{flipped}"
 
 
 def telegram_login_payload(
@@ -127,28 +239,16 @@ def mini_app_init_data(
     return urlencode(params)
 
 
-class TestApiSmoke(unittest.TestCase):
-    @classmethod
-    def setUpClass(cls):
-        # фикстура: две строки leaders, чтобы GET /leaders отвечал непустым списком
-        import db
-
-        with db.connect(os.environ["WAKE_DB_PATH"]) as conn:
-            for id_, idx, handle, fee in [
-                ("t1", 101, "@northstar", 8),
-                ("t2", 102, "@vega.eth", 6),
-            ]:
-                db.upsert_leader(conn, id_, idx, handle, fee)
-
-    def test_health_routes(self):
-        health = client.get("/health").json()
+class TestApiSmoke(HttpCase):
+    async def test_health_routes(self):
+        health = (await self.client.get("/health")).json()
         self.assertEqual(health["status"], "ok")
         self.assertEqual(health["network"], app.settings.wake_lighter_network)
         self.assertTrue(health["dry_run"])
-        self.assertEqual(client.get("/docs").status_code, 200)
-        self.assertEqual(client.get("/openapi.json").status_code, 200)
+        self.assertEqual((await self.client.get("/docs")).status_code, 200)
+        self.assertEqual((await self.client.get("/openapi.json")).status_code, 200)
 
-    def test_rate_limiter_middleware_really_wraps_the_routes(self):
+    async def test_rate_limiter_middleware_really_wraps_the_routes(self):
         """Ведро по IP стоит перед всеми роутами: на нулевом восполнении второй
         запрос подряд обязан получить 429, а не результат роута. Без этой проверки
         завышенная ёмкость ведра в заголовке файла могла бы означать «лимитер
@@ -171,51 +271,107 @@ class TestApiSmoke(unittest.TestCase):
         original = app._rate_limiter
         app._rate_limiter = FakeRateLimiter()
         try:
-            self.assertEqual(client.get("/predict/markets").status_code, 200)
-            r = client.get("/predict/markets")
+            self.assertEqual(
+                (await self.client.get("/predict/markets")).status_code, 200
+            )
+            r = await self.client.get("/predict/markets")
             self.assertEqual(r.status_code, 429)
             self.assertIn("Retry-After", r.headers)
         finally:
             app._rate_limiter = original
-        self.assertEqual(client.get("/predict/markets").status_code, 200)
+        self.assertEqual((await self.client.get("/predict/markets")).status_code, 200)
 
-    def test_copy_trading_cycle(self):
-        r = client.post("/followers", json={"l1_address": "0xabc"})
-        self.assertEqual(r.status_code, 200)
-        follower_id = r.json()["follower_id"]
+    async def test_copy_trading_cycle(self):
+        leader_headers, _ = await self.sign_in_wallet(999)
+        follower_headers = await self.sign_in_telegram(5001)
+        follower_id = "tg_5001"
 
-        r = client.post(
+        r = await self.client.post(
             "/leaders",
-            json={"lighter_account_index": 999, "handle": "@smoke", "fee_bps": 8},
+            json={"handle": "@smoke", "fee_bps": 8},
+            headers=leader_headers,
         )
-        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.status_code, 200, r.text)
         leader_id = r.json()["leader_id"]
 
-        r = client.post(
+        r = await self.client.get("/leaders")
+        self.assertIn(leader_id, [x["id"] for x in r.json()])
+
+        r = await self.client.post(
             "/follows",
-            json={
-                "follower_id": follower_id,
-                "leader_id": leader_id,
-                "allocation_usd": 500,
-            },
+            json={"leader_id": leader_id, "allocation_usd": 500},
+            headers=follower_headers,
+        )
+        self.assertEqual(r.status_code, 200, r.text)
+        follow_id = r.json()["follow_id"]
+
+        r = await self.client.get("/follows", headers=follower_headers)
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(len(r.json()), 1)
+        self.assertEqual(r.json()[0]["follower_id"], follower_id)
+
+        r = await self.client.get(f"/follows/by-leader/{leader_id}")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["follower_count"], 1)
+
+        r = await self.client.post(
+            f"/follows/{follow_id}/pause", headers=follower_headers
+        )
+        self.assertEqual(r.status_code, 200)
+        r = await self.client.get("/follows", headers=follower_headers)
+        self.assertEqual(r.json()[0]["paused"], 1)
+        r = await self.client.post(
+            f"/follows/{follow_id}/resume", headers=follower_headers
         )
         self.assertEqual(r.status_code, 200)
 
-        r = client.get(f"/follows/by-follower/{follower_id}")
-        self.assertEqual(r.status_code, 200)
-        self.assertEqual(len(r.json()), 1)
+        # чужая подписка не отдаётся, не ставится на паузу и не удаляется: у
+        # второго входа свой субъект токена, а follower_id подставить нечем
+        stranger = await self.sign_in_telegram(5002)
+        r = await self.client.post(f"/follows/{follow_id}/pause", headers=stranger)
+        self.assertEqual(r.status_code, 404)
+        r = await self.client.delete(f"/follows/{follow_id}", headers=stranger)
+        self.assertEqual(r.status_code, 404)
+        r = await self.client.get("/follows", headers=stranger)
+        self.assertEqual(r.json(), [])
 
-        r = client.get(f"/follows/by-leader/{leader_id}")
+        # комиссию лидера меняет только тот, чей вход привязал этот аккаунт:
+        # второй кошелёк — свой, другой индекс, и он чужого лидера не трогает
+        other_headers, _ = await self.sign_in_wallet(998)
+        r = await self.client.patch(
+            f"/leaders/{leader_id}/fee", json={"fee_bps": 12}, headers=other_headers
+        )
+        self.assertEqual(r.status_code, 403)
+        r = await self.client.patch(
+            f"/leaders/{leader_id}/fee", json={"fee_bps": 12}, headers=leader_headers
+        )
         self.assertEqual(r.status_code, 200)
-        self.assertEqual(r.json()["follower_count"], 1)
-        follow_id = r.json()["follows"][0]["id"]
+        self.assertEqual(r.json()["fee_bps"], 12)
 
-        r = client.post(f"/follows/{follow_id}/pause?follower_id={follower_id}")
-        self.assertEqual(r.status_code, 200)
-        r = client.post(f"/follows/{follow_id}/resume?follower_id={follower_id}")
-        self.assertEqual(r.status_code, 200)
+        # подписка без подтверждённого кошелька лидера не публикуется: индекс
+        # аккаунта — не то, что клиент может прислать сам
+        r = await self.client.post(
+            "/leaders", json={"handle": "@no-wallet"}, headers=follower_headers
+        )
+        self.assertEqual(r.status_code, 403)
 
-        r = client.post(
+        r = await self.client.post(
+            "/simulate-mirror",
+            json={
+                "leader_id": leader_id,
+                "market_id": 1,
+                "side": "long",
+                "is_increase": True,
+                "size_delta": 0.5,
+                "price": 100000,
+                "leader_equity_usd": 50000,
+            },
+            headers={"X-Curator-Token": "smoke-test-token"},
+        )
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(len(r.json()["orders"]), 1)
+
+        r = await self.client.post(
             "/simulate-mirror",
             json={
                 "leader_id": leader_id,
@@ -227,11 +383,20 @@ class TestApiSmoke(unittest.TestCase):
                 "leader_equity_usd": 50000,
             },
         )
-        self.assertEqual(r.status_code, 200)
-        self.assertEqual(len(r.json()["orders"]), 1)
+        self.assertEqual(
+            r.status_code,
+            403,
+            "ответ перечисляет аллокации подписчиков — это не публичные данные",
+        )
 
-    def test_predict_cycle(self):
-        r = client.post(
+        r = await self.client.delete(f"/follows/{follow_id}", headers=follower_headers)
+        self.assertEqual(r.status_code, 200)
+
+    async def test_predict_cycle(self):
+        curator = {"X-Curator-Token": "smoke-test-token"}
+        trader = await self.sign_in_telegram(6001)
+
+        r = await self.client.post(
             "/predict/markets/price",
             json={
                 "question": "BTC above 100k?",
@@ -248,7 +413,7 @@ class TestApiSmoke(unittest.TestCase):
             "создание price-рынка без куратора — прямой путь к рынку, который зарезолвят под свою позицию",
         )
 
-        r = client.post(
+        r = await self.client.post(
             "/predict/markets/price",
             json={
                 "question": "BTC above 100k?",
@@ -258,7 +423,7 @@ class TestApiSmoke(unittest.TestCase):
                 "resolve_at": 1999999999,
                 "b": 100,
             },
-            headers={"X-Curator-Token": "smoke-test-token"},
+            headers=curator,
         )
         self.assertEqual(r.status_code, 200)
         market_id = r.json()["market_id"]
@@ -266,20 +431,20 @@ class TestApiSmoke(unittest.TestCase):
         # ручной триггер автоматической резолюции: без токена — отказ; с токеном —
         # отказ, потому что дедлайн рынка (2033 год) ещё не наступил. Сетевой запрос
         # к Lighter при этом не делается: обе проверки идут до него.
-        r = client.post(f"/predict/markets/{market_id}/resolve-price", json={})
+        r = await self.client.post(
+            f"/predict/markets/{market_id}/resolve-price", json={}
+        )
         self.assertEqual(
             r.status_code,
             403,
             "цена берётся в момент вызова — иначе держатель позиции сам выбирает момент резолюции",
         )
-        r = client.post(
-            f"/predict/markets/{market_id}/resolve-price",
-            json={},
-            headers={"X-Curator-Token": "smoke-test-token"},
+        r = await self.client.post(
+            f"/predict/markets/{market_id}/resolve-price", json={}, headers=curator
         )
         self.assertEqual(r.status_code, 409, "до resolve_at закрывать рынок нельзя")
 
-        r = client.post(
+        r = await self.client.post(
             "/predict/markets/event",
             json={"question": "Will X win?", "resolve_at": 1999999999, "b": 100},
         )
@@ -287,54 +452,127 @@ class TestApiSmoke(unittest.TestCase):
             r.status_code, 403, "event-market без токена куратора должен быть запрещён"
         )
 
-        r = client.post(
+        r = await self.client.post(
             "/predict/markets/event",
             json={"question": "Will X win?", "resolve_at": 1999999999, "b": 100},
-            headers={"X-Curator-Token": "smoke-test-token"},
+            headers=curator,
         )
         self.assertEqual(r.status_code, 200)
         event_id = r.json()["market_id"]
 
-        r = client.get("/predict/markets")
+        r = await self.client.get("/predict/markets")
         self.assertEqual(r.status_code, 200)
         self.assertGreaterEqual(len(r.json()), 2)
 
-        r = client.get(f"/predict/markets/{market_id}/preview?outcome=yes&shares=5")
+        r = await self.client.get(
+            f"/predict/markets/{market_id}/preview?outcome=yes&shares=5"
+        )
         self.assertEqual(r.status_code, 200)
         self.assertGreater(r.json()["cost_usd"], 0)
 
-        r = client.post(
-            f"/predict/markets/{market_id}/trade",
-            json={"user_id": "u1", "outcome": "yes", "shares": 10},
+        # preview — тот же расчёт, что и сделка: ноль и чужой исход должны
+        # отклоняться, иначе в карточке рынка появляется цена, которой нет
+        self.assertEqual(
+            (
+                await self.client.get(
+                    f"/predict/markets/{market_id}/preview?outcome=yes&shares=0"
+                )
+            ).status_code,
+            400,
         )
-        self.assertEqual(r.status_code, 200)
+        self.assertEqual(
+            (
+                await self.client.get(
+                    f"/predict/markets/{market_id}/preview?outcome=grey&shares=5"
+                )
+            ).status_code,
+            422,
+        )
+
+        # сделка без входа невозможна: до токена trade брал user_id из тела, и
+        # «сыграть на чужом месте» стоило одну строку JSON
+        r = await self.client.post(
+            f"/predict/markets/{market_id}/trade",
+            json={"outcome": "yes", "shares": 10},
+        )
+        self.assertEqual(r.status_code, 401)
+        self.assertEqual(r.json()["error"]["code"], "SESSION_REQUIRED")
+
+        r = await self.client.post(
+            f"/predict/markets/{market_id}/trade",
+            json={"outcome": "yes", "shares": 10},
+            headers=auth(forged_token("tg_6001")),
+        )
+        self.assertEqual(
+            r.status_code, 401, "токен правильной формы, но не с нашей подписью"
+        )
+        self.assertEqual(r.json()["error"]["code"], "SESSION_BAD_SIGNATURE")
+
+        r = await self.client.post(
+            f"/predict/markets/{market_id}/trade",
+            json={"outcome": "yes", "shares": 10},
+            headers=trader,
+        )
+        self.assertEqual(r.status_code, 200, r.text)
         self.assertGreater(r.json()["cost_usd"], 0)
         buy_cost = r.json()["cost_usd"]
 
         # продажа половины позиции: cost отрицательный, юзеру возвращаются деньги
-        r = client.post(
+        r = await self.client.post(
             f"/predict/markets/{market_id}/trade",
-            json={"user_id": "u1", "outcome": "yes", "shares": -4},
+            json={"outcome": "yes", "shares": -4},
+            headers=trader,
         )
         self.assertEqual(r.status_code, 200)
         self.assertLess(r.json()["cost_usd"], 0)
         sell_cost = r.json()["cost_usd"]
 
-        # объём считается по |cost| обеих сделок — это сделки через Wake, не рыночный объём
-        r = client.get("/predict/markets")
+        # каждая состоявшаяся сделка попадает в аудит: без этого разбирать
+        # «кто и когда нажал» было бы нечем. Актёр — субъект токена, а не строка
+        # из запроса.
+        audit = await al.recent_actions(actor="tg_6001", action="trade_executed")
+        self.assertEqual(len(audit), 2)
+        self.assertTrue(all(row["success"] == 1 for row in audit))
+
+        # отказ тоже аудится — попытка продать больше, чем есть, это то, что
+        # стоит увидеть постфактум
+        r = await self.client.post(
+            f"/predict/markets/{market_id}/trade",
+            json={"outcome": "yes", "shares": -1000},
+            headers=trader,
+        )
+        self.assertEqual(r.status_code, 400)
+        failed = [
+            row
+            for row in await al.recent_actions(actor="tg_6001", action="trade_executed")
+            if row["success"] == 0
+        ]
+        self.assertEqual(len(failed), 1)
+
+        # объём считается по |cost| обеих состоявшихся сделок — это сделки через
+        # Wake, не рыночный объём
+        r = await self.client.get("/predict/markets")
         row = next(m for m in r.json() if m["id"] == market_id)
         self.assertEqual(row["trade_count"], 2)
         self.assertAlmostEqual(row["volume_usd"], buy_cost + abs(sell_cost), delta=1e-6)
 
-        # позиции юзера: 6 shares YES, средняя входа = уплаченное минус возвращенное
-        r = client.get("/predict/positions?user_id=u1")
+        # позиции трейдера: 6 shares YES, средняя входа = уплаченное минус возвращенное
+        r = await self.client.get("/predict/positions", headers=trader)
         self.assertEqual(r.status_code, 200)
         pos = next(p for p in r.json() if p["market_id"] == market_id)
         self.assertEqual(pos["shares"], 6)
         self.assertEqual(pos["outcome"], "yes")
         self.assertFalse(pos["claimed"])
 
-        r = client.post(
+        # чужой вход своих позиций не видит: список строится по субъекту токена
+        stranger = await self.sign_in_telegram(6002)
+        r = await self.client.get("/predict/positions", headers=stranger)
+        self.assertEqual(
+            r.status_code, 200, "пустой список своих позиций — это норма, а не ошибка"
+        )
+        self.assertNotIn(market_id, [p["market_id"] for p in r.json()])
+
+        r = await self.client.post(
             f"/predict/markets/{market_id}/resolve-event",
             json={
                 "outcome": "yes",
@@ -346,39 +584,62 @@ class TestApiSmoke(unittest.TestCase):
             r.status_code, 403, "resolve-event без токена куратора должен быть запрещён"
         )
 
-        r = client.post(
+        r = await self.client.post(
             f"/predict/markets/{market_id}/resolve-event",
             json={
                 "outcome": "yes",
                 "resolved_by": "curator",
                 "evidence_url": "https://example.com",
             },
-            headers={"X-Curator-Token": "smoke-test-token"},
+            headers=curator,
         )
         self.assertEqual(r.status_code, 200)
 
         # исход выносится один раз: переписать его = переписать выплаты
-        r = client.post(
+        r = await self.client.post(
             f"/predict/markets/{market_id}/resolve-event",
             json={
                 "outcome": "no",
                 "resolved_by": "curator",
                 "evidence_url": "https://example.com",
             },
-            headers={"X-Curator-Token": "smoke-test-token"},
+            headers=curator,
         )
         self.assertEqual(r.status_code, 409)
 
-        r = client.post(f"/predict/markets/{market_id}/claim?user_id=u1")
+        # резолюция записана в аудит — с тем же исходом, что лёг в базу
+        resolution_rows = await al.recent_actions(
+            actor="curator", action="market_resolution"
+        )
+        self.assertEqual([row["resource"] for row in resolution_rows], [market_id])
+
+        # чужой выигрыш не забирается: у stranger по этому рынку нет позиции, и
+        # пока claim принимал user_id в query, он получил бы 6.0 за tg_6001
+        r = await self.client.post(
+            f"/predict/markets/{market_id}/claim", headers=stranger
+        )
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["payout_usd"], 0.0)
+
+        r = await self.client.post(
+            f"/predict/markets/{market_id}/claim", headers=trader
+        )
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.json()["payout_usd"], 6.0)
 
+        # повторная выплата по тому же рынку — 0: позиция уже закрыта выплатой
+        r = await self.client.post(
+            f"/predict/markets/{market_id}/claim", headers=trader
+        )
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["payout_usd"], 0.0)
+
         # резолванный рынок виден только по фильтру, открытый список его больше не отдаёт
-        r = client.get("/predict/markets?status=resolved")
+        r = await self.client.get("/predict/markets?status=resolved")
         self.assertIn(market_id, [m["id"] for m in r.json()])
-        r = client.get("/predict/markets?status=open")
+        r = await self.client.get("/predict/markets?status=open")
         self.assertNotIn(market_id, [m["id"] for m in r.json()])
-        r = client.get("/predict/markets?status=bogus")
+        r = await self.client.get("/predict/markets?status=bogus")
         self.assertEqual(
             r.status_code,
             422,
@@ -386,26 +647,26 @@ class TestApiSmoke(unittest.TestCase):
         )
 
         # после резолюции позиция остаётся видимой, но claimable становится 0 после выплаты
-        r = client.get("/predict/positions?user_id=u1")
+        r = await self.client.get("/predict/positions", headers=trader)
         pos = next(p for p in r.json() if p["market_id"] == market_id)
         self.assertTrue(pos["claimed"])
         self.assertEqual(pos["claimable_usd"], 0.0)
         self.assertEqual(pos["market_outcome"], "yes")
 
         # event-рынок резолвится тем же путём
-        r = client.post(
+        r = await self.client.post(
             f"/predict/markets/{event_id}/resolve-event",
             json={
                 "outcome": "no",
                 "resolved_by": "curator",
                 "evidence_url": "https://example.com",
             },
-            headers={"X-Curator-Token": "smoke-test-token"},
+            headers=curator,
         )
         self.assertEqual(r.status_code, 200)
 
-    def test_funding_arb(self):
-        r = client.post(
+    async def test_funding_arb(self):
+        r = await self.client.post(
             "/funding-arb/check",
             json={
                 "market_id": 1,
@@ -418,7 +679,7 @@ class TestApiSmoke(unittest.TestCase):
         self.assertIsNotNone(r.json()["opportunity"])
         self.assertGreater(r.json()["opportunity"]["annualized_yield"], 0.8)
 
-        r = client.post(
+        r = await self.client.post(
             "/funding-arb/size",
             json={
                 "capital_usd": 1000,
@@ -433,7 +694,7 @@ class TestApiSmoke(unittest.TestCase):
         self.assertIsNotNone(r.json()["position"])
 
 
-class TestFundingLiveRoutes(unittest.TestCase):
+class TestFundingLiveRoutes(HttpCase):
     """GET-роуты funding читают живой Lighter, поэтому прогоняются на фикстурах с
     ФОРМОЙ ответа, снятой с mainnet 2026-10-02: market_id и rate — числа, а не
     строки; каждая площадка подписывает актив голым базовым именем ("BTC");
@@ -474,7 +735,8 @@ class TestFundingLiveRoutes(unittest.TestCase):
         },
     ]
 
-    def setUp(self):
+    async def asyncSetUp(self):
+        await super().asyncSetUp()
         import lighter_rest
 
         self._rates = lighter_rest.get_funding_rates
@@ -484,10 +746,8 @@ class TestFundingLiveRoutes(unittest.TestCase):
         self.addCleanup(setattr, lighter_rest, "get_funding_rates", self._rates)
         self.addCleanup(setattr, lighter_rest, "get_order_books", self._books)
 
-    def test_rates_ranked_by_annualized(self):
-        r = client.get("/funding/rates")
-        self.assertEqual(r.status_code, 200)
-        body = r.json()
+    async def test_rates_ranked_by_annualized(self):
+        body = (await self.client.get("/funding/rates")).json()
         self.assertEqual(
             body["epoch_hours"], 1, "годовая считается на часовой эпох, не на 8-часовой"
         )
@@ -510,15 +770,23 @@ class TestFundingLiveRoutes(unittest.TestCase):
         # чужим площадкам, и примесь их ставок дала бы total=4.
         self.assertEqual(body["total"], 2)
 
-    def test_positive_only_leaves_capturable_side(self):
-        got = client.get("/funding/rates?positive_only=true").json()["rates"]
+    async def test_positive_only_leaves_capturable_side(self):
+        got = (await self.client.get("/funding/rates?positive_only=true")).json()[
+            "rates"
+        ]
         self.assertEqual([x["market_id"] for x in got], [1])
         self.assertTrue(all(x["direction"] == "long" for x in got))
 
-    def test_rates_limit_and_502(self):
-        self.assertEqual(len(client.get("/funding/rates?limit=1").json()["rates"]), 1)
-        self.assertEqual(client.get("/funding/rates?limit=0").status_code, 422)
-        self.assertEqual(client.get("/funding/rates?limit=1000").status_code, 422)
+    async def test_rates_limit_and_502(self):
+        self.assertEqual(
+            len((await self.client.get("/funding/rates?limit=1")).json()["rates"]), 1
+        )
+        self.assertEqual(
+            (await self.client.get("/funding/rates?limit=0")).status_code, 422
+        )
+        self.assertEqual(
+            (await self.client.get("/funding/rates?limit=1000")).status_code, 422
+        )
 
         import lighter_rest
 
@@ -526,7 +794,7 @@ class TestFundingLiveRoutes(unittest.TestCase):
             raise RuntimeError("Lighter API недоступен")
 
         lighter_rest.get_funding_rates = boom
-        r = client.get("/funding/rates")
+        r = await self.client.get("/funding/rates")
         self.assertEqual(
             r.status_code,
             502,
@@ -534,7 +802,7 @@ class TestFundingLiveRoutes(unittest.TestCase):
         )
         self.assertIn("Lighter", r.json()["error"]["message"])
 
-    def test_venues_group_by_asset_and_accept_typed_spelling(self):
+    async def test_venues_group_by_asset_and_accept_typed_spelling(self):
         """/funding/venues полезен ровно одним: ставки одного актива рядом, по
         площадкам. Площадки в живом ответе подписывают актив голым именем, так что
         нормализация нужна для ВВОДА — юзер впишет "BTC-PERP" или "btcusdt" со
@@ -560,7 +828,7 @@ class TestFundingLiveRoutes(unittest.TestCase):
             },
         ]
         for typed in ("btc", "BTC-PERP", "btcusdt", "BTC/USDC"):
-            r = client.get(f"/funding/venues?symbol={typed}")
+            r = await self.client.get(f"/funding/venues?symbol={typed}")
             self.assertEqual(r.status_code, 200, typed)
             body = r.json()
             self.assertEqual(body["base"], "BTC", typed)
@@ -572,11 +840,11 @@ class TestFundingLiveRoutes(unittest.TestCase):
                 rates, sorted(rates, reverse=True), "отсортировано по убыванию ставки"
             )
 
-        r = client.get("/funding/venues?symbol=NOPE")
+        r = await self.client.get("/funding/venues?symbol=NOPE")
         self.assertEqual(r.status_code, 404)
 
-    def test_carry_markets_lists_real_pairs_with_sizing_inputs(self):
-        r = client.get("/funding/carry-markets")
+    async def test_carry_markets_lists_real_pairs_with_sizing_inputs(self):
+        r = await self.client.get("/funding/carry-markets")
         self.assertEqual(r.status_code, 200)
         body = r.json()
         self.assertEqual(body["quote"], "USDC")
@@ -590,19 +858,19 @@ class TestFundingLiveRoutes(unittest.TestCase):
         self.assertEqual(eth["hourly_rate"], 0.0003)
         self.assertAlmostEqual(eth["annualized"], 0.0003 * 24 * 365, places=9)
 
-    def test_carry_market_without_funding_row_is_reported_not_dropped(self):
+    async def test_carry_market_without_funding_row_is_reported_not_dropped(self):
         """Пара существует на книге независимо от того, есть ли по ней ставка:
         убрать её из списка — значит соврать про количество рынков."""
         import lighter_rest
 
         lighter_rest.get_funding_rates = lambda network=None: []
-        body = client.get("/funding/carry-markets").json()
+        body = (await self.client.get("/funding/carry-markets")).json()
         self.assertEqual(body["count"], 1)
         self.assertIsNone(body["markets"][0]["hourly_rate"])
         self.assertIsNone(body["markets"][0]["annualized"])
 
-    def test_portfolio_risk(self):
-        r = client.post(
+    async def test_portfolio_risk(self):
+        r = await self.client.post(
             "/portfolio/risk",
             json={
                 "positions": [
@@ -621,7 +889,7 @@ class TestFundingLiveRoutes(unittest.TestCase):
             body["portfolio_dollar_volatility"], body["naive_dollar_volatility"]
         )
 
-        r = client.post(
+        r = await self.client.post(
             "/portfolio/hedge",
             json={
                 "target": {
@@ -639,7 +907,7 @@ class TestFundingLiveRoutes(unittest.TestCase):
         self.assertEqual(r.status_code, 200)
 
 
-class TestMarketsOverview(unittest.TestCase):
+class TestMarketsOverview(HttpCase):
     """Главный экран сайта и /markets в боте обязаны показывать ОДНИ числа,
     поэтому роут проверяется на фикстурах с формой живого ответа mainnet
     (2026-10-02): market_id и decimals — числа, price/volume — из свечей,
@@ -694,7 +962,8 @@ class TestMarketsOverview(unittest.TestCase):
         {"exchange": "binance", "market_id": 1, "rate": 0.0001, "symbol": "BTC"},
     ]
 
-    def setUp(self):
+    async def asyncSetUp(self):
+        await super().asyncSetUp()
         import lighter_rest
 
         self._overview = lighter_rest.get_market_overview
@@ -711,8 +980,8 @@ class TestMarketsOverview(unittest.TestCase):
         self.addCleanup(setattr, lighter_rest, "get_market_overview", self._overview)
         self.addCleanup(setattr, lighter_rest, "get_funding_rates", self._rates)
 
-    def test_rows_carry_funding_and_keep_gap_visible(self):
-        r = client.get("/markets/overview")
+    async def test_rows_carry_funding_and_keep_gap_visible(self):
+        r = await self.client.get("/markets/overview")
         self.assertEqual(r.status_code, 200)
         body = r.json()
         self.assertEqual(
@@ -743,144 +1012,227 @@ class TestMarketsOverview(unittest.TestCase):
         # того же BTC игнорируется, и лёгкая ошибка в venue дала бы 0.0001.
         self.assertEqual(by_id[1]["funding_hourly"], 0.00008)
 
-    def test_dead_upstream_is_502_not_empty_overview(self):
+    async def test_dead_upstream_is_502_not_empty_overview(self):
         import lighter_rest
 
         def boom(symbols=None, network=None):
             raise RuntimeError("Lighter API недоступен")
 
         lighter_rest.get_market_overview = boom
-        r = client.get("/markets/overview")
+        r = await self.client.get("/markets/overview")
         self.assertEqual(r.status_code, 502)
         self.assertIn("Lighter", r.json()["error"]["message"])
 
 
-class TestPortfolioAndAgent(unittest.TestCase):
-    def test_subscription_and_agent(self):
-        r = client.post("/subscription/u1/start-trial")
+class TestPortfolioAndAgent(HttpCase):
+    """Агент и подписка: тир читается из базы, субъект — из токена, а трайл и
+    дневной объём переживают рестарт процесса, потому что живут в PostgreSQL."""
+
+    STEP = {
+        "market_id": 1,
+        "recent_prices": [99000, 99500, 100000, 100500, 101000],
+        "size_decimals": 4,
+        "price_decimals": 0,
+        "base_size_usd": 100,
+    }
+
+    async def test_subscription_trial_and_agent_step(self):
+        user = await self.sign_in_telegram(7001)
+        user_id = "tg_7001"
+
+        # без строки подписки человек существует как free: терминал открыт, агента нет
+        r = await self.client.get("/subscription", headers=user)
         self.assertEqual(r.status_code, 200)
-        r = client.get("/subscription/u1")
+        self.assertEqual(r.json()["tier"], "none")
+        self.assertFalse(r.json()["has_ai_agent"])
+
+        # шаг агента без трайла запрещён на сервере: проверка на фронте — подсказка,
+        # а до роута можно дойти curl'ом
+        r = await self.client.post("/agent/step", json=self.STEP, headers=user)
+        self.assertEqual(r.status_code, 403)
+        self.assertEqual(r.json()["error"]["code"], "FEATURE_NOT_AVAILABLE")
+
+        r = await self.client.post("/agent/step", json=self.STEP)
+        self.assertEqual(r.status_code, 401)
+
+        r = await self.client.post("/subscription/trial", headers=user)
+        self.assertEqual(r.status_code, 200, r.text)
         self.assertEqual(r.json()["tier"], "free_trial")
         self.assertTrue(r.json()["has_ai_agent"])
 
-        r = client.post(
-            "/agent/step",
-            json={
-                "user_id": "u1",
-                "market_id": 1,
-                "recent_prices": [99000, 99500, 100000, 100500, 101000],
-                "size_decimals": 4,
-                "price_decimals": 0,
-                "base_size_usd": 100,
-            },
+        # повторный трайл не двигает trial_started_at: иначе 14 дней продлеваются
+        # кликом, и это же больше не обнуляется деплоем
+        first = await agent_db.get_subscription(user_id)
+        r = await self.client.post("/subscription/trial", headers=user)
+        self.assertEqual(r.json()["tier"], "free_trial")
+        second = await agent_db.get_subscription(user_id)
+        self.assertEqual(first.trial_started_at, second.trial_started_at)
+
+        # momentum +2% по фикстурированному ряду — правило открывает long
+        r = await self.client.post("/agent/step", json=self.STEP, headers=user)
+        self.assertEqual(r.status_code, 200, r.text)
+        body = r.json()
+        self.assertEqual(body["action"], "long")
+        self.assertEqual(
+            body["execution"]["status"], "dry_run", "WAKE_DRY_RUN по умолчанию"
         )
+        self.assertGreater(body["volume_today_usd"], 0)
+
+        # сделка записана в базу, а не в словарь процесса: память, набранная за
+        # шаг, дописывается после него
+        rows = await agent_db.load_memory(user_id)
+        self.assertEqual(len(rows.trades), 1)
+        self.assertEqual(rows.trades[0].market_id, 1)
+        self.assertEqual(rows.trades[0].side, "long")
+
+        # дневной объём выводится из тех же строк: второй вызов видит то, что
+        # первый оставил в PostgreSQL
+        r = await self.client.get("/agent/memory", headers=user)
         self.assertEqual(r.status_code, 200)
-        self.assertEqual(r.json()["execution"]["status"], "dry_run")
+        self.assertEqual(len(r.json()["open_trades"]), 1)
+        self.assertEqual(r.json()["volume_today_usd"], body["volume_today_usd"])
 
-        r = client.get("/agent/memory/u1")
-        self.assertEqual(r.status_code, 200)
+        # тот же ряд при открытой позиции в ту же сторону — hold: шаг ничего не
+        # исполняет, и execution остаётся пустым, а не выдуманным статусом
+        r = await self.client.post("/agent/step", json=self.STEP, headers=user)
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertIsNone(r.json()["execution"])
+        after_hold = await agent_db.load_memory(user_id)
+        self.assertEqual(len(after_hold.trades), 1, "hold не записывает вторую сделку")
+
+        r = await self.client.post(
+            "/agent/step", json={**self.STEP, "recent_prices": []}, headers=user
+        )
+        self.assertEqual(
+            r.status_code, 422, "пустой ряд цен — ошибка запроса, а не «hold»"
+        )
+
+    async def test_upgrade_requires_curator(self):
+        user = await self.sign_in_telegram(7002)
+
+        r = await self.client.post("/subscription/tg_7002/upgrade")
+        self.assertEqual(
+            r.status_code, 403, "своего входа мало: платёжного процесса здесь нет"
+        )
+
+        # подписки ещё нет — апгрейд её не создаёт, точка входа в подписку одна
+        r = await self.client.post(
+            "/subscription/tg_7002/upgrade",
+            headers={"X-Curator-Token": "smoke-test-token"},
+        )
+        self.assertEqual(r.status_code, 404)
+
+        await self.client.post("/subscription/trial", headers=user)
+        r = await self.client.post(
+            "/subscription/tg_7002/upgrade",
+            headers={"X-Curator-Token": "smoke-test-token"},
+        )
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["tier"], "pro")
+
+        r = await self.client.get("/subscription", headers=user)
+        self.assertEqual(r.json()["tier"], "pro")
+        self.assertTrue(r.json()["has_ai_agent"])
 
 
-class TestTelegramAuth(unittest.TestCase):
+class TestTelegramAuth(HttpCase):
     """Вход через Telegram — один из двух способов попасть в Wake (второй — кошелёк),
-    поэтому проверяется и подпись, и запись в followers."""
+    поэтому проверяется и подпись, и запись в followers. Читается через репозиторий
+    db.follower_by_l1: у Telegram-входа l1_address = "tg:<id>", тем же путём идёт и
+    прод."""
 
-    def _followers(self):
-        import sqlite3
+    async def followers_row(self, telegram_id: int):
+        return await db.follower_by_l1(f"tg:{telegram_id}")
 
-        conn = sqlite3.connect(_PG_DB_FILE)
-        conn.row_factory = sqlite3.Row
-        try:
-            return conn.execute(
-                "SELECT id, l1_address, telegram_id FROM followers"
-            ).fetchall()
-        finally:
-            conn.close()
-
-    def test_valid_signature_creates_follower(self):
-        r = client.post("/auth/telegram", json=telegram_login_payload())
+    async def test_valid_signature_creates_follower(self):
+        r = await self.client.post("/auth/telegram", json=telegram_login_payload())
         self.assertEqual(r.status_code, 200)
         body = r.json()
         self.assertEqual(body["user_id"], "tg_4242")
 
-        rows = [row for row in self._followers() if row["telegram_id"] == 4242]
-        self.assertEqual(len(rows), 1)
-        self.assertEqual(rows[0]["id"], "tg_4242")
+        row = await self.followers_row(4242)
+        self.assertIsNotNone(row)
+        self.assertEqual(row["id"], "tg_4242")
 
-    def test_repeat_login_does_not_duplicate(self):
-        client.post("/auth/telegram", json=telegram_login_payload(user_id=4243))
-        client.post("/auth/telegram", json=telegram_login_payload(user_id=4243))
-        rows = [row for row in self._followers() if row["telegram_id"] == 4243]
-        self.assertEqual(len(rows), 1)
+    async def test_repeat_login_does_not_duplicate(self):
+        first = await self.client.post(
+            "/auth/telegram", json=telegram_login_payload(user_id=4243)
+        )
+        second = await self.client.post(
+            "/auth/telegram", json=telegram_login_payload(user_id=4243)
+        )
+        self.assertEqual(first.json()["user_id"], second.json()["user_id"])
+        self.assertEqual(
+            (await self.followers_row(4243))["id"],
+            "tg_4243",
+            "повторный вход должен вести к той же записи, а не к второй",
+        )
 
-    def test_tampered_signature_rejected(self):
+    async def test_tampered_signature_rejected(self):
         payload = telegram_login_payload(user_id=4244)
         payload["first_name"] = "Attacker"  # меняем поле, подпись остаётся от старого
-        r = client.post("/auth/telegram", json=payload)
+        r = await self.client.post("/auth/telegram", json=payload)
         self.assertEqual(r.status_code, 401)
+        self.assertIsNone(await self.followers_row(4244))
 
-    def test_stale_auth_date_rejected(self):
+    async def test_stale_auth_date_rejected(self):
         payload = telegram_login_payload(
             user_id=4245, auth_date=int(time.time()) - 90000
         )
-        r = client.post("/auth/telegram", json=payload)
+        r = await self.client.post("/auth/telegram", json=payload)
         self.assertEqual(
             r.status_code, 401, "старше суток — подписывать такой вход уже нельзя"
         )
-        self.assertEqual(
-            [row for row in self._followers() if row["telegram_id"] == 4245], []
-        )
+        self.assertIsNone(await self.followers_row(4245))
 
 
-class TestTelegramMiniApp(unittest.TestCase):
+class TestTelegramMiniApp(HttpCase):
     """Мини-апп открывается кнопкой из бота, и вход там идёт по initData, а не по
     виджету. Подпись проверяется на токене бота — то есть подделать её можно только
     зная этот токен, а не правкой ответа в браузере."""
 
-    def _followers(self):
-        import sqlite3
+    async def followers_row(self, telegram_id: int):
+        return await db.follower_by_l1(f"tg:{telegram_id}")
 
-        conn = sqlite3.connect(_PG_DB_FILE)
-        conn.row_factory = sqlite3.Row
-        try:
-            return conn.execute(
-                "SELECT id, l1_address, telegram_id FROM followers"
-            ).fetchall()
-        finally:
-            conn.close()
-
-    def test_valid_init_data_creates_follower(self):
-        r = client.post(
-            "/auth/telegram/init", json={"init_data": mini_app_init_data(user_id=4350)}
+    async def test_valid_init_data_creates_follower(self):
+        r = await self.client.post(
+            "/auth/telegram/init",
+            json={"init_data": mini_app_init_data(user_id=4350)},
         )
         self.assertEqual(r.status_code, 200, r.text)
         body = r.json()
         self.assertEqual(body["user_id"], "tg_4350")
-        self.assertEqual(body["username"], "smoke_mini_4350")
-        rows = [row for row in self._followers() if row["telegram_id"] == 4350]
-        self.assertEqual(len(rows), 1)
+        self.assertGreater(body["expires_at"], time.time())
+        self.assertEqual((await self.followers_row(4350))["id"], "tg_4350")
 
-    def test_widget_and_miniapp_login_share_one_follower(self):
-        client.post("/auth/telegram", json=telegram_login_payload(user_id=4351))
-        r = client.post(
-            "/auth/telegram/init", json={"init_data": mini_app_init_data(user_id=4351)}
+        # выданный токен рабочий: имя пользователя ответ не отдаёт, а вот вход
+        # с этого момента существует
+        r = await self.client.get("/subscription", headers=auth(body["token"]))
+        self.assertEqual(r.status_code, 200)
+
+    async def test_widget_and_miniapp_login_share_one_follower(self):
+        await self.client.post(
+            "/auth/telegram", json=telegram_login_payload(user_id=4351)
+        )
+        r = await self.client.post(
+            "/auth/telegram/init",
+            json={"init_data": mini_app_init_data(user_id=4351)},
         )
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.json()["user_id"], "tg_4351")
-        rows = [row for row in self._followers() if row["telegram_id"] == 4351]
         self.assertEqual(
-            len(rows), 1, "два входа одного человека не плодят два аккаунта"
+            (await self.followers_row(4351))["id"],
+            "tg_4351",
+            "два входа одного человека не плодят два аккаунта",
         )
 
-    def test_foreign_token_signature_rejected(self):
+    async def test_foreign_token_signature_rejected(self):
         init_data = mini_app_init_data(user_id=4352, token="999999:not-our-bot-token")
-        r = client.post("/auth/telegram/init", json={"init_data": init_data})
+        r = await self.client.post("/auth/telegram/init", json={"init_data": init_data})
         self.assertEqual(r.status_code, 401)
-        self.assertEqual(
-            [row for row in self._followers() if row["telegram_id"] == 4352], []
-        )
+        self.assertIsNone(await self.followers_row(4352))
 
-    def test_tampered_user_field_rejected(self):
+    async def test_tampered_user_field_rejected(self):
         # Подписанную строку пересобираем с чужим id, оставив старый hash: ровно то,
         # что делает правка initData в консоли браузера.
         from urllib.parse import parse_qsl
@@ -889,44 +1241,42 @@ class TestTelegramMiniApp(unittest.TestCase):
         user = json.loads(pairs["user"])
         user["id"] = 1
         pairs["user"] = json.dumps(user, ensure_ascii=False)
-        r = client.post("/auth/telegram/init", json={"init_data": urlencode(pairs)})
+        r = await self.client.post(
+            "/auth/telegram/init", json={"init_data": urlencode(pairs)}
+        )
         self.assertEqual(
             r.status_code, 401, "редакция initData в браузере не даёт вход"
         )
-        self.assertEqual(
-            [row for row in self._followers() if row["telegram_id"] == 1], []
-        )
+        self.assertIsNone(await self.followers_row(1))
 
-    def test_stale_init_data_rejected(self):
+    async def test_stale_init_data_rejected(self):
         init_data = mini_app_init_data(user_id=4354, auth_date=int(time.time()) - 90000)
-        r = client.post("/auth/telegram/init", json={"init_data": init_data})
+        r = await self.client.post("/auth/telegram/init", json={"init_data": init_data})
         self.assertEqual(r.status_code, 401)
-        self.assertEqual(
-            [row for row in self._followers() if row["telegram_id"] == 4354], []
-        )
+        self.assertIsNone(await self.followers_row(4354))
 
-    def test_empty_init_data_rejected(self):
-        r = client.post("/auth/telegram/init", json={"init_data": ""})
+    async def test_empty_init_data_rejected(self):
+        r = await self.client.post("/auth/telegram/init", json={"init_data": ""})
         self.assertEqual(r.status_code, 400)
 
 
-class TestHardening(unittest.TestCase):
+class TestHardening(HttpCase):
     """Шаг «Security & Core» проверяется по факту ответа, а не по чтению кода:
     /ready обязан отличаться от /health, security-заголовки — стоять на каждом
     ответе, CORS — эхом только свои origin'ы, любая ошибка — в едином формате."""
 
-    def test_ready_checks_real_dependencies(self):
-        r = client.get("/ready")
+    async def test_ready_checks_real_dependencies(self):
+        r = await self.client.get("/ready")
         self.assertEqual(r.status_code, 200)
         body = r.json()
         self.assertEqual(body["status"], "ready")
-        # aiosqlite — настоящий движок: SELECT 1 действительно выполняется.
+        # PostgreSQL настоящий: SELECT 1 действительно выполняется против базы.
         self.assertEqual(body["checks"]["database"], "ok")
         # NullRateLimiter.ping() подменяет Redis, но контракт ответа тот же.
         self.assertEqual(body["checks"]["redis"], "ok")
 
-    def test_security_headers_on_every_response(self):
-        r = client.get("/health")
+    async def test_security_headers_on_every_response(self):
+        r = await self.client.get("/health")
         self.assertEqual(r.headers["x-content-type-options"], "nosniff")
         self.assertEqual(r.headers["x-frame-options"], "DENY")
         self.assertEqual(
@@ -934,8 +1284,8 @@ class TestHardening(unittest.TestCase):
         )
         self.assertIn("default-src 'self'", r.headers["content-security-policy"])
 
-    def test_cors_echoes_allowed_origin_and_silences_foreign(self):
-        r = client.options(
+    async def test_cors_echoes_allowed_origin_and_silences_foreign(self):
+        r = await self.client.options(
             "/health",
             headers={
                 "Origin": app.settings.cors_origins_list[0],
@@ -948,7 +1298,7 @@ class TestHardening(unittest.TestCase):
             "свой origin получает эхо и право на запрос",
         )
 
-        r = client.options(
+        r = await self.client.options(
             "/health",
             headers={
                 "Origin": "https://evil.example",
@@ -961,18 +1311,18 @@ class TestHardening(unittest.TestCase):
             "чужой origin не получает разрешение",
         )
 
-    def test_validation_error_in_unified_format(self):
-        r = client.post("/auth/telegram", json={"id": "not-an-int"})
+    async def test_validation_error_in_unified_format(self):
+        r = await self.client.post("/auth/telegram", json={"id": "not-an-int"})
         self.assertEqual(r.status_code, 422)
         err = r.json()["error"]
         self.assertEqual(err["code"], "VALIDATION_ERROR")
         self.assertTrue(err["details"], "422 без details бесполезен для отладки")
 
-    def test_unknown_error_format_uses_status_phrase_code(self):
+    async def test_unknown_error_format_uses_status_phrase_code(self):
         """HTTPException со строковым detail (наш собственный код вне auth) тоже
         обязан попасть в единый формат: {error: {code, message}}, а не FastAPI
         дефолтный {"detail": ...}."""
-        r = client.post(
+        r = await self.client.post(
             "/predict/markets/price",
             json={
                 "question": "BTC above 100k?",
@@ -988,6 +1338,310 @@ class TestHardening(unittest.TestCase):
         err = r.json()["error"]
         self.assertTrue(err["code"])
         self.assertNotIn("detail", r.json())
+
+
+class TestSessionGuards(HttpCase):
+    """«Кто этот человек» решает токен, а не запрос, поэтому сюда попадает и всё,
+    что на токен не похоже: пусто, мусор, подделанная подпись, истёкший срок."""
+
+    PRIVATE_GETS = [
+        "/follows",
+        "/mirror-log",
+        "/subscription",
+        "/agent/memory",
+        "/predict/positions",
+    ]
+
+    async def test_private_reads_refuse_everything_but_a_session(self):
+        for path in self.PRIVATE_GETS:
+            r = await self.client.get(path)
+            self.assertEqual(r.status_code, 401, path)
+            self.assertEqual(r.json()["error"]["code"], "SESSION_REQUIRED", path)
+
+        r = await self.client.get("/subscription", headers={"Authorization": "Bearer "})
+        self.assertEqual(r.status_code, 401)
+        self.assertEqual(r.json()["error"]["code"], "SESSION_REQUIRED")
+
+        for token, code in [
+            ("not-a-token", "SESSION_MALFORMED"),
+            ("wk1.abc.def", "SESSION_BAD_SIGNATURE"),
+            (forged_token("tg_6001"), "SESSION_BAD_SIGNATURE"),
+        ]:
+            r = await self.client.get("/subscription", headers=auth(token))
+            self.assertEqual(r.status_code, 401, token)
+            self.assertEqual(r.json()["error"]["code"], code, token)
+
+        stale, _ = session.issue("tg_6001", now=time.time() - session.SESSION_TTL_S - 1)
+        r = await self.client.get("/subscription", headers=auth(stale))
+        self.assertEqual(r.status_code, 401)
+        self.assertEqual(
+            r.json()["error"]["code"],
+            "SESSION_EXPIRED",
+            "просроченный токен — не «подделка»: клиенту нужно перелогиниться",
+        )
+
+    async def test_public_showcase_stays_open(self):
+        """Discover и список рынков читаются без входа: гейтить витрину — значит
+        гнать прочитавших её людей от того, что им показывать нельзя."""
+        for path in ("/leaders", "/predict/markets", "/health"):
+            self.assertEqual((await self.client.get(path)).status_code, 200, path)
+        r = await self.client.get(f"/follows/by-leader/{uuid.uuid4()}")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["follower_count"], 0)
+
+    async def test_mirror_log_shows_only_your_own(self):
+        """Журнал зеркалирования — чужие размеры и чужие аллокации; раньше его
+        можно было прочитать, подставив в query чужой follower_id."""
+        leader_headers, _ = await self.sign_in_wallet(601)
+        r = await self.client.post(
+            "/leaders", json={"handle": "@lg", "fee_bps": 8}, headers=leader_headers
+        )
+        leader_id = r.json()["leader_id"]
+
+        a = await self.sign_in_telegram(8001)
+        b = await self.sign_in_telegram(8002)
+        follows = {}
+        for name, headers in (("a", a), ("b", b)):
+            r = await self.client.post(
+                "/follows",
+                json={"leader_id": leader_id, "allocation_usd": 100},
+                headers=headers,
+            )
+            follows[name] = r.json()["follow_id"]
+
+        await db.log_mirror_result(
+            "log-a", follows["a"], 1, "long", 0.1, False, "dry_run"
+        )
+        await db.log_mirror_result(
+            "log-b", follows["b"], 1, "long", 0.2, False, "dry_run"
+        )
+
+        rows_a = (await self.client.get("/mirror-log", headers=a)).json()
+        self.assertEqual([x["id"] for x in rows_a], ["log-a"])
+        self.assertEqual(rows_a[0]["leader_handle"], "@lg")
+
+        rows_b = (await self.client.get("/mirror-log", headers=b)).json()
+        self.assertEqual([x["id"] for x in rows_b], ["log-b"])
+
+
+class TestWalletSignIn(HttpCase):
+    """Вход кошельком проверяется криптографией прода: подпись восстанавливается
+    в адрес эталонной библиотекой, challenge одноразовый. Подменяются только Redis
+    и ответ Lighter про индекс аккаунта."""
+
+    async def verify(self, message: str, signature: str):
+        return await self.client.post(
+            "/auth/wallet/verify", json={"message": message, "signature": signature}
+        )
+
+    async def test_replay_is_rejected(self):
+        from eth_account import Account
+
+        account = Account.create()
+        message = await self.wallet_challenge(account.address)
+        signature = sign_challenge(message, account.key)
+
+        r = await self.verify(message, signature)
+        self.assertEqual(r.status_code, 200, r.text)
+
+        # перехваченная пара (message, signature) не даёт второй вход: GETDEL
+        r2 = await self.verify(message, signature)
+        self.assertEqual(r2.status_code, 401)
+        self.assertEqual(r2.json()["error"]["code"], "CHALLENGE_STALE")
+
+    async def test_wrong_signer_rejected(self):
+        from eth_account import Account
+
+        owner = Account.create()
+        attacker = Account.create()
+        message = await self.wallet_challenge(owner.address)
+        signature = sign_challenge(message, attacker.key)
+
+        r = await self.verify(message, signature)
+        self.assertEqual(r.status_code, 401)
+        self.assertEqual(r.json()["error"]["code"], "ADDRESS_MISMATCH")
+
+        # отказ входа тоже аудится: «кто пытался войти не своим ключом» — ровно
+        # то, что стоит увидеть постфактум
+        rows = [
+            row
+            for row in await al.recent_actions(actor="wallet", action="sign_in")
+            if row["success"] == 0
+        ]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(json.loads(rows[0]["details"])["reason"], "ADDRESS_MISMATCH")
+
+    async def test_tampered_message_rejected(self):
+        """Текст подписи проверяется со хранимым: переписать в нём что угодно —
+        адрес, срок или название приложения — значит получить отказ, а не вход."""
+        from eth_account import Account
+
+        account = Account.create()
+        message = await self.wallet_challenge(account.address)
+        signature = sign_challenge(message, account.key)
+
+        r = await self.verify(
+            message.replace("Wake sign-in", "Other sign-in"), signature
+        )
+        self.assertEqual(r.status_code, 401)
+        self.assertEqual(r.json()["error"]["code"], "CHALLENGE_MISMATCH")
+
+        r = await self.verify("просто текст без nonce", signature)
+        self.assertEqual(r.status_code, 401)
+        self.assertEqual(r.json()["error"]["code"], "CHALLENGE_UNKNOWN")
+
+    async def test_garbage_signature_rejected(self):
+        from eth_account import Account
+
+        account = Account.create()
+        message = await self.wallet_challenge(account.address)
+        # подпись длиной 2 байта — не подпись: eth_account падает на длине, и
+        # отказ обязан называть причину, а не превращаться в 500
+        r = await self.verify(message, "0x1234")
+        self.assertEqual(r.status_code, 401)
+        self.assertEqual(r.json()["error"]["code"], "BAD_SIGNATURE")
+
+    async def test_address_normalized_to_checksum(self):
+        """Один и тот же кошелёк в разных регистрах — одна запись: адрес является
+        первичным ключом подписчика."""
+        from eth_account import Account
+
+        account = Account.create()
+        message = await self.wallet_challenge(account.address.lower())
+        self.assertIn(f"address: {account.address}\n", message)
+        signature = sign_challenge(message, account.key)
+
+        r = await self.verify(message, signature)
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["user_id"], account.address)
+
+        self.assertIsNotNone(await db.follower_by_l1(account.address))
+
+    async def test_invalid_address_is_400(self):
+        self.patch_wallet_infra()
+        r = await self.client.post(
+            "/auth/wallet/challenge", json={"l1_address": "не-адрес"}
+        )
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.json()["error"]["code"], "INVALID_ADDRESS")
+
+    async def test_dead_store_is_503_not_signed_in(self):
+        """Без Redis подтверждать подпись нечем, и «проверим на веру» — не вариант:
+        вход отвечает 503, а не выдаёт токен."""
+        import redis.asyncio as aioredis
+        import wallet_auth
+
+        class DeadStore:
+            async def set(self, *a, **kw):
+                raise aioredis.RedisError("Redis unavailable")
+
+        self.patch_wallet_infra()
+        wallet_auth._client = DeadStore()
+        r = await self.client.post(
+            "/auth/wallet/challenge", json={"l1_address": "0x" + "11" * 20}
+        )
+        self.assertEqual(r.status_code, 503)
+        self.assertEqual(r.json()["error"]["code"], "CHALLENGE_STORE_UNAVAILABLE")
+
+    async def test_lighter_down_signs_in_without_account_index(self):
+        """Индекс аккаунта — данные Lighter, а не условие входа: без него человек
+        пользуется терминалом, но лидера не публикует."""
+        from eth_account import Account
+
+        self.patch_wallet_infra()
+
+        def down(address, network=None):
+            raise RuntimeError("Lighter API недоступен")
+
+        api_auth.get_account_index_by_l1 = down
+
+        account = Account.create()
+        message = await self.wallet_challenge(account.address)
+        signature = sign_challenge(message, account.key)
+        r = await self.verify(message, signature)
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertIsNone(r.json()["lighter_account_index"])
+
+        headers = auth(r.json()["token"])
+        r = await self.client.post(
+            "/leaders", json={"handle": "@no-index"}, headers=headers
+        )
+        self.assertEqual(r.status_code, 403)
+        self.assertEqual(r.json()["error"]["code"], "LIGHTER_ACCOUNT_NOT_LINKED")
+
+
+class TestRateLimitBucket(HttpCase):
+    """Ведро лимитера обязано считаться по человеку. За Railway/Cloudflare адрес
+    соединения — адрес прокси, и ключ по IP означал бы один лимит на весь сервис:
+    один активный клиент закритыл бы всех остальных."""
+
+    class Recorder:
+        def __init__(self):
+            self.calls = []
+
+        async def allow(self, key, cost=1.0):
+            self.calls.append((key, cost))
+            return True
+
+        async def retry_after(self, key, cost=1.0):
+            return 0.0
+
+        async def ping(self):
+            return True
+
+    async def asyncSetUp(self):
+        await super().asyncSetUp()
+        self.recorder = self.Recorder()
+        original = app._rate_limiter
+        app._rate_limiter = self.recorder
+        self.addCleanup(setattr, app, "_rate_limiter", original)
+
+    @property
+    def last(self):
+        return self.recorder.calls[-1]
+
+    async def test_session_decides_the_bucket(self):
+        import net
+
+        headers = await self.sign_in_telegram(9101)
+        r = await self.client.get("/follows", headers=headers)
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(self.last, ("user:tg_9101", 1.0))
+
+        r = await self.client.post("/subscription/trial", headers=headers)
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(
+            self.last,
+            ("user:tg_9101", app._WRITE_COST),
+            "запись списывает несколько токенов: она трогает базу и Lighter",
+        )
+
+        # без токена и с подделкой — общий bucket по IP соединения: чужой токен
+        # не должен давать чужое ведро
+        peer = self.recorder.calls[0][0].split(":", 1)[1]
+        for hdrs in ({}, auth(forged_token())):
+            await self.client.get("/follows", headers=hdrs)
+            self.assertEqual(self.last[0], f"ip:{peer}")
+
+        # X-Forwarded-For без доверенного прокси — просто строка от клиента
+        await self.client.get(
+            "/follows", headers={"X-Forwarded-For": "1.2.3.4, 5.6.7.8"}
+        )
+        self.assertEqual(self.last[0], f"ip:{peer}")
+
+        # с доверенным прокси берётся правый адрес: его дописал тот, кто видел
+        # соединение, всё левее клиент подставил сам
+        original = net.TRUSTED_PROXY_IPS
+        net.TRUSTED_PROXY_IPS = {peer}
+        try:
+            await self.client.get(
+                "/follows", headers={"X-Forwarded-For": "1.2.3.4, 5.6.7.8"}
+            )
+            self.assertEqual(self.last[0], "ip:5.6.7.8")
+            await self.client.get("/follows", headers=headers)
+            self.assertEqual(self.last[0], "user:tg_9101")
+        finally:
+            net.TRUSTED_PROXY_IPS = original
 
 
 if __name__ == "__main__":

@@ -86,16 +86,16 @@ export default function Earn({ isCopyable, setTab, leaderId, leaderFeeBps, setLe
   if (!isCopyable) {
     return (
       <div className="terminal-layout terminal-stack">
-        <div className="terminal-main" style={{ padding: "40px 20px", display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center" }}>
+        <div className="empty-state">
           <div style={{ width: "48px", height: "48px", borderRadius: "50%", background: "#1a1a1a", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: "12px" }}>
             <Radio style={{ width: "24px", height: "24px", color: "#666" }} />
           </div>
           <p style={{ fontSize: "14px", color: "#a0a0a0", marginBottom: "4px" }}>Публикация выключена</p>
           <p style={{ fontSize: "12px", color: "#666", marginBottom: "16px", maxWidth: "400px" }}>
-            «Публиковать мои сделки» в Терминале записывают твой аккаунт Lighter в таблицу <code style={{ color: "#a0a0a0" }}>leaders</code> — после этого
+            «Публиковать мои сделки» в Терминале записывает твой аккаунт Lighter в таблицу <code style={{ color: "#a0a0a0" }}>leaders</code> — после этого
             карточка появляется в Discover, а сюда начинают приходить подписки из <code style={{ color: "#a0a0a0" }}>follows</code>.
           </p>
-          <button onClick={() => setTab("terminal")} style={{ color: "#3b82f6", fontSize: "14px", fontWeight: 500, display: "flex", alignItems: "center", gap: "4px", background: "none", border: "none", cursor: "pointer" }}>
+          <button className="link-action" onClick={() => setTab("terminal")}>
             Перейти в Терминал <ChevronRight style={{ width: "16px", height: "16px" }} />
           </button>
         </div>
@@ -106,7 +106,7 @@ export default function Earn({ isCopyable, setTab, leaderId, leaderFeeBps, setLe
   if (!leaderId) {
     return (
       <div className="terminal-layout terminal-stack">
-        <div className="terminal-main" style={{ padding: "40px 20px", display: "flex", flexDirection: "column", alignItems: "center", textAlign: "center" }}>
+        <div className="empty-state">
           <div style={{ width: "48px", height: "48px", borderRadius: "50%", background: "#2a2000", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: "12px" }}>
             <Radio style={{ width: "24px", height: "24px", color: "#fbbf24" }} />
           </div>
@@ -114,7 +114,7 @@ export default function Earn({ isCopyable, setTab, leaderId, leaderFeeBps, setLe
           <p style={{ fontSize: "12px", color: "#666", marginBottom: "16px", maxWidth: "400px" }}>
             Не удалось зарегистрировать лидера: бэкенд недоступен{lighterAccountIndex == null ? ", либо по этому адресу нет аккаунта Lighter" : ""}.
           </p>
-          <button onClick={() => setTab("terminal")} style={{ color: "#3b82f6", fontSize: "14px", fontWeight: 500, display: "flex", alignItems: "center", gap: "4px", background: "none", border: "none", cursor: "pointer" }}>
+          <button className="link-action" onClick={() => setTab("terminal")}>
             Проверить в Терминале <ChevronRight style={{ width: "16px", height: "16px" }} />
           </button>
         </div>

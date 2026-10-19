@@ -11,7 +11,6 @@ websockets
 # Database — PostgreSQL (async)
 sqlalchemy[asyncio]>=2.1.4
 asyncpg
-aiosqlite
 alembic
 
 # Cache & Rate limiting
@@ -19,6 +18,9 @@ redis>=8.1.0
 
 # HTTP client (telegram_bot.py)
 httpx
+
+# Проверка подписи кошелька при входе (wallet_auth.py)
+eth-account
 
 # Encryption (encrypted_key_store.py)
 cryptography
@@ -28,5 +30,3 @@ aiogram
 
 # Error monitoring (optional — only used if SENTRY_DSN is set)
 sentry-sdk
-
-# sqlite3 — стандартная библиотека Python, отдельно ставить не нужно

@@ -1,14 +1,14 @@
 """
-Async database connection layer for PostgreSQL.
+Подключение к PostgreSQL: движок, сессии, закрытие пула.
 
-Этот модуль — async-обёртка над SQLAlchemy для PostgreSQL. Используется
-новыми эндпоинтами и репозиториями; старый SQLite-слой (db.py) продолжает
-работать параллельно до полной миграции.
+Единственный путь в базу для всего бэкенда: api/auth.py работает через Depends
+(get_db), репозитории (db.py, predict_db.py, audit_log.py) открывают короткую
+сессию на операцию — держать соединение пула через сетевой вызов нельзя.
 
-DATABASE_URL берётся из WAKE_DATABASE_URL (env) или alembic.ini (fallback).
+DATABASE_URL — из WAKE_DATABASE_URL, echo — из WAKE_DB_ECHO; оба читаются через
+config.py, который умеет и .env.
 """
 
-import os
 from collections.abc import AsyncGenerator
 
 from sqlalchemy.ext.asyncio import (
@@ -20,11 +20,12 @@ from sqlalchemy.ext.asyncio import (
 # Один источник правды — pydantic-settings (config.py), который читает .env.
 # Прямой os.environ.get() здесь пропускал .env: движок всегда уходил в
 # дефолтный localhost PostgreSQL, а /ready честно отвечал database: fail.
-from config import DATABASE_URL
+# echo болел тем же: WAKE_DB_ECHO из .env до движка не доходил.
+from config import DATABASE_URL, DB_ECHO
 
 engine = create_async_engine(
     DATABASE_URL,
-    echo=os.environ.get("WAKE_DB_ECHO", "false").lower() == "true",
+    echo=DB_ECHO,
     pool_pre_ping=True,
 )
 

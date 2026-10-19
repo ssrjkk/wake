@@ -1,81 +1,107 @@
-# Railway Deployment Guide
+# Backend Deployment on Railway
 
-## Quick Deploy
+The backend is one Docker image (`Dockerfile` at the repo root) that needs a PostgreSQL and a Redis. Without them the process still starts and answers `/health`, while `/ready` reports `database: fail, redis: fail` — `/health` is liveness, not readiness, and sign-in and every write fail in that state.
 
-1. Go to https://railway.com and sign in with GitHub
-2. Click "New Project" → "Deploy from GitHub repo"
-3. Select your Wake repository
-4. Railway will auto-detect the Dockerfile
+## 1. Services
 
-## Configure Services
+| Service | Why it is needed | What it provides |
+| --- | --- | --- |
+| Backend (Dockerfile) | API, `/auth/*`, copy trading, Predict | the domain the frontend sends to `VITE_BACKEND_URL` |
+| PostgreSQL | the only store: followers/leaders/follows, Predict markets, subscriptions, agent history, audit | a connection string for `WAKE_DATABASE_URL` |
+| Redis | token-bucket rate limiting and single-use wallet challenges | a connection string for `WAKE_REDIS_URL` |
+| Signing service (optional) | signs Lighter orders | a second service from the same image, command `uvicorn signing_service:app --host 0.0.0.0 --port $PORT` |
 
-### Backend Service
+Railway hands out the connection strings when you attach a service. A plain `postgresql://…` without a driver is fine: `backend/config.py` appends `+asyncpg` while validating, and alembic uses the same value.
 
-1. Click on the backend service
-2. Go to "Variables" tab
-3. Add these environment variables:
+## 2. Variables
+
+Required — without them part of the product does not work at all:
 
 ```
-WAKE_DRY_RUN=true
-WAKE_LIGHTER_NETWORK=mainnet
-WAKE_DB_PATH=/app/data/wake.db
-WAKE_AUDIT_DB_PATH=/app/data/audit.db
-WAKE_CORS_ORIGINS=https://wake-7k6.pages.dev
-WAKE_SIGNING_SERVICE_URL=${SIGNING_SERVICE_URL}
-WAKE_DATABASE_URL=${POSTGRES_DATABASE_URL}
-WAKE_REDIS_URL=${REDIS_URL}
+WAKE_SESSION_SECRET    signs session tokens; empty means every sign-in answers 503
+WAKE_CURATOR_TOKEN     operator endpoints (markets, resolution, simulate-mirror); empty means 500
+WAKE_DATABASE_URL      the PostgreSQL string from the attached service
+WAKE_REDIS_URL         the Redis string from the attached service
+WAKE_CORS_ORIGINS      the frontend origin, comma-separated, e.g. https://wake-7k6.pages.dev
 ```
 
-4. Go to "Settings" → "Networking" → "Generate Domain"
-5. Copy the generated URL (e.g., `https://wake-backend.up.railway.app`)
-6. Update `WAKE_CORS_ORIGINS` to include your frontend URL
-
-### PostgreSQL Database
-
-1. Click "+ New Service" → "Database" → "PostgreSQL"
-2. Railway creates it automatically with connection string
-3. The `WAKE_DATABASE_URL` variable is auto-linked
-
-### Redis
-
-1. Click "+ New Service" → "Database" → "Redis"
-2. Railway creates it automatically
-3. The `WAKE_REDIS_URL` variable is auto-linked
-
-### Signing Service (Optional)
-
-1. Duplicate the backend service
-2. Change the command to: `uvicorn signing_service:app --host 0.0.0.0 --port $PORT`
-3. Generate a domain for it
-4. Update `WAKE_SIGNING_SERVICE_URL` in the backend service
-
-## Update Frontend
-
-After backend is deployed, update the frontend environment variable:
+Generate a secret:
 
 ```bash
-# In Cloudflare Pages dashboard
-VITE_BACKEND_URL=https://your-backend.up.railway.app
+python -c "import secrets; print(secrets.token_urlsafe(32))"
 ```
-
-Or update `src/lib/config.ts`:
-
-```typescript
-export const BACKEND_URL = "https://your-backend.up.railway.app";
-```
-
-## Health Check
-
-Verify deployment:
 
 ```bash
-curl https://your-backend.up.railway.app/health
-# Should return: {"status":"ok","dry_run":true,"network":"mainnet"}
+railway variables set WAKE_SESSION_SECRET="…" WAKE_CURATOR_TOKEN="…"
+railway variables set WAKE_CORS_ORIGINS="https://wake-7k6.pages.dev"
 ```
 
-## Troubleshooting
+Defaults worth knowing:
 
-- **Build fails**: Check Railway logs, ensure Dockerfile is correct
-- **Database connection**: Verify POSTGRES_DATABASE_URL is set
-- **CORS errors**: Add frontend URL to WAKE_CORS_ORIGINS
-- **Port issues**: Railway auto-sets $PORT, Dockerfile exposes 8000
+```
+WAKE_LIGHTER_NETWORK = mainnet    one name decides the REST host, the WS host and the market indexes
+WAKE_DRY_RUN = true               false means live orders
+WAKE_SESSION_TTL_DAYS = 30
+WAKE_RATE_LIMIT_CAPACITY / REFILL = 40 / 20
+TELEGRAM_BOT_TOKEN                needed by the bot process and by Telegram login verification (503 without it)
+```
+
+`WAKE_DB_PATH` and `WAKE_AUDIT_DB_PATH` are gone from these instructions: there is no file database any more, and nothing reads those variables.
+
+## 3. Migrations
+
+`alembic upgrade head` creates the schema, not the application: production code has no DDL privileges, and "the tables will appear on their own" leaves you with a database whose structure drifts from the migrations. The image ships `alembic.ini` and `alembic/`, and `railway.json` overrides the image command with one that migrates before the API comes up:
+
+```
+sh -c "alembic upgrade head && uvicorn app:app --host 0.0.0.0 --port ${PORT:-8000}"
+```
+
+If the migration fails, the service does not start and the deploy log names the reason (usually an unreachable database) instead of showing a green instance that cannot answer a single request. Docker Compose solves the same problem differently: the image command stays API-only there, and a one-shot `migrate` container runs ahead of `app`, `signing` and `predict-resolver`. To look at the schema separately:
+
+```bash
+railway run alembic heads     # expected head is the one in backend/alembic/versions
+```
+
+CI runs `alembic check`, which compares the models against the migrations, so `pg_models.py` and `alembic/` cannot drift apart quietly.
+
+## 4. Verification
+
+```bash
+curl -s https://<domain>/health
+# {"status":"ok","network":"mainnet","dry_run":true}
+
+curl -s https://<domain>/ready
+# {"status":"ready","checks":{"database":"ok","redis":"ok"}}
+
+curl -s -o /dev/null -w "%{http_code}\n" https://<domain>/subscription
+# 401 — the endpoint is alive and wants a token; 404 would mean the image is older than the schema
+```
+
+Then sign in with a wallet from the live frontend and call `GET /follows` with the token it returned.
+
+## 5. Proxies and rate limiting
+
+Behind Railway the connection address is the proxy's address. Without `WAKE_TRUSTED_PROXY_IPS` every client shares one bucket and one audit entry. A signed token already removes the worst of it — the bucket key is the session subject — but anonymous traffic and the IP recorded at sign-in still say "proxy". Read the real address out of the `ip:` field of a `sign_in` row in `audit_log` after the first login and put it into `WAKE_TRUSTED_PROXY_IPS`. `X-Forwarded-For` is accepted only from that address, and only its rightmost element.
+
+## 6. Live orders
+
+Two independent switches, deliberately: `WAKE_DRY_RUN` has a single value, and a typo in a deploy would otherwise put other people's money into a live network.
+
+```bash
+railway variables set WAKE_DRY_RUN=false WAKE_MAINNET_LIVE=true
+```
+
+On mainnet the process refuses to start without `WAKE_MAINNET_LIVE=true` and says what is missing. On testnet the second switch is not required — that is where the order path gets checked, with dry-run off.
+
+## 7. Troubleshooting
+
+| Symptom | Cause |
+| --- | --- |
+| `/ready` → `database: fail` | `WAKE_DATABASE_URL` does not point at the attached service, or the schema was never migrated |
+| `/ready` → `redis: fail` | `WAKE_REDIS_URL` missing or Redis not attached; the rate limiter then lets everything through (fail open) and wallet sign-in answers 503 |
+| Sign-in → 503 `SESSION_NOT_CONFIGURED` | `WAKE_SESSION_SECRET` is empty |
+| Sign-in → 503 `CHALLENGE_STORE_UNAVAILABLE` | Redis is unreachable, so a challenge cannot be stored — verifying a signature "on trust" is not an option |
+| `POST /leaders` → 403 `LIGHTER_ACCOUNT_NOT_LINKED` | the session came from Telegram; a leader is published by the Lighter account index a wallet sign-in confirmed |
+| Operator endpoint → 500 `CURATOR_NOT_CONFIGURED` | `WAKE_CURATOR_TOKEN` is not set on the server |
+| Frontend says "there is no backend at this address" | `VITE_BACKEND_URL` was built with a different address, or Pages answered an unknown path with `index.html` — see `src/lib/backend.ts` |
+| CORS error in the browser console | the frontend origin is missing from `WAKE_CORS_ORIGINS`; the browser blocks the response, the backend is not failing to send it |

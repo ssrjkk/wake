@@ -1,86 +1,100 @@
-"""Полный жизненный цикл price-рынка через все три модуля разом:
-создание -> торговля двух юзеров -> резолюция реальной ценой -> честная выплата.
-python3 test_predict_integration.py"""
+"""python -m unittest test_predict_integration -v
 
-import os
-import tempfile
+Полный жизненный цикл price-рынка через все три модуля разом: создание →
+торговля двух юзеров → резолюция реальной ценой → честная выплата. Всё на
+реальной PostgreSQL, потому что именно так цикл выглядит в проде.
+"""
+
 import time
+import unittest
 import uuid
+
+import testsupport
 import predict_db as pdb
-from predict_resolution import resolve_price_market, Comparator
+from predict_amm import LMSRMarket
+from predict_resolution import Comparator, resolve_price_market
 
-# tempfile вместо зашитого /tmp — на Windows такой путь не создаётся.
-TEST_DB = os.path.join(tempfile.mkdtemp(prefix="wake-predict-int-"), "predict.db")
-pdb.init_predict_db(TEST_DB)
+_run = testsupport.run
 
-with pdb.connect(TEST_DB) as conn:
-    pdb.create_market(
-        conn,
-        "m1",
-        "price",
-        "ETH выше $4000 к дедлайну?",
-        resolve_at=time.time() + 3600,
-        b=200,
-        lighter_market_id=1,
-        threshold=4000,
-        comparator=">=",
-    )
 
-# Двое торгуют до дедлайна — цена рынка (не Lighter, а вероятность YES) должна
-# сдвигаться в сторону мнения большинства покупок.
-with pdb.connect(TEST_DB) as conn:
-    pdb.record_trade(conn, str(uuid.uuid4()), "alice", "m1", "yes", 50)  # верит в YES
-    pdb.record_trade(conn, str(uuid.uuid4()), "bob", "m1", "yes", 30)  # тоже YES
-    pdb.record_trade(conn, str(uuid.uuid4()), "carol", "m1", "no", 10)  # не верит
+class TestPredictLifecycle(unittest.TestCase):
+    def setUp(self):
+        testsupport.reset()
+        _run(
+            pdb.create_market(
+                "m1",
+                "price",
+                "ETH выше $4000 к дедлайну?",
+                resolve_at=time.time() + 3600,
+                b=200,
+                lighter_market_id=1,
+                threshold=4000,
+                comparator=">=",
+            )
+        )
 
-with pdb.connect(TEST_DB) as conn:
-    m = pdb.get_market(conn, "m1")
-    from predict_amm import LMSRMarket
+    def trade(self, user_id, outcome, shares):
+        return _run(pdb.record_trade(str(uuid.uuid4()), user_id, "m1", outcome, shares))
 
-    amm = LMSRMarket(b=m["b"], q_yes=m["q_yes"], q_no=m["q_no"])
-    p_yes = amm.price_yes()
-    print(
-        f"после торгов: q_yes={m['q_yes']} q_no={m['q_no']} implied P(yes)={p_yes:.3f}"
-    )
-    assert p_yes > 0.5, (
-        "при таком перекосе покупок YES implied-вероятность должна быть > 50%"
-    )
+    def test_full_lifecycle_from_creation_to_payout(self):
+        # Трое торгуют до дедлайна — цена рынка (не Lighter, а вероятность YES)
+        # должна сдвигаться в сторону мнения большинства покупок.
+        self.trade("alice", "yes", 50)
+        self.trade("bob", "yes", 30)
+        self.trade("carol", "no", 10)
 
-# Дедлайн наступил. РЕАЛЬНАЯ (в проде — с getCandles) цена ETH пришла: $4150.
-# Не Lighter API, а сам факт "вот что вернул бы реальный источник" — это единственная
-# точка, где реальный код (src/lib/lighter.ts) подключается к этому тесту.
-observed_eth_price = 4150.0
-resolution = resolve_price_market(
-    observed_eth_price, threshold=4000, comparator=Comparator.GTE
-)
-print(
-    f"resolve_price_market(observed={observed_eth_price}, threshold=4000, >=) -> {resolution.outcome}"
-)
-assert resolution.outcome == "yes"
+        m = _run(pdb.get_market("m1"))
+        p_yes = LMSRMarket(b=m["b"], q_yes=m["q_yes"], q_no=m["q_no"]).price_yes()
+        self.assertGreater(
+            p_yes,
+            0.5,
+            "при таком перекосе покупок YES implied-вероятность должна быть > 50%",
+        )
 
-with pdb.connect(TEST_DB) as conn:
-    pdb.resolve_market(
-        conn,
-        "m1",
-        resolution.outcome,
-        resolved_by="auto:lighter_mark_price",
-        evidence_url=None,
-    )
+        # Дедлайн наступил, реальная (в проде — с getCandles) цена ETH: $4150.
+        resolution = resolve_price_market(
+            4150.0, threshold=4000, comparator=Comparator.GTE
+        )
+        self.assertEqual(resolution.outcome, "yes")
+        _run(
+            pdb.resolve_market(
+                "m1",
+                resolution.outcome,
+                resolved_by="auto:lighter_mark_price",
+                evidence_url=None,
+            )
+        )
 
-# Выплаты: alice и bob были на yes (победили), carol на no (проиграла).
-with pdb.connect(TEST_DB) as conn:
-    alice_payout = pdb.claim_winnings(conn, "alice", "m1")
-    bob_payout = pdb.claim_winnings(conn, "bob", "m1")
-    carol_payout = pdb.claim_winnings(conn, "carol", "m1")
+        # alice и bob были на yes (победили), carol на no (проиграла).
+        self.assertEqual(_run(pdb.claim_winnings("alice", "m1")), 50.0)
+        self.assertEqual(_run(pdb.claim_winnings("bob", "m1")), 30.0)
+        self.assertEqual(_run(pdb.claim_winnings("carol", "m1")), 0.0)
 
-    print(f"выплаты: alice=${alice_payout} bob=${bob_payout} carol=${carol_payout}")
-    assert alice_payout == 50.0, (
-        "alice держала 50 yes-shares, рынок resolved yes -> $50"
-    )
-    assert bob_payout == 30.0
-    assert carol_payout == 0.0, "carol держала no-shares, рынок resolved yes -> $0"
+    def test_closed_market_takes_no_new_money(self):
+        self.trade("alice", "yes", 50)
+        _run(pdb.resolve_market("m1", "yes", "auto:lighter_mark_price", None))
+        with self.assertRaises(ValueError):
+            self.trade("dave", "yes", 100)
+        self.assertEqual(
+            _run(pdb.get_position("dave", "m1", "yes")),
+            None,
+            "отклонённая сделка не должна оставлять позицию",
+        )
 
-os.remove(TEST_DB)
-print()
-print("ПОЛНЫЙ ЦИКЛ ПОДТВЕРЖДЁН: LMSR-ценообразование, база и резолюция")
-print("реальной ценой работают вместе корректно от создания рынка до выплаты.")
+    def test_stats_and_positions_survive_resolution(self):
+        self.trade("alice", "yes", 50)
+        self.trade("carol", "no", 10)
+        _run(pdb.resolve_market("m1", "yes", "auto:lighter_mark_price", None))
+
+        positions = _run(pdb.list_user_positions("alice"))
+        self.assertEqual(len(positions), 1)
+        self.assertEqual(positions[0]["status"], "resolved")
+        self.assertEqual(positions[0]["market_outcome"], "yes")
+        self.assertEqual(positions[0]["claimed"], 0, "выплату ещё не брали")
+
+        stats = _run(pdb.market_stats())["m1"]
+        self.assertEqual(stats["trade_count"], 2)
+
+
+if __name__ == "__main__":
+    unittest.main(verbosity=2)

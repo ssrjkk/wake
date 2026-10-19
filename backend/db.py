@@ -1,154 +1,150 @@
 """
-Слой базы данных. SQLite — осознанно, не потому что "для прототипа сойдёт", а
-потому что для количества подписчиков, с которым Wake реально стартует, SQLite
-плюс нормальные индексы выдержит с запасом, а разворачивать Postgres до того,
-как есть хоть один живой пользователь, — преждевременная сложность.
+Слой доступа к PostgreSQL для копи-трейда: leaders / followers / follows /
+mirror_log.
 
-Это НЕ место, где хранятся API-ключи подписчиков — это делает key_store.py,
-намеренно отдельно, чтобы утечка одной базы (переписки, аллокации, история)
-не была равна утечке торговых ключей.
+Раньше это был SQLite-файл. Он был прав, пока Wake жил на одной машине, но
+бэкенд разворачивается в контейнере, и файл в контейнере живёт до ближайшего
+рестарта — а в копи-трейде в этом файле лежат аллокации и подписки, то есть
+чужие деньги. Postgres поднят и настроен (alembic 001_initial), поэтому
+единственный источник правды теперь он, и доступ к нему отсюда идёт один раз,
+через этот модуль.
 
-Всё в этом файле реально прогнано (см. test_db.py) — не только написано.
+Ключи подписчиков здесь не хранятся — за ними в key_store.py. Разделён он
+намеренно: утечка этой базы (переписка, аллокации, история) не должна равняться
+утечке торговых ключей.
+
+Форма ответов сохранена прежней, потому что фронт завязан на неё:
+  - created_at — epoch-секунды числом (Portfolio.tsx делает new Date(x * 1000)),
+    хотя в Postgres колонка TIMESTAMPTZ;
+  - paused и reduce_only — 0/1, хотя в Postgres это BOOLEAN.
 """
 
-import sqlite3
-import time
-from contextlib import contextmanager
+from datetime import UTC, datetime
 
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS leaders (
-    id TEXT PRIMARY KEY,
-    lighter_account_index INTEGER NOT NULL,
-    handle TEXT NOT NULL,
-    fee_bps INTEGER NOT NULL DEFAULT 8,
-    created_at REAL NOT NULL
-);
+from sqlalchemy import delete, func, select, update
+from sqlalchemy.dialects.postgresql import insert
 
-CREATE TABLE IF NOT EXISTS followers (
-    id TEXT PRIMARY KEY,
-    l1_address TEXT NOT NULL UNIQUE,
-    lighter_account_index INTEGER,
-    telegram_id INTEGER UNIQUE,
-    created_at REAL NOT NULL
-);
-
-CREATE TABLE IF NOT EXISTS follows (
-    id TEXT PRIMARY KEY,
-    follower_id TEXT NOT NULL REFERENCES followers(id),
-    leader_id TEXT NOT NULL REFERENCES leaders(id),
-    allocation_usd REAL NOT NULL,
-    max_leverage REAL NOT NULL DEFAULT 3,
-    current_mirrored_size REAL NOT NULL DEFAULT 0,
-    paused INTEGER NOT NULL DEFAULT 0,
-    created_at REAL NOT NULL,
-    UNIQUE(follower_id, leader_id)
-);
-
-CREATE TABLE IF NOT EXISTS mirror_log (
-    id TEXT PRIMARY KEY,
-    follow_id TEXT NOT NULL REFERENCES follows(id),
-    market_id INTEGER NOT NULL,
-    side TEXT NOT NULL,
-    base_amount REAL NOT NULL,
-    reduce_only INTEGER NOT NULL,
-    status TEXT NOT NULL,      -- 'planned' | 'skipped' | 'dry_run' | 'sent' | 'failed'
-    reason TEXT,                -- причина skip, если status='skipped'
-    tx_hash TEXT,
-    created_at REAL NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_follows_leader ON follows(leader_id, paused);
-CREATE INDEX IF NOT EXISTS idx_mirror_log_follow ON mirror_log(follow_id, created_at);
-"""
+from database import async_session_factory
+from pg_models import Follow, Follower, Leader, MirrorLog
 
 
-@contextmanager
-def connect(path: str = "wake.db"):
-    conn = sqlite3.connect(path)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    try:
-        yield conn
-        conn.commit()
-    finally:
-        conn.close()
+def _epoch(dt: datetime | None) -> float:
+    return dt.timestamp() if dt else 0.0
 
 
-def init_db(path: str = "wake.db"):
-    with connect(path) as conn:
-        conn.executescript(SCHEMA)
+def _follow_dict(f: Follow, leader_handle: str | None = None) -> dict:
+    row = {
+        "id": f.id,
+        "follower_id": f.follower_id,
+        "leader_id": f.leader_id,
+        "allocation_usd": f.allocation_usd,
+        "max_leverage": f.max_leverage,
+        "current_mirrored_size": f.current_mirrored_size,
+        "paused": 1 if f.paused else 0,
+        "created_at": _epoch(f.created_at),
+    }
+    if leader_handle is not None:
+        row["leader_handle"] = leader_handle
+    return row
 
 
-def upsert_leader(
-    conn, id_: str, lighter_account_index: int, handle: str, fee_bps: int = 8
-):
-    conn.execute(
-        "INSERT INTO leaders (id, lighter_account_index, handle, fee_bps, created_at) VALUES (?,?,?,?,?) "
-        "ON CONFLICT(id) DO UPDATE SET handle=excluded.handle, fee_bps=excluded.fee_bps",
-        (id_, lighter_account_index, handle, fee_bps, time.time()),
+# ── Запись ───────────────────────────────────────────────────────────────────
+
+
+async def upsert_leader(
+    id_: str, lighter_account_index: int, handle: str, fee_bps: int = 8
+) -> None:
+    """Создаёт лидера или обновляет handle/fee_bps у существующего.
+
+    created_at не трогается при обновлении: время регистрации лидера — часть
+    его публичной карточки в Discover."""
+    stmt = insert(Leader).values(
+        id=id_,
+        lighter_account_index=lighter_account_index,
+        handle=handle,
+        fee_bps=fee_bps,
+        created_at=datetime.now(UTC),
     )
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["id"],
+        set_={"handle": stmt.excluded.handle, "fee_bps": stmt.excluded.fee_bps},
+    )
+    async with async_session_factory() as session:
+        await session.execute(stmt)
+        await session.commit()
 
 
-def upsert_follower(
-    conn,
+async def upsert_follower(
     id_: str,
     l1_address: str,
     lighter_account_index: int | None = None,
     telegram_id: int | None = None,
-):
-    # COALESCE, а не прямое присваивание: логин через кошелёк не должен стирать telegram_id
-    # предыдущего входа через Telegram, и наоборот.
-    conn.execute(
-        "INSERT INTO followers (id, l1_address, lighter_account_index, telegram_id, created_at) VALUES (?,?,?,?,?) "
-        "ON CONFLICT(id) DO UPDATE SET "
-        "lighter_account_index = COALESCE(excluded.lighter_account_index, followers.lighter_account_index), "
-        "telegram_id = COALESCE(excluded.telegram_id, followers.telegram_id)",
-        (id_, l1_address, lighter_account_index, telegram_id, time.time()),
+) -> None:
+    # COALESCE, а не прямое присваивание: логин через кошелёк не должен стирать
+    # telegram_id предыдущего входа через Telegram, и наоборот.
+    stmt = insert(Follower).values(
+        id=id_,
+        l1_address=l1_address,
+        lighter_account_index=lighter_account_index,
+        telegram_id=telegram_id,
+        created_at=datetime.now(UTC),
     )
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["id"],
+        set_={
+            "lighter_account_index": func.coalesce(
+                stmt.excluded.lighter_account_index, Follower.lighter_account_index
+            ),
+            "telegram_id": func.coalesce(
+                stmt.excluded.telegram_id, Follower.telegram_id
+            ),
+        },
+    )
+    async with async_session_factory() as session:
+        await session.execute(stmt)
+        await session.commit()
 
 
-def create_follow(
-    conn,
+async def create_follow(
     id_: str,
     follower_id: str,
     leader_id: str,
     allocation_usd: float,
     max_leverage: float = 3,
-):
-    conn.execute(
-        "INSERT INTO follows (id, follower_id, leader_id, allocation_usd, max_leverage, created_at) VALUES (?,?,?,?,?,?)",
-        (id_, follower_id, leader_id, allocation_usd, max_leverage, time.time()),
-    )
+) -> None:
+    async with async_session_factory() as session:
+        session.add(
+            Follow(
+                id=id_,
+                follower_id=follower_id,
+                leader_id=leader_id,
+                allocation_usd=allocation_usd,
+                max_leverage=max_leverage,
+                created_at=datetime.now(UTC),
+            )
+        )
+        await session.commit()
 
 
-def active_follows_for_leader(conn, leader_id: str):
-    """Всё, что нужно для compute_mirror_plan() и реального исполнения по конкретному
-    лидеру, одним запросом — включая lighter_account_index подписчика, не только его
-    внутренний follower_id."""
-    return conn.execute(
-        "SELECT f.id as follow_id, f.follower_id, f.allocation_usd, f.max_leverage, f.current_mirrored_size, "
-        "fw.lighter_account_index as follower_account_index "
-        "FROM follows f JOIN followers fw ON fw.id = f.follower_id "
-        "WHERE f.leader_id = ? AND f.paused = 0",
-        (leader_id,),
-    ).fetchall()
+async def set_paused(follow_id: str, paused: bool) -> None:
+    async with async_session_factory() as session:
+        await session.execute(
+            update(Follow).where(Follow.id == follow_id).values(paused=paused)
+        )
+        await session.commit()
 
 
-def set_paused(conn, follow_id: str, paused: bool):
-    conn.execute(
-        "UPDATE follows SET paused = ? WHERE id = ?", (1 if paused else 0, follow_id)
-    )
+async def update_mirrored_size(follow_id: str, new_size: float) -> None:
+    async with async_session_factory() as session:
+        await session.execute(
+            update(Follow)
+            .where(Follow.id == follow_id)
+            .values(current_mirrored_size=new_size)
+        )
+        await session.commit()
 
 
-def update_mirrored_size(conn, follow_id: str, new_size: float):
-    conn.execute(
-        "UPDATE follows SET current_mirrored_size = ? WHERE id = ?",
-        (new_size, follow_id),
-    )
-
-
-def log_mirror_result(
-    conn,
+async def log_mirror_result(
     id_: str,
     follow_id: str,
     market_id: int,
@@ -158,20 +154,207 @@ def log_mirror_result(
     status: str,
     reason: str | None = None,
     tx_hash: str | None = None,
-):
-    conn.execute(
-        "INSERT INTO mirror_log (id, follow_id, market_id, side, base_amount, reduce_only, status, reason, tx_hash, created_at) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?)",
-        (
-            id_,
-            follow_id,
-            market_id,
-            side,
-            base_amount,
-            1 if reduce_only else 0,
-            status,
-            reason,
-            tx_hash,
-            time.time(),
-        ),
-    )
+) -> None:
+    async with async_session_factory() as session:
+        session.add(
+            MirrorLog(
+                id=id_,
+                follow_id=follow_id,
+                market_id=market_id,
+                side=side,
+                base_amount=base_amount,
+                reduce_only=reduce_only,
+                status=status,
+                reason=reason,
+                tx_hash=tx_hash,
+                created_at=datetime.now(UTC),
+            )
+        )
+        await session.commit()
+
+
+# ── Чтение ───────────────────────────────────────────────────────────────────
+
+
+async def active_follows_for_leader(leader_id: str) -> list[dict]:
+    """Всё, что нужно compute_mirror_plan() и реальному исполнению по конкретному
+    лидеру, одним запросом — включая lighter_account_index подписчика, не только
+    его внутренний follower_id."""
+    async with async_session_factory() as session:
+        rows = (
+            await session.execute(
+                select(
+                    Follow.id.label("follow_id"),
+                    Follow.follower_id,
+                    Follow.allocation_usd,
+                    Follow.max_leverage,
+                    Follow.current_mirrored_size,
+                    Follower.lighter_account_index.label("follower_account_index"),
+                )
+                .join(Follower, Follower.id == Follow.follower_id)
+                .where(Follow.leader_id == leader_id, Follow.paused.is_(False))
+            )
+        ).mappings()
+        return [dict(r) for r in rows]
+
+
+async def follows_for_leader(leader_id: str) -> list[dict]:
+    """Неактивные папки исключены: этот ответ кормит счётчик подписчиков и AUM."""
+    async with async_session_factory() as session:
+        rows = (
+            await session.scalars(
+                select(Follow)
+                .where(Follow.leader_id == leader_id, Follow.paused.is_(False))
+                .order_by(Follow.created_at.desc())
+            )
+        ).all()
+        return [_follow_dict(r) for r in rows]
+
+
+async def follows_for_follower(follower_id: str) -> list[dict]:
+    async with async_session_factory() as session:
+        rows = (
+            await session.execute(
+                select(Follow, Leader.handle)
+                .join(Leader, Leader.id == Follow.leader_id)
+                .where(Follow.follower_id == follower_id)
+                .order_by(Follow.created_at.desc())
+            )
+        ).all()
+        return [_follow_dict(f, handle) for f, handle in rows]
+
+
+async def mirror_log_for_follower(follower_id: str, limit: int) -> list[dict]:
+    """Журнал решений копи-движка по подпискам этого подписчика: что mirror_engine
+    запланировал и чем это закончилось (dry_run / sent / skipped / failed) — с
+    причиной отказа. Пишет его leader_listener.py, здесь только чтение."""
+    async with async_session_factory() as session:
+        rows = (
+            await session.execute(
+                select(MirrorLog, Leader.handle)
+                .join(Follow, Follow.id == MirrorLog.follow_id)
+                .join(Leader, Leader.id == Follow.leader_id)
+                .where(Follow.follower_id == follower_id)
+                # id — тай-брейк: созданы в один тик часов строки (веер одной
+                # сделки лидера пишется циклом) иначе получали бы порядок,
+                # различающийся между двумя подряд запросами.
+                .order_by(MirrorLog.created_at.desc(), MirrorLog.id.desc())
+                .limit(limit)
+            )
+        ).all()
+        return [
+            {
+                "id": m.id,
+                "follow_id": m.follow_id,
+                "market_id": m.market_id,
+                "side": m.side,
+                "base_amount": m.base_amount,
+                "reduce_only": 1 if m.reduce_only else 0,
+                "status": m.status,
+                "reason": m.reason,
+                "tx_hash": m.tx_hash,
+                "created_at": _epoch(m.created_at),
+                "leader_handle": handle,
+            }
+            for m, handle in rows
+        ]
+
+
+async def all_leaders() -> list[dict]:
+    async with async_session_factory() as session:
+        rows = (
+            await session.scalars(select(Leader).order_by(Leader.created_at.desc()))
+        ).all()
+        return [
+            {
+                "id": r.id,
+                "lighter_account_index": r.lighter_account_index,
+                "handle": r.handle,
+                "fee_bps": r.fee_bps,
+                "created_at": _epoch(r.created_at),
+            }
+            for r in rows
+        ]
+
+
+async def follower_by_l1(l1_address: str) -> dict | None:
+    """Возвращает и привязанные к подписчику идентификаторы, а не только id:
+    вход по кошельку и вход через Telegram ведут одного человека в одну строку,
+    и по этому ответу видно, что именно уже привязано."""
+    async with async_session_factory() as session:
+        row = await session.scalar(
+            select(Follower).where(Follower.l1_address == l1_address)
+        )
+        return (
+            {
+                "id": row.id,
+                "lighter_account_index": row.lighter_account_index,
+                "telegram_id": row.telegram_id,
+            }
+            if row
+            else None
+        )
+
+
+async def follower(id_: str) -> dict | None:
+    """Запись подписчика по её id — то, чем эндпоинт сверяет субъекта токена с
+    тем, что реально лежит в базе (привязанный индекс аккаунта, telegram_id)."""
+    async with async_session_factory() as session:
+        row = await session.scalar(select(Follower).where(Follower.id == id_))
+        return (
+            None
+            if row is None
+            else {
+                "id": row.id,
+                "l1_address": row.l1_address,
+                "lighter_account_index": row.lighter_account_index,
+                "telegram_id": row.telegram_id,
+            }
+        )
+
+
+async def leader_by_account_index(lighter_account_index: int) -> dict | None:
+    async with async_session_factory() as session:
+        row = await session.scalar(
+            select(Leader).where(Leader.lighter_account_index == lighter_account_index)
+        )
+        return {"id": row.id} if row else None
+
+
+async def leader(id_: str) -> dict | None:
+    async with async_session_factory() as session:
+        row = await session.scalar(select(Leader).where(Leader.id == id_))
+        if not row:
+            return None
+        return {
+            "id": row.id,
+            "lighter_account_index": row.lighter_account_index,
+            "handle": row.handle,
+        }
+
+
+async def owned_follow(follow_id: str, follower_id: str) -> dict | None:
+    """Подписка, только если она принадлежит этому подписчику — проверка
+    владения на уровне запроса, а не в вызывающем коде."""
+    async with async_session_factory() as session:
+        row = await session.scalar(
+            select(Follow).where(
+                Follow.id == follow_id, Follow.follower_id == follower_id
+            )
+        )
+        return _follow_dict(row) if row else None
+
+
+async def delete_follow(follow_id: str, follower_id: str) -> bool:
+    """Удаляет подписку и возвращает, была ли она. Одна транзакция вместо
+    «сначала SELECT, потом DELETE»: между двумя запросами подписку мог удалить
+    параллельный запрос, и тогда DELETE отработал бы впустую, а эндпоинт
+    ответил бы 200 на несуществующую запись."""
+    async with async_session_factory() as session:
+        result = await session.execute(
+            delete(Follow).where(
+                Follow.id == follow_id, Follow.follower_id == follower_id
+            )
+        )
+        await session.commit()
+        return result.rowcount > 0

@@ -9,12 +9,10 @@
 агент без работающего fallback на реальных деньгах — плохая идея.
 """
 
-import os
 import json
 from agent_memory import AgentMemoryStore
 from agent_decision import AgentDecision, rule_based_decision
-
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
+from config import ANTHROPIC_API_KEY
 
 SYSTEM_PROMPT = """Ты — торговый агент на Wake (терминал поверх Lighter perp DEX).
 Тебе дают сводку истории сделок и текущие цены. Отвечай ТОЛЬКО JSON без

@@ -15,5 +15,8 @@ select = ["E4", "E7", "E9", "F"]
 [lint.per-file-ignores]
 # Модульные тесты и bootstrap-скрипты сознательно поднимают env/redis перед
 # импортом приложения — это требование порядка инициализации, а не случайность.
+# testsupport.py из того же ряда: он подменяет WAKE_DATABASE_URL до импорта
+# config/database, которые строят на этом env движок.
 "test_*.py" = ["E402"]
+"testsupport.py" = ["E402"]
 "alembic/env.py" = ["E402"]

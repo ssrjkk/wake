@@ -18,9 +18,9 @@ export function NavTab({ active, onClick, label, live }: { active: boolean; onCl
         transition: "all 0.15s",
         minHeight: "44px",
         color: active ? "#e5e5e5" : "#737373",
-        background: active ? "rgba(59, 130, 246, 0.05)" : "transparent",
+        background: active ? "rgba(255, 107, 53, 0.06)" : "transparent",
         border: "none",
-        borderBottom: active ? "2px solid #3b82f6" : "2px solid transparent",
+        borderBottom: active ? "2px solid var(--orange)" : "2px solid transparent",
         borderRadius: "6px 6px 0 0",
         cursor: "pointer",
       }}
@@ -44,8 +44,11 @@ export function NavTab({ active, onClick, label, live }: { active: boolean; onCl
             width: "6px",
             height: "6px",
             borderRadius: "50%",
-            background: active ? "#3b82f6" : "#10b981",
-            boxShadow: active ? "0 0 8px rgba(59, 130, 246, 0.6)" : "0 0 8px rgba(16, 185, 129, 0.6)",
+            // Точка отвечает за «живые» данные вкладки, а не за выбор: выбор и так
+            // читается в подчёркивании и весе. Синий цвет активного таба делал из
+            // индикатора вторую, ничего не значащую сигнатуру.
+            background: "#10b981",
+            boxShadow: "0 0 8px rgba(16, 185, 129, 0.6)",
             animation: "livePulse 2s ease-in-out infinite",
           }}
           title="Live data"
