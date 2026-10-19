@@ -13,7 +13,7 @@ PostgreSQL and Redis. There is no file database: `backend/database.py` opens an 
 | Node.js | 22 | `NODE_VERSION` in `.github/workflows/ci.yml`, `node:22-alpine` in compose |
 | Python | 3.12 | `PYTHON_VERSION` in CI; the runtime image is `python:3.14-slim` |
 | PostgreSQL | 16 | `postgres:16-alpine` in CI services and in compose |
-| Redis | 8.1 | `redis:8.1-alpine` in CI and compose, `redis>=8.1.0` in requirements |
+| Redis | 8 | `redis:8-alpine` in CI and compose; the Python client is a separate version line — `redis>=8.1.0` in requirements |
 | Ruff | 0.15.8 | installed by the CI lint job; a different ruff disagrees with CI about formatting |
 
 ## Backend setup
@@ -217,7 +217,7 @@ PostgreSQL и Redis. Файловой базы больше нет: `backend/dat
 | Node.js | 22 | `NODE_VERSION` в `.github/workflows/ci.yml`, `node:22-alpine` в compose |
 | Python | 3.12 | `PYTHON_VERSION` в CI; runtime-образ — `python:3.14-slim` |
 | PostgreSQL | 16 | `postgres:16-alpine` в CI и в compose |
-| Redis | 8.1 | `redis:8.1-alpine` в CI и compose, `redis>=8.1.0` в requirements |
+| Redis | 8 | `redis:8-alpine` в CI и compose; python-клиент — отдельная линейка версий, `redis>=8.1.0` в requirements |
 | Ruff | 0.15.8 | ставит CI-джоб линтера; другой ruff расходится с CI в форматировании |
 
 ## Настройка бэкенда

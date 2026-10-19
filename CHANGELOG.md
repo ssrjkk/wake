@@ -113,6 +113,10 @@ from the commit history rather than from a release.
 - Test requests asserted against `String(body)`, which turns an object into
   `"[object Object]"` and lets a wrong payload pass. They parse the body now and
   fail loudly when it is not the JSON the code claims to send.
+- CI and compose asked for `redis:8.1-alpine`, a Redis server release that has
+  never existed — the number was taken from the Python client pin `redis>=8.1.0`,
+  which is a separate version line. Both now run `redis:8-alpine`, and the
+  documented local path (`docker compose up`) resolves as well as the gate does.
 
 ## Pre-release history
 
