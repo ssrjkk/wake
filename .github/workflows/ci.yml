@@ -23,6 +23,7 @@ jobs:
   # ── Backend linting ───────────────────────────────────────────────────────
   backend-lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -43,6 +44,7 @@ jobs:
   # ── Backend security scan ────────────────────────────────────────────────
   backend-security:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -85,6 +87,7 @@ jobs:
   # ── Backend tests (pytest + Allure) ──────────────────────────────────────
   backend-tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: [backend-lint]
     # upload-artifact пишет в Actions-хранилище, а у токена по умолчанию
     # (default_workflow_permissions=read) стоит actions:read — без этого блока
@@ -210,6 +213,7 @@ jobs:
   # ── Frontend linting + type checking ─────────────────────────────────────
   frontend-check:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-node@v7
@@ -227,6 +231,7 @@ jobs:
   # ── Frontend tests ───────────────────────────────────────────────────────
   frontend-tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: [frontend-check]
     steps:
       - uses: actions/checkout@v7
@@ -244,6 +249,7 @@ jobs:
   # backend-tests (в том числе под uvicorn).
   e2e-tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: [frontend-check]
     steps:
       - uses: actions/checkout@v7
@@ -259,6 +265,7 @@ jobs:
   # ── Docker build ─────────────────────────────────────────────────────────
   docker-build:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs: [backend-tests, frontend-tests]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     steps:
