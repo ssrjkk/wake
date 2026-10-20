@@ -14,6 +14,11 @@ env:
   PYTHON_VERSION: "3.12"
   NODE_VERSION: "22"
 
+# CI только читает репозиторий: права объявлены явно, иначе job с умолчанию
+# write-all получает запись в репозиторий «на всякий случай».
+permissions:
+  contents: read
+
 jobs:
   # ── Backend linting ───────────────────────────────────────────────────────
   backend-lint:
