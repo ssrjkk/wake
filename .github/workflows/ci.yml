@@ -165,10 +165,10 @@ jobs:
             -q
       - name: Generate Allure report
         if: always()
-        uses: simple-elf/allure-report-action@v1.15
-        with:
-          allure_results: backend/allure-results
-          allure_report: allure-report
+        # Отчёт собирается локально: simple-elf/allure-report-action строит
+        # Docker-образ и тянет public.ecr.aws/amazoncorretto:8, где AWS отдаёт
+        # 429 — job красел без связи с кодом проекта.
+        run: npx --yes allure-commandline@2.46.1 generate backend/allure-results -o allure-report --clean
       - name: Upload Allure report
         if: always()
         uses: actions/upload-artifact@v7
