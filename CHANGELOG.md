@@ -235,7 +235,7 @@ from the commit history rather than from a release.
   and named a `_require_curator` that lives in `api/guards.py`; the root
   `.env.example` said a build without `.env` aims at a local backend when
   `src/lib/config.ts` falls back to the deployed Railway URL. Test counts
-  (296 → 333 backend, 62/8 → 99/11 frontend), the `docker-build` trigger list and
+  (296 → 350 backend, 62/8 → 104/12 frontend), the `docker-build` trigger list and
   the claim that `config.py` validates *every* variable were stale.
 
 - Alembic accepts percent-encoded database passwords instead of interpreting
