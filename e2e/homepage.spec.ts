@@ -39,6 +39,22 @@ test.describe("Оболочка приложения", () => {
     await expect(nav(page).getByRole("button", { name: "Обзор" })).not.toHaveAttribute("aria-current");
   });
 
+  test("ссылка с tab и asset открывает раздел и рынок, мусор — нет", async ({ page }) => {
+    await page.goto("/?tab=funding&asset=ETH");
+    await expect(nav(page).getByRole("button", { name: "Funding" })).toHaveAttribute("aria-current", "page");
+
+    await page.goto("/?tab=terminal&asset=eth");
+    await expect(nav(page).getByRole("button", { name: "Терминал" })).toHaveAttribute("aria-current", "page");
+    await expect(page.locator(".desk-symbol-name")).toHaveText("ETH");
+
+    await page.goto("/?tab=..%2Fadmin&asset=%3Cscript%3E");
+    await expect(nav(page).getByRole("button", { name: "Обзор" })).toHaveAttribute("aria-current", "page");
+
+    await page.goto("/?tab=terminal&asset=%3Cscript%3E");
+    await expect(nav(page).getByRole("button", { name: "Терминал" })).toHaveAttribute("aria-current", "page");
+    await expect(page.locator(".desk-symbol-name")).toHaveText("BTC");
+  });
+
   test("переключатель сети меняет и публичный API Arcus", async ({ page }) => {
     await page.route("**/v1/markets", (route) => route.fulfill({ json: { markets: [] } }));
     await page.route("**/v1/mids", (route) => route.fulfill({ json: { mids: {}, globalSequenceId: 1 } }));

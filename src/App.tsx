@@ -15,6 +15,7 @@ import {
   type OrderBook,
 } from "./lib/lighter";
 import { LIGHTER_NETWORK } from "./lib/config";
+import { readEntryFromSearch } from "./lib/deeplink";
 import { setNetwork as setArcusNetwork } from "./lib/arcus";
 import { backendJson, errorText, probeBackend, SIGNED_OUT_EVENT, type BackendHealth } from "./lib/backend";
 import { clearSession, getSession, saveSession, type Session, type SignInResponse } from "./lib/session";
@@ -44,12 +45,18 @@ export default function App() {
   const { disconnect } = useDisconnect();
   const { signMessageAsync } = useSignMessage();
 
-  const [tab, setTab] = useState<Tab>("dashboard");
+  /* Точка входа: ?tab=…&asset=… (ссылка из Telegram-бота или расшаренный экран).
+     Считается один раз до рендера — иначе переключение вкладок затрёт то, с чего
+     начали. */
+  const [entry] = useState(() =>
+    readEntryFromSearch(window.location.search, { tab: "dashboard", asset: "BTC" })
+  );
+  const [tab, setTab] = useState<Tab>(entry.tab);
   const [walletMenuOpen, setWalletMenuOpen] = useState(false);
   const [connectPickerOpen, setConnectPickerOpen] = useState(false);
   const [accountResult, setAccountResult] = useState<{ key: string; account: LighterAccount | null } | null>(null);
 
-  const [asset, setAsset] = useState<string>("BTC");
+  const [asset, setAsset] = useState<string>(entry.asset);
   const [network, setNetwork] = useState<LighterNetwork>(LIGHTER_NETWORK);
   const [marketPickerOpen, setMarketPickerOpen] = useState(false);
   const [marketSearch, setMarketSearch] = useState("");

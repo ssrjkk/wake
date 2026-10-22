@@ -11,6 +11,25 @@ from the commit history rather than from a release.
 
 ### Added
 
+- Screens in both READMEs, captured from this build against live data: the
+  Terminal, Overview and Funding at 1440 px, the Terminal and Overview at 390 px,
+  and the Telegram bot's cards rendered from the HTML `telegram_bot.py` actually
+  sends. Panels that need the Wake backend are shown in their honest
+  "backend unavailable" state rather than with invented numbers.
+- `/spread SYMBOL` in the bot: the same asset's funding across every venue
+  Lighter reports, through `funding_arb.venue_rate_rows` — the parser behind
+  `GET /funding/venues`, extracted so the endpoint and the bot cannot disagree.
+  It prints rates, not a spread: the venues pay on different epochs.
+- The bot's market list paginates (`ещё →` / `← назад`), and the rank numbers
+  continue across pages instead of restarting.
+- The bot's "Open Wake" button deep-links: `?tab=terminal&asset=BTC` from a price
+  card, `?tab=funding` and `?tab=predict` from those answers. `src/lib/deeplink.ts`
+  validates the tab against the shell's own list and the ticker against a profile,
+  so a hand-edited link cannot select an unknown view.
+- A line-width test for the bot's numeric reports: Telegram renders `<pre>`
+  monospaced and does not wrap, so a line longer than the bubble is clipped
+  without warning.
+
 - Telegram widget tests for missing configuration, StrictMode, callback updates
   and cleanup; browser tests for focus, Escape, reduced motion, all tabs, mobile
   overflow, Arcus network selection and Predict quote confirmation.

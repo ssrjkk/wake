@@ -7,7 +7,11 @@
   --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
   /* Дисплейный моно — только для крупных чисел и вордмарка. Azeret Mono на
      700/900 — это приборная цифра: широкая, табличная, с весом, который держит
-     44px. В таблицу на 12px он не идёт — там остаётся JetBrains Mono. */
+     крупный кегль. Ограничение проверено по отдаче Google Fonts: у семейства
+     только подмножества latin и latin-ext, кириллицы в нём нет — поэтому в
+     --font-display держим цифры и латиницу (цена, тикер, WAKE), а вторым в стеке
+     стоит JetBrains Mono: если в него всё же попадёт русский текст, он дорисуется
+     моноширинным кириллическим шрифтом, а не молча свалится в системный Arial. */
   --font-display: 'Azeret Mono', 'JetBrains Mono', ui-monospace, monospace;
 
   --animate-fade-in: fade-in 0.16s ease-out;

@@ -68,7 +68,7 @@ from aiogram.types import (
 
 import lighter_rest
 from config import BACKEND_URL, LIGHTER_NETWORK, MINIAPP_URL, TELEGRAM_BOT_TOKEN
-from funding_arb import base_asset, funding_rate_rows
+from funding_arb import base_asset, funding_rate_rows, venue_rate_rows
 
 log = logging.getLogger(__name__)
 
@@ -89,6 +89,7 @@ BOT_COMMANDS = (
     BotCommand(command="price", description="Карточка рынка: цена, 24ч, funding"),
     BotCommand(command="markets", description="Топ перпов по обороту за 24ч"),
     BotCommand(command="funding", description="Ставки funding по годовой"),
+    BotCommand(command="spread", description="Funding одного актива по всем площадкам"),
     BotCommand(command="predict", description="Predict-рынки Wake"),
     BotCommand(command="wake", description="Открыть Wake в Telegram"),
     BotCommand(command="help", description="Что бот умеет"),
@@ -205,22 +206,26 @@ def fmt_open_interest(book: dict) -> str:
         return "—"
 
 
-def markets_report(overview: dict, limit: int = 10) -> str:
+def markets_report(overview: dict, limit: int = 10, offset: int = 0) -> str:
     """Ранжирование по реальным $-оборотам за 24ч (сумма quote-объёма часовых
-    свечей), а не по алфавиту и не по open interest в базовых единицах."""
-    rows = overview["rows"][:limit]
+    свечей), а не по алфавиту и не по open interest в базовых единицах.
+
+    Номер строки — это ранг по обороту на всей выборке, поэтому на второй
+    странице он продолжается (11, 12, …), а не начинается с единицы."""
+    rows = overview["rows"][offset : offset + limit]
     if not rows:
         return "Данных по рынку нет — Lighter API не ответил."
     lines = [
-        f"Топ {len(rows)} перпов Lighter по обороту за 24ч ({overview['network']}):"
+        f"Рынки Lighter по обороту за 24ч, места {offset + 1}–{offset + len(rows)}"
+        f" из {overview['count']} ({overview['network']}):"
     ]
-    for i, r in enumerate(rows, 1):
+    for i, r in enumerate(rows, offset + 1):
         lines.append(
             f"{i:>2}. {r['symbol']:<9} {fmt_price(r['price']):>10}  "
             f"{fmt_pct(r['change_24h']):>8}  {fmt_usd(r['quote_volume_24h']):>8}"
         )
     missing = overview.get("no_market") or []
-    if missing:
+    if missing and offset == 0:
         lines.append(f"Без активного перпа: {', '.join(missing)}")
     return "\n".join(lines)
 
@@ -263,20 +268,42 @@ def predict_report(
 
 
 def funding_report(rates: list, limit: int = 10) -> str:
+    """Список ставок. Строки держим короче ~58 знаков: Telegram набирает <pre>
+    моноширинно и не переносит — длинная строка упирается в край пузыря и
+    обрезается, а не сворачивается."""
     rows = rates[:limit]
     if not rows:
-        return "Подходящих ставок funding нет — Lighter не ответил или все рынки платят шортам."
-    lines = ["Funding Lighter (эпох 1 час), годовая по убыванию. Показаны рынки, где"]
-    lines.append(
-        "ставку получают шорты перпа — только они забираются cash-and-carry без "
-        "займа актива:"
-    )
+        return "Ставок funding нет — Lighter не ответил\nили все рынки платят шортам."
+    lines = [
+        "Funding Lighter (эпох 1 час), годовая по убыванию.",
+        "Показаны рынки, где ставку получают шорты перпа:",
+        "только они забираются cash-and-carry без займа.",
+    ]
     for r in rows:
         lines.append(
             f"• {str(r['symbol']):<9} {r['hourly_rate'] * 100:.4f}%/ч → "
             f"{r['annualized'] * 100:.1f}% годовых · платят "
             f"{'лонги' if r['direction'] == 'long' else 'шорты'}"
         )
+    return "\n".join(lines)
+
+
+def spread_report(symbol: str, venues: list) -> str:
+    """Ставки funding одного актива по всем площадкам, которые отдаёт Lighter.
+
+    Разницы «спред, который можно забрать» здесь намеренно нет: интервалы выплат
+    у площадок разные, и годовые из этих чисел не выводятся. Это справочный
+    срез — где ставка больше, а не сколько можно заработать."""
+    if not venues:
+        return f"Ставок funding по {symbol} нет: ни одна площадка в ответе Lighter его не отдаёт."
+    lines = [f"{symbol} — ставки funding по площадкам (справка, не спред):"]
+    for v in venues:
+        pays = "лонги" if v["signed_rate"] > 0 else "шорты"
+        lines.append(
+            f"• {str(v['venue']):<12} {v['signed_rate'] * 100:+.4f}%/эпоху · платят {pays}"
+            + (f" · {v['symbol']}" if str(v.get("symbol")) != symbol else "")
+        )
+    lines.append("Эпохи у площадок разные, к годовой не приводим.")
     return "\n".join(lines)
 
 
@@ -288,24 +315,44 @@ def card(title: str, body: str, note: str = "") -> str:
     return f"{text}\n{note}" if note else text
 
 
-def web_app_button() -> InlineKeyboardButton | None:
+def miniapp_url(tab: str = "terminal", asset: str | None = None) -> str:
+    """Ссылка на Mini App с нужным разделом и, если нужно, с выбранным рынком.
+
+    Кнопка из карточки BTC должна приводить в терминал на BTC, а не в начало:
+    иначе ответ бота и экран не связаны, и рынок приходится искать руками.
+    Табы и тикер проверяются здесь, а не на сайте — адрес уходит в Telegram, и
+    внятным он должен быть до отправки."""
+    if not WAKE_MINIAPP_URL.startswith("https://"):
+        return ""
+    sep = "&" if "?" in WAKE_MINIAPP_URL else "?"
+    url = f"{WAKE_MINIAPP_URL}{sep}tab={tab}"
+    if asset and TICKER_RE.fullmatch(asset):
+        url += f"&asset={asset}"
+    return url
+
+
+def web_app_button(
+    tab: str = "terminal", asset: str | None = None
+) -> InlineKeyboardButton | None:
     """Кнопка Mini App — только когда адрес https.
 
     Bot API отбраковывает web_app с http на валидации ответа: с дефолтным
     localhost бот падал бы с 400 на каждом сообщении с такой клавиатурой, а не
     только там, где кнопка. Лучше кнопка исчезнет, а причина попадёт в лог и в
     ответ /start."""
-    if not WAKE_MINIAPP_URL.startswith("https://"):
+    url = miniapp_url(tab, asset)
+    if not url:
         return None
-    return InlineKeyboardButton(
-        text="Открыть Wake", web_app=WebAppInfo(url=WAKE_MINIAPP_URL)
-    )
+    return InlineKeyboardButton(text="Открыть Wake", web_app=WebAppInfo(url=url))
 
 
-def ticker_rows(symbols: list) -> list[list[InlineKeyboardButton]]:
+def ticker_rows(
+    symbols: list, cap: int = 8, offset: int = 0
+) -> list[list[InlineKeyboardButton]]:
     """Тикеры кнопками, ровно 4 в ряду: при другом размере ряда Telegram режет
     их по ширине экрана, и на телефоне список превращается в лесенку."""
-    wanted = [s for s in symbols if s and TICKER_RE.fullmatch(s)][:8]
+    wanted = [s for s in symbols if s and TICKER_RE.fullmatch(s)]
+    wanted = wanted[offset : offset + cap]
     return [
         [
             InlineKeyboardButton(text=s, callback_data=f"p:{s}")
@@ -317,8 +364,12 @@ def ticker_rows(symbols: list) -> list[list[InlineKeyboardButton]]:
 
 def nav_keyboard(
     top_rows: list[list[InlineKeyboardButton]] | None = None,
+    tab: str = "terminal",
+    asset: str | None = None,
 ) -> InlineKeyboardMarkup:
-    """Навигация внизу каждого ответа: разделы + ссылка на полный интерфейс."""
+    """Навигация внизу каждого ответа: разделы + ссылка на полный интерфейс.
+    Кнопка интерфейса ведёт в тот раздел, о котором сейчас речь, а карточка
+    рынка — ещё и на сам рынок."""
     rows = list(top_rows or [])
     rows.append(
         [
@@ -327,7 +378,7 @@ def nav_keyboard(
             InlineKeyboardButton(text="Predict", callback_data="c:predict"),
         ]
     )
-    app = web_app_button()
+    app = web_app_button(tab, asset)
     if app is not None:
         rows.append([app])
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -362,18 +413,43 @@ async def price_payload(ticker: str) -> tuple[str, InlineKeyboardMarkup]:
             price_report(ticker, book, stats, funding),
             "График и ордер — в веб-терминале." if app_available() else "",
         ),
-        nav_keyboard(),
+        # Кнопка ведёт в терминал уже на этом рынке: смотреть карточку и потом
+        # искать тот же символ в списке — два лишних тапа на каждый запрос.
+        nav_keyboard(tab="terminal", asset=ticker),
     )
 
 
-async def markets_payload(limit: int = 10) -> tuple[str, InlineKeyboardMarkup]:
+MARKETS_PAGE = 10
+
+
+async def markets_payload(offset: int = 0) -> tuple[str, InlineKeyboardMarkup]:
     overview = await asyncio.to_thread(lighter_rest.get_market_overview)
-    rows = ticker_rows([str(r["symbol"]) for r in overview["rows"][:limit]])
+    total = len(overview["rows"])
+    offset = max(0, min(offset, max(0, total - 1)))
+    page = overview["rows"][offset : offset + MARKETS_PAGE]
+    rows = ticker_rows([str(r["symbol"]) for r in page], cap=MARKETS_PAGE)
+    if total > MARKETS_PAGE:
+        nav = []
+        if offset > 0:
+            nav.append(
+                InlineKeyboardButton(
+                    text="← назад", callback_data=f"m:{offset - MARKETS_PAGE}"
+                )
+            )
+        if offset + MARKETS_PAGE < total:
+            nav.append(
+                InlineKeyboardButton(
+                    text=f"ещё {min(MARKETS_PAGE, total - offset - MARKETS_PAGE)} →",
+                    callback_data=f"m:{offset + MARKETS_PAGE}",
+                )
+            )
+        if nav:
+            rows.append(nav)
     return (
         card(
             f"Рынки Lighter · {LIGHTER_NETWORK}",
-            markets_report(overview, limit),
-            "Тапни тикер — будет карточка с funding." if rows else "",
+            markets_report(overview, MARKETS_PAGE, offset),
+            "Тапни тикер — будет карточка с funding." if page else "",
         ),
         nav_keyboard(rows or None),
     )
@@ -388,11 +464,23 @@ async def funding_payload(limit: int = 10) -> tuple[str, InlineKeyboardMarkup]:
         card(
             f"Funding · Lighter {LIGHTER_NETWORK}",
             funding_report(rates, limit),
-            "Спред по площадкам и расчёт ног — на странице Funding."
+            "Ставку по любой площадке можно спросить командой /spread."
             if app_available()
             else "",
         ),
-        nav_keyboard(rows or None),
+        nav_keyboard(rows or None, tab="funding"),
+    )
+
+
+async def spread_payload(ticker: str) -> tuple[str, InlineKeyboardMarkup]:
+    raw = await asyncio.to_thread(lighter_rest.get_funding_rates, LIGHTER_NETWORK)
+    venues = await asyncio.to_thread(venue_rate_rows, raw, ticker)
+    return (
+        card(
+            f"Funding {base_asset(ticker)} · площадки",
+            spread_report(base_asset(ticker), venues),
+        ),
+        nav_keyboard(tab="funding"),
     )
 
 
@@ -407,14 +495,17 @@ async def predict_payload(status: str = "open") -> tuple[str, InlineKeyboardMark
                 "неоткуда.\n"
                 f"WAKE_BACKEND_URL = {WAKE_BACKEND}\n{type(e).__name__}: {e}",
             ),
-            nav_keyboard(),
+            nav_keyboard(tab="predict"),
         )
     note = (
         "Купить долю и забрать выигрыш — в мини-аппе."
         if app_available()
         else "Купить долю — в веб-терминале."
     )
-    return (card(f"Predict · {status}", predict_report(markets), note), nav_keyboard())
+    return (
+        card(f"Predict · {status}", predict_report(markets), note),
+        nav_keyboard(tab="predict"),
+    )
 
 
 def app_available() -> bool:
@@ -484,6 +575,20 @@ async def cmd_funding(message: Message):
     await _answer(message, await funding_payload())
 
 
+@dp.message(Command("spread"))
+async def cmd_spread(message: Message, command: CommandObject):
+    symbol = (command.args or "").strip()
+    ticker = parse_ticker(symbol) if symbol else "BTC"
+    if ticker is None:
+        await message.answer(
+            card(
+                "Тикер не понятен", f"Написано: {symbol}. Жду что-то вроде /spread BTC."
+            )
+        )
+        return
+    await _answer(message, await spread_payload(ticker))
+
+
 @dp.message(Command("predict"))
 async def cmd_predict(message: Message, command: CommandObject):
     status = (command.args or "").strip().lower()
@@ -526,6 +631,18 @@ async def cb_price(callback: CallbackQuery):
 @dp.callback_query(F.data == "c:markets")
 async def cb_markets(callback: CallbackQuery):
     await _reply(callback, await markets_payload())
+
+
+@dp.callback_query(F.data.startswith("m:"))
+async def cb_markets_page(callback: CallbackQuery):
+    """Страницы списка: смещение приходит из callback_data, поэтому оно сначала
+    приводится к числу — буквенный мусор не должен долетать до среза."""
+    try:
+        offset = max(0, int(callback.data.removeprefix("m:")))
+    except ValueError:
+        await callback.answer("Не понял страницу — открой /markets", show_alert=True)
+        return
+    await _reply(callback, await markets_payload(offset))
 
 
 @dp.callback_query(F.data == "c:funding")

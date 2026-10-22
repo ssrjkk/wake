@@ -27,7 +27,6 @@ import lighter_rest
 from config import LIGHTER_NETWORK
 from funding_arb import (
     HOURS_PER_YEAR,
-    VENUES,
     FundingSnapshot,
     base_asset,
     find_opportunity,
@@ -36,6 +35,7 @@ from funding_arb import (
     pairable_carry_markets,
     size_delta_neutral_position,
     snapshot_from_signed_rate,
+    venue_rate_rows,
 )
 
 router = APIRouter()
@@ -145,21 +145,11 @@ def funding_venues(symbol: str = Query("BTC", min_length=1, max_length=24)):
         raise HTTPException(status_code=502, detail=str(e)) from e
 
     wanted = base_asset(symbol)
-    matched = [
-        {
-            "venue": r.get("exchange"),
-            "symbol": r.get("symbol"),
-            "market_id": r.get("market_id"),
-            "signed_rate": float(r["rate"]),
-        }
-        for r in rows
-        if r.get("exchange") in VENUES and base_asset(r.get("symbol", "")) == wanted
-    ]
+    matched = venue_rate_rows(rows, symbol)
     if not matched:
         raise HTTPException(
             status_code=404, detail=f"нет ставок funding по символу {symbol}"
         )
-    matched.sort(key=lambda m: m["signed_rate"], reverse=True)
     return {"symbol": symbol.upper(), "base": wanted, "venues": matched}
 
 

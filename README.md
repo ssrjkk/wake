@@ -13,6 +13,24 @@ Live backend: https://wake-backend-production-3483.up.railway.app — `/health` 
 - **Wake Trade bot:** [@waketrade_bot](https://t.me/waketrade_bot)
 - **GitHub:** [@ssrjkk](https://github.com/ssrjkk)
 
+## Screens
+
+Captured from this build with live data (2026-10-23), not mockups. The backend-dependent panels show the "backend unavailable" state on purpose: the deployed process answers `/health` but not `/ready` until PostgreSQL and Redis are attached, and a screenshot with invented numbers would be worse than an honest empty state.
+
+| | |
+| --- | --- |
+| ![Terminal](docs/screenshots/terminal-1440.png) | **Терминал** — the desk: quote in a display mono, hourly tick tape, candles, trade tape, order ticket, and a market list with a liquidity rank along each row. Public Lighter REST, no backend. |
+| ![Overview](docs/screenshots/overview-1440.png) | **Обзор** — ranking by real 24h quote volume, Arcus markets, open Predict markets. The ranking itself is a backend call, so the notice in the shot is the current production state. |
+| ![Funding](docs/screenshots/funding-1440.png) | **Funding** — 735 live rates across four venues and 214 Lighter perps, with the carry candidates where both legs exist on one exchange. |
+| ![Portfolio](docs/screenshots/portfolio-1440.png) | **Портфель** — subscriptions from the `follows` table and the Lighter account by L1 address; both empty states say what is missing and where to act. |
+| ![Discover](docs/screenshots/discover-1440.png) | **Discover** — leader directory with followers, AUM and the leader's own Lighter account. No leaders yet, and the panel names the backend address it tried. |
+| ![Earn](docs/screenshots/earn-1440.png) | **Earn** — subscription tier and trial state; the shot shows the publish gate, because there is no leader record yet. |
+| ![Predict](docs/screenshots/predict-1440.png) | **Predict** — LMSR price and event markets, quoting and claims; the shot shows the list gate (backend) and the sign-in gate (positions and payouts). |
+| ![Agent](docs/screenshots/agent-1440.png) | **Агент** — per-market decision with per-market win-rate memory, gated on trial or Pro; the empty state names the endpoint, the curator header and the table the rows live in. |
+| ![Risk](docs/screenshots/risk-1440.png) | **Risk** — basket exposure and hedge sizing on Lighter's single margin, correlations from hourly candles. |
+| ![Terminal at 390](docs/screenshots/terminal-390.png) | **Терминал на 390 px** — the same desk stacked; no tab overflows horizontally. |
+| ![Telegram bot](docs/screenshots/bot-cards.png) | **@waketrade_bot** — the HTML cards `backend/telegram_bot.py` sends, rendered in a browser: ranking with ticker buttons and pagination, price card with the hourly sparkline, funding ranking, `/spread` across venues. |
+
 ## What each panel does
 
 | Panel | Where the data comes from | Works without the Wake backend |
@@ -116,7 +134,11 @@ cd backend
 python telegram_bot.py     # reads TELEGRAM_BOT_TOKEN from the environment
 ```
 
-Commands: `/price BTC`, `/markets`, `/funding`, `/predict` (`/predict resolved`), `/wake`, `/help`. Typing a bare ticker (`BTC`, `eth`, `BTC-USDC`) is the same as `/price` — nobody remembers command syntax. Answers are HTML cards: the numbers sit in a monospace block, so the 24h volume columns actually line up, and a market list comes with the tickers as buttons, so the next tap chooses the market instead of typing it.
+Commands: `/price BTC`, `/markets`, `/funding`, `/spread BTC`, `/predict` (`/predict resolved`), `/wake`, `/help`. Typing a bare ticker (`BTC`, `eth`, `BTC-USDC`) is the same as `/price` — nobody remembers command syntax. Answers are HTML cards: the numbers sit in a monospace block, so the 24h volume columns actually line up, and a market list comes with the tickers as buttons, so the next tap chooses the market instead of typing it. The list paginates (`ещё →`), and ranks continue across pages — place 11 is place 11, not place 1 again.
+
+`/spread BTC` answers the same asset across every venue Lighter reports (lighter, binance, bybit, hyperliquid) through `funding_arb.venue_rate_rows` — the function behind `GET /funding/venues`. It deliberately does not print a spread or an annualised difference: the venues pay on different epochs, and reducing those numbers to one denominator without checking would be a lie the bot told for convenience.
+
+The "Open Wake" button carries where you were looking: the BTC card opens `?tab=terminal&asset=BTC`, the funding answer opens `?tab=funding`, Predict opens `?tab=predict`. `src/lib/deeplink.ts` validates both parameters against the tab list and a ticker profile before using them.
 
 The command menu is written to Telegram at startup (`set_my_commands`), otherwise autocomplete on `/` is empty and the bot's capabilities are only knowable from a screenshot. If the menu cannot be registered, the bot logs it and keeps polling — the menu is discoverability, not a dependency.
 
@@ -126,6 +148,7 @@ Where the numbers come from is the part that decides whether the bot and the sit
 | --- | --- | --- |
 | `/price`, `/markets` | `lighter_rest.py` — public Lighter REST, same client and same `WAKE_LIGHTER_NETWORK` as the Terminal | no |
 | `/funding` | `funding_arb.funding_rate_rows` — the exact function `GET /funding/rates` returns | no |
+| `/spread` | `funding_arb.venue_rate_rows` — the exact function `GET /funding/venues` returns | no |
 | `/predict` | `GET /predict/markets` on `WAKE_BACKEND_URL` | yes, the markets live in the Wake database |
 
 `/predict` says so when the backend is unreachable, and names `WAKE_BACKEND_URL` in the message, instead of showing an empty list. Inside docker-compose that variable is `http://app:8000`: `localhost` inside the bot's own container has nothing listening on 8000.
@@ -183,7 +206,7 @@ Price markets close themselves at the deadline only while this process runs; oth
 # backend — run from backend/; needs a scratch PostgreSQL database
 createdb wake_test
 export WAKE_TEST_DATABASE_URL=postgresql+asyncpg://wake:wake@localhost:5432/wake_test
-python -m unittest discover        # 333 tests, all through discovery
+python -m unittest discover        # 350 tests, all through discovery
 python -m pytest -q                # the same set under pytest (+ Allure in CI)
 
 # frontend

@@ -15,7 +15,7 @@ import httpx
 
 import cache
 import telegram_bot as tb
-from funding_arb import funding_rate_rows
+from funding_arb import funding_rate_rows, venue_rate_rows
 
 
 def _raise_runtime(message: str):
@@ -63,13 +63,13 @@ class TestImportIsTokenFree(unittest.TestCase):
         self.assertIsNotNone(tb.dp)
         self.assertEqual(
             len(tb.dp.message.handlers),
-            7,
-            "/start /price /markets /funding /predict /wake и fallback",
+            8,
+            "/start /price /markets /funding /spread /predict /wake и fallback",
         )
         self.assertEqual(
             len(tb.dp.callback_query.handlers),
-            5,
-            "тикер, три раздела и нераспознанный callback последним",
+            6,
+            "тикер, три раздела, страница списка и нераспознанный callback последним",
         )
         self.assertEqual(
             [h.callback.__name__ for h in tb.dp.callback_query.handlers][-1],
@@ -475,7 +475,9 @@ class TestKeyboards(unittest.TestCase):
         rows = tb.nav_keyboard().inline_keyboard
         last = rows[-1]
         self.assertEqual(len(last), 1)
-        self.assertEqual(last[0].web_app.url, "https://wake-7k6.pages.dev/")
+        self.assertEqual(
+            last[0].web_app.url, "https://wake-7k6.pages.dev/?tab=terminal"
+        )
 
     def test_navigation_is_always_present(self):
         rows = tb.nav_keyboard().inline_keyboard
@@ -639,6 +641,211 @@ class TestHelpText(unittest.TestCase):
     def test_http_miniapp_says_why_there_is_no_button(self):
         tb.WAKE_MINIAPP_URL = "http://localhost:5173/"
         self.assertIn("https", tb.help_text())
+
+
+class TestDeepLink(unittest.TestCase):
+    """Кнопка «Открыть Wake» должна вести в тот раздел, о котором сейчас речь, а
+    карточка рынка — ещё и на сам рынок."""
+
+    def setUp(self):
+        self._url = tb.WAKE_MINIAPP_URL
+        self.addCleanup(setattr, tb, "WAKE_MINIAPP_URL", self._url)
+        tb.WAKE_MINIAPP_URL = "https://wake-7k6.pages.dev/"
+
+    def test_tab_and_asset(self):
+        self.assertEqual(
+            tb.miniapp_url("terminal", "BTC"),
+            "https://wake-7k6.pages.dev/?tab=terminal&asset=BTC",
+        )
+        self.assertEqual(
+            tb.miniapp_url("funding"), "https://wake-7k6.pages.dev/?tab=funding"
+        )
+
+    def test_existing_query_is_extended_not_clobbered(self):
+        tb.WAKE_MINIAPP_URL = "https://wake-7k6.pages.dev/?x=1"
+        self.assertEqual(
+            tb.miniapp_url("predict", "ETH"),
+            "https://wake-7k6.pages.dev/?x=1&tab=predict&asset=ETH",
+        )
+
+    def test_junk_ticker_is_not_put_into_the_url(self):
+        self.assertEqual(
+            tb.miniapp_url("terminal", "a" * 40),
+            "https://wake-7k6.pages.dev/?tab=terminal",
+        )
+
+    def test_http_address_gives_no_link_at_all(self):
+        tb.WAKE_MINIAPP_URL = "http://localhost:5173/"
+        self.assertEqual(tb.miniapp_url("terminal", "BTC"), "")
+        self.assertIsNone(tb.web_app_button("terminal", "BTC"))
+
+    def test_price_card_button_opens_that_market(self):
+        with (
+            patch.object(tb, "find_perp", lambda symbol: BOOK),
+            patch.object(tb.lighter_rest, "get_24h_stats", lambda mid: STATS),
+            patch.object(tb.lighter_rest, "get_funding_rate", lambda mid: FUNDING),
+        ):
+            _, keyboard = asyncio.run(tb.price_payload("BTC"))
+        app = [b for row in keyboard.inline_keyboard for b in row if b.web_app]
+        self.assertEqual(len(app), 1)
+        self.assertIn("tab=terminal", app[0].web_app.url)
+        self.assertIn("asset=BTC", app[0].web_app.url)
+
+
+class TestMarketsPagination(unittest.TestCase):
+    def _overview(self, n: int) -> dict:
+        return {
+            "network": "mainnet",
+            "ranked_by": "quote_volume_24h",
+            "count": n,
+            "rows": [
+                {
+                    "symbol": f"S{i}",
+                    "price": 100 + i,
+                    "change_24h": 0.01,
+                    "quote_volume_24h": 1_000_000 - i * 1000,
+                }
+                for i in range(n)
+            ],
+            "no_market": ["TON"],
+            "no_data": [],
+        }
+
+    def test_ranks_continue_across_pages(self):
+        got = tb.markets_report(self._overview(12), 10, 10)
+        self.assertIn("места 11–12 из 12", got)
+        self.assertIn("11. S10", got)
+        self.assertNotIn(
+            "Без активного перпа", got, "подсказка нужна на первой странице"
+        )
+
+    def test_second_page_offers_to_go_back(self):
+        with patch.object(
+            tb.lighter_rest,
+            "get_market_overview",
+            lambda network=None: self._overview(12),
+        ):
+            text, keyboard = asyncio.run(tb.markets_payload(10))
+        self.assertIn("места 11–12", text)
+        data = [b.callback_data for row in keyboard.inline_keyboard for b in row]
+        self.assertIn("m:0", data, "назад с второй страницы обязательно")
+        self.assertNotIn("m:20", data, "вперёд идти некуда")
+
+    def test_first_page_offers_the_next_one(self):
+        with patch.object(
+            tb.lighter_rest,
+            "get_market_overview",
+            lambda network=None: self._overview(12),
+        ):
+            _, keyboard = asyncio.run(tb.markets_payload(0))
+        data = [b.callback_data for row in keyboard.inline_keyboard for b in row]
+        self.assertIn("m:10", data)
+        self.assertNotIn("m:0", data)
+
+    def test_offset_from_callback_is_parsed_defensively(self):
+        """Смещение приходит из callback_data — клиент может прислать что угодно."""
+        for raw in ("m:", "m:abc", "m:-5"):
+            with self.subTest(raw=raw):
+                self.assertTrue(raw.startswith("m:"))
+                try:
+                    offset = max(0, int(raw.removeprefix("m:")))
+                except ValueError:
+                    offset = None
+                self.assertIn(offset, (0, None))
+
+
+class TestSpread(unittest.TestCase):
+    ROWS = [
+        {"exchange": "lighter", "market_id": 1, "symbol": "BTC", "rate": 0.00008},
+        {"exchange": "bybit", "market_id": 1, "symbol": "BTC-PERP", "rate": 0.0001},
+        {"exchange": "hyperliquid", "market_id": 1, "symbol": "BTC", "rate": -0.00002},
+        {"exchange": "lighter", "market_id": 2, "symbol": "ETH", "rate": 0.0003},
+    ]
+
+    def test_venues_side_by_side_sorted_by_rate(self):
+        got = tb.spread_report("BTC", venue_rate_rows(self.ROWS, "BTC"))
+        lines = [line for line in got.splitlines() if line.startswith("•")]
+        self.assertEqual(len(lines), 3, "ETH — другой актив")
+        self.assertTrue(lines[0].startswith("• bybit"), lines[0])
+        self.assertIn("платят лонги", lines[0])
+        self.assertIn("платят шорты", lines[-1])
+
+    def test_no_spread_claim(self):
+        """Годовую из этих чисел выводить нельзя: эпохи у площадок разные."""
+        got = tb.spread_report("BTC", venue_rate_rows(self.ROWS, "BTC"))
+        self.assertIn("справка, не спред", got)
+        self.assertNotIn("годовых", got)
+
+    def test_missing_symbol_says_so(self):
+        self.assertIn("Ставок funding по DOGE нет", tb.spread_report("DOGE", []))
+
+    def test_payload_uses_the_shared_parser(self):
+        with patch.object(
+            tb.lighter_rest, "get_funding_rates", lambda network=None: self.ROWS
+        ):
+            text, _ = asyncio.run(tb.spread_payload("btc"))
+        self.assertIn("bybit", text)
+        self.assertIn("hyperliquid", text)
+
+
+class TestTelegramLineWidth(unittest.TestCase):
+    """Telegram набирает <pre> моноширинно и не переносит строки: всё, что длиннее
+    пузыря, обрезается без предупреждения. Числовые отчёты поэтому держим в
+    границе, и проверяем это, а не надеемся."""
+
+    LIMIT = 62
+
+    def _long_lines(self, text: str) -> list[str]:
+        return [line for line in text.splitlines() if len(line) > self.LIMIT]
+
+    def test_price_report_fits(self):
+        self.assertEqual(
+            self._long_lines(tb.price_report("BTC", BOOK, STATS, FUNDING)), []
+        )
+
+    def test_markets_report_fits(self):
+        overview = {
+            "network": "mainnet",
+            "ranked_by": "quote_volume_24h",
+            "count": 18,
+            "rows": [
+                {
+                    "symbol": "1000PEPE",
+                    "price": 0.0001234,
+                    "change_24h": -0.1234,
+                    "quote_volume_24h": 9_999_999_999.0,
+                }
+            ],
+            "no_market": [],
+            "no_data": [],
+        }
+        self.assertEqual(self._long_lines(tb.markets_report(overview)), [])
+
+    def test_funding_report_fits(self):
+        rates = [
+            {
+                "symbol": "1000PEPE",
+                "hourly_rate": 0.001234,
+                "annualized": 108.3,
+                "direction": "long",
+            }
+        ]
+        self.assertEqual(self._long_lines(tb.funding_report(rates)), [])
+        self.assertEqual(self._long_lines(tb.funding_report([])), [])
+
+    def test_spread_report_fits(self):
+        venues = venue_rate_rows(
+            [
+                {
+                    "exchange": "hyperliquid",
+                    "market_id": 1,
+                    "symbol": "1000PEPE",
+                    "rate": 0.0001,
+                }
+            ],
+            "1000PEPE",
+        )
+        self.assertEqual(self._long_lines(tb.spread_report("1000PEPE", venues)), [])
 
 
 if __name__ == "__main__":

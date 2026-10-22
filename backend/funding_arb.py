@@ -168,6 +168,33 @@ def base_asset(symbol: str) -> str:
     return s
 
 
+def venue_rate_rows(rows: list, symbol: str) -> list[dict]:
+    """Ставки funding одного актива по всем площадкам, которые отдаёт Lighter.
+
+    Форма ответа живёт здесь, а не в роутере, по той же причине, что и
+    funding_rate_rows: её читают GET /funding/venues и telegram_bot.
+
+    Спред специально НЕ считается: интервалы выплат у площадок разные (у Lighter
+    час — подтверждено живым API, у остальных — другие), и приводить эти ставки
+    к одному знаменателю без проверки нельзя. Наружу уходит то, что есть: знак
+    ставки и кто платит.
+    """
+    wanted = base_asset(symbol)
+    matched = [
+        {
+            "venue": r.get("exchange"),
+            "symbol": r.get("symbol"),
+            "market_id": r.get("market_id"),
+            "signed_rate": float(r["rate"]),
+        }
+        for r in rows
+        if r.get("exchange") in VENUES
+        and base_asset(str(r.get("symbol", ""))) == wanted
+    ]
+    matched.sort(key=lambda m: m["signed_rate"], reverse=True)
+    return matched
+
+
 def find_opportunity(
     snapshot: FundingSnapshot, min_annualized_yield: float = 0.05
 ) -> ArbOpportunity | None:
