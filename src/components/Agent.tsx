@@ -54,12 +54,14 @@ export default function Agent({ signedIn, subscription, currentMarket, setToast,
   const [memory, setMemory] = useState<MemoryView | null>(null);
   const [memoryError, setMemoryError] = useState<string | null>(null);
 
+  const marketId = currentMarket?.market_id;
+
   useEffect(() => {
-    if (!currentMarket) return;
+    if (marketId == null) return;
     let cancelled = false;
     async function load() {
       try {
-        const c = await getCandles(currentMarket!.market_id, resolution, POINTS_SENT);
+        const c = await getCandles(marketId!, resolution, POINTS_SENT);
         if (!cancelled) {
           setCandles(c);
           setCandlesError(null);
@@ -74,22 +76,23 @@ export default function Agent({ signedIn, subscription, currentMarket, setToast,
       cancelled = true;
       clearInterval(id);
     };
-  }, [currentMarket?.market_id, resolution]);
+  }, [marketId, resolution]);
 
   useEffect(() => {
-    if (!signedIn) {
-      setMemory(null);
-      return;
-    }
+    if (!signedIn) return;
+    let live = true;
     backendJson<MemoryView>("/agent/memory")
       .then((m) => {
+        if (!live) return;
         setMemory(m);
         setMemoryError(null);
       })
       .catch((e) => {
+        if (!live) return;
         setMemory(null);
         setMemoryError(errorText(e));
       });
+    return () => { live = false; };
   }, [signedIn, lastDecision]);
 
   const prices = (candles ?? []).map((c) => c.c);
@@ -138,7 +141,7 @@ export default function Agent({ signedIn, subscription, currentMarket, setToast,
       <div className="terminal-main">
         <div className="terminal-header" style={{ flexDirection: "column", alignItems: "flex-start" }}>
           <h2 style={{ fontSize: "16px", fontWeight: 600, color: "#fafafa", margin: 0 }}>Агент</h2>
-          <p style={{ fontSize: "12px", color: "#666", margin: "4px 0 0" }}>
+          <p style={{ fontSize: "12px", color: "var(--text-muted)", margin: "4px 0 0" }}>
             Момент-эвристика по закрытиям свечей Lighter, поверх неё — LLM-рассуждение с откатом на эвристику, если ответы модели нет. Свечи читаются
             здесь же, через публичный <code style={{ color: "#a0a0a0" }}>GET /candles</code>.
           </p>
@@ -147,17 +150,17 @@ export default function Agent({ signedIn, subscription, currentMarket, setToast,
       {!subscription?.has_ai_agent ? (
         <div className="empty-state">
           <div style={{ width: "48px", height: "48px", borderRadius: "50%", background: "#1a1a1a", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: "12px" }}>
-            <Zap style={{ width: "24px", height: "24px", color: "#666" }} />
+            <Zap style={{ width: "24px", height: "24px", color: "var(--text-muted)" }} />
           </div>
           <p style={{ fontSize: "14px", color: "#a0a0a0", marginBottom: "4px" }}>
             {subscription?.tier === "free" ? "Пробный период закончился" : "Агент доступен на trial или Pro"}
           </p>
-          <p style={{ fontSize: "12px", color: "#666", marginBottom: "12px", maxWidth: "320px" }}>
+          <p style={{ fontSize: "12px", color: "var(--text-muted)", marginBottom: "12px", maxWidth: "320px" }}>
             Статус подписки читается с <code style={{ color: "#a0a0a0" }}>GET /subscription</code> — того, кому он принадлежит, решает токен входа; без
             Telegram или кошелька её не на что заводить.
           </p>
           <button className="btn-primary" onClick={startTrial}>Начать 14-дневный trial</button>
-          <p style={{ fontSize: "11px", color: "#666", marginTop: "12px", maxWidth: "320px", lineHeight: 1.5 }}>
+          <p style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "12px", maxWidth: "320px", lineHeight: 1.5 }}>
             Trial заводится без оплаты, один раз на аккаунт. «pro» включает <code style={{ color: "#a0a0a0" }}>POST /subscription/&lt;user_id&gt;/upgrade</code>{" "}
             на бэкенде под токеном куратора — платёжного пути в репозитории нет, и кнопкой в интерфейсе это не делается. Строки подписки лежат в{" "}
             <code style={{ color: "#a0a0a0" }}>subscriptions</code> (<code style={{ color: "#a0a0a0" }}>agent_db.py</code>) и переживают рестарт сервиса.
@@ -172,7 +175,7 @@ export default function Agent({ signedIn, subscription, currentMarket, setToast,
           <div style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", padding: "16px" }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", flexWrap: "wrap", marginBottom: "12px" }}>
               <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                <span style={{ fontSize: "12px", color: "#666", textTransform: "uppercase", letterSpacing: "0.5px" }}>
+                <span style={{ fontSize: "12px", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.5px" }}>
                   {currentMarket?.symbol ?? "рынок не выбран"}
                   {spot != null && <span style={{ fontFamily: "JetBrains Mono, monospace", color: "#a0a0a0", marginLeft: "8px", textTransform: "none" }}>{usd(spot, currentMarket?.supported_price_decimals ?? 2)}</span>}
                 </span>
@@ -189,7 +192,7 @@ export default function Agent({ signedIn, subscription, currentMarket, setToast,
                 </div>
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                <label style={{ fontSize: "12px", color: "#666", display: "flex", alignItems: "center" }}>
+                <label style={{ fontSize: "12px", color: "var(--text-muted)", display: "flex", alignItems: "center" }}>
                   Базовый размер $
                   <input
                     type="number"
@@ -215,9 +218,9 @@ export default function Agent({ signedIn, subscription, currentMarket, setToast,
                 <AlertTriangle style={{ width: "14px", height: "14px" }} /> Lighter не отдал свечи: {candlesError}
               </p>
             ) : candles == null ? (
-              <p style={{ fontSize: "13px", color: "#666", margin: 0 }}>Читаю {POINTS_SENT} свечей по {resolution}…</p>
+              <p style={{ fontSize: "13px", color: "var(--text-muted)", margin: 0 }}>Читаю {POINTS_SENT} свечей по {resolution}…</p>
             ) : (
-              <p style={{ fontSize: "12px", color: "#666", margin: 0 }}>
+              <p style={{ fontSize: "12px", color: "var(--text-muted)", margin: 0 }}>
                 {prices.length} закрытий по {resolution}, последние {Math.min(10, prices.length)} — окно, по которому считается момент.
               </p>
             )}
@@ -230,21 +233,21 @@ export default function Agent({ signedIn, subscription, currentMarket, setToast,
                   >
                     {lastDecision.action.toUpperCase()}
                   </span>
-                  <span style={{ fontSize: "12px", color: "#666", fontFamily: "JetBrains Mono, monospace" }}>
+                  <span style={{ fontSize: "12px", color: "var(--text-muted)", fontFamily: "JetBrains Mono, monospace" }}>
                     {(lastDecision.confidence * 100).toFixed(0)}% уверенность (самоотчёт)
                   </span>
-                  {lastDecision.size_usd > 0 && <span style={{ fontSize: "12px", color: "#666", fontFamily: "JetBrains Mono, monospace" }}>{usd(lastDecision.size_usd, 0)}</span>}
+                  {lastDecision.size_usd > 0 && <span style={{ fontSize: "12px", color: "var(--text-muted)", fontFamily: "JetBrains Mono, monospace" }}>{usd(lastDecision.size_usd, 0)}</span>}
                   {lastDecision.execution && (
                     <span style={{ fontSize: "11px", padding: "2px 8px", borderRadius: "3px", background: EXECUTION_STYLE[lastDecision.execution.status]?.bg ?? "#1a1a1a", color: EXECUTION_STYLE[lastDecision.execution.status]?.color ?? "#a0a0a0", border: EXECUTION_STYLE[lastDecision.execution.status]?.border ? `1px solid ${EXECUTION_STYLE[lastDecision.execution.status].border}` : "none" }}>
                       {lastDecision.execution.status}
                     </span>
                   )}
                 </div>
-                <p style={{ fontSize: "12px", color: "#666", margin: 0 }}>{lastDecision.reasoning}</p>
+                <p style={{ fontSize: "12px", color: "var(--text-muted)", margin: 0 }}>{lastDecision.reasoning}</p>
                 {lastDecision.execution?.reason && <p style={{ fontSize: "12px", color: "#fbbf24", marginTop: "4px", margin: 0 }}>{lastDecision.execution.reason}</p>}
                 {lastDecision.execution?.error && <p style={{ fontSize: "12px", color: "#ef4444", marginTop: "4px", margin: 0 }}>{String(lastDecision.execution.error).slice(0, 160)}</p>}
                 {lastDecision.execution?.tx_hash && (
-                  <p style={{ fontSize: "12px", color: "#666", fontFamily: "JetBrains Mono, monospace", marginTop: "4px", margin: 0 }}>tx {String(lastDecision.execution.tx_hash).slice(0, 18)}…</p>
+                  <p style={{ fontSize: "12px", color: "var(--text-muted)", fontFamily: "JetBrains Mono, monospace", marginTop: "4px", margin: 0 }}>tx {String(lastDecision.execution.tx_hash).slice(0, 18)}…</p>
                 )}
               </div>
             )}
@@ -258,8 +261,8 @@ export default function Agent({ signedIn, subscription, currentMarket, setToast,
           {memory && (
             <div style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", padding: "16px" }}>
               <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px" }}>
-                <span style={{ fontSize: "11px", color: "#666", textTransform: "uppercase", letterSpacing: "0.5px" }}>Память агента</span>
-                <span style={{ fontSize: "12px", color: "#666", fontFamily: "JetBrains Mono, monospace" }}>
+                <span style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.5px" }}>Память агента</span>
+                <span style={{ fontSize: "12px", color: "var(--text-muted)", fontFamily: "JetBrains Mono, monospace" }}>
                   {memory.open_trades.length} открыто · {memory.closed_trades.length} закрыто ·{" "}
                   {memory.win_rate == null ? "нет закрытых сделок" : `${(memory.win_rate * 100).toFixed(0)}% в плюс`} · объём за день{" "}
                   {usd(memory.volume_today_usd, 0)}
@@ -270,7 +273,7 @@ export default function Agent({ signedIn, subscription, currentMarket, setToast,
                 <div className="table-scroll">
                 <table style={{ width: "100%", fontSize: "12px", minWidth: "400px" }}>
                   <thead>
-                    <tr style={{ textAlign: "left", fontSize: "11px", color: "#666", borderBottom: "1px solid #1e1e1e" }}>
+                    <tr style={{ textAlign: "left", fontSize: "11px", color: "var(--text-muted)", borderBottom: "1px solid #1e1e1e" }}>
                       <th style={{ padding: "6px 0", fontWeight: 400 }}>Рынок</th>
                       <th style={{ padding: "6px 0", fontWeight: 400 }}>Сторона</th>
                       <th style={{ padding: "6px 0", fontWeight: 400 }}>Вход</th>
@@ -293,7 +296,7 @@ export default function Agent({ signedIn, subscription, currentMarket, setToast,
             </div>
           )}
 
-          <p style={{ fontSize: "12px", color: "#666" }}>
+          <p style={{ fontSize: "12px", color: "var(--text-muted)" }}>
             Решение считается на сервере (<code style={{ color: "#a0a0a0" }}>backend/agent_runner.py</code>), перед этим проходит{" "}
             <code style={{ color: "#a0a0a0" }}>risk_limits.check_order()</code>. При <code style={{ color: "#a0a0a0" }}>WAKE_DRY_RUN=true</code>{" "}
             (по умолчанию) ордер на Lighter не отправляется — статус <code style={{ color: "#a0a0a0" }}>dry_run</code>, но сделка записывается в память

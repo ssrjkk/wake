@@ -37,7 +37,7 @@ export default function Discover({ setCopyModal }: DiscoverProps) {
       <div className="terminal-main">
         <div className="terminal-header" style={{ flexDirection: "column", alignItems: "flex-start" }}>
           <h2 style={{ fontSize: "16px", fontWeight: 600, color: "#fafafa", margin: 0 }}>Кого копируют</h2>
-          <p style={{ fontSize: "12px", color: "#666", margin: "8px 0 0 0", maxWidth: "800px" }}>
+          <p style={{ fontSize: "12px", color: "var(--text-muted)", margin: "8px 0 0 0", maxWidth: "800px" }}>
             Лидеры — из таблицы leaders, подписчики и AUM — из follows. Капитал, реализованный PnL и открытые позиции — публичный ответ Lighter GET /api/v1/account?by=index по аккаунту лидера.
           </p>
         </div>
@@ -53,9 +53,9 @@ export default function Discover({ setCopyModal }: DiscoverProps) {
           </div>
         ) : leaders.length === 0 ? (
           <div className="empty-state">
-            <Users style={{ width: "24px", height: "24px", color: "#666", marginBottom: "12px" }} />
+            <Users style={{ width: "24px", height: "24px", color: "var(--text-muted)", marginBottom: "12px" }} />
             <p style={{ fontSize: "12px", color: "#ccc", margin: "0 0 4px 0" }}>В базе пока нет ни одного лидера</p>
-            <p style={{ fontSize: "10px", color: "#666", margin: 0, maxWidth: "500px", marginLeft: "auto", marginRight: "auto" }}>
+            <p style={{ fontSize: "10px", color: "var(--text-muted)", margin: 0, maxWidth: "500px", marginLeft: "auto", marginRight: "auto" }}>
               Лидер появляется сам: в Терминале включи «Публиковать мои сделки».
               {error && <span style={{ color: "#fbbf24", marginTop: "8px", display: "block" }}>Бэкенд ответил: {error}</span>}
             </p>
@@ -78,7 +78,7 @@ export default function Discover({ setCopyModal }: DiscoverProps) {
                       </div>
                       <div>
                         <div style={{ fontSize: "13px", color: "#fafafa", fontWeight: 600 }}>{t.handle}</div>
-                        <div style={{ fontSize: "10px", color: "#666", fontFamily: "'JetBrains Mono', monospace" }}>Lighter #{t.lighterAccountIndex}</div>
+                        <div style={{ fontSize: "10px", color: "var(--text-muted)", fontFamily: "'JetBrains Mono', monospace" }}>Lighter #{t.lighterAccountIndex}</div>
                       </div>
                     </div>
                     <span style={{ fontSize: "10px", color: "#ccc", padding: "3px 8px", background: "#1a1a1a", borderRadius: "3px", border: "1px solid #2a2a2a" }}>{(t.feeBps / 100).toFixed(2)}%</span>
@@ -86,13 +86,13 @@ export default function Discover({ setCopyModal }: DiscoverProps) {
 
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px", marginBottom: "12px" }}>
                     <div>
-                      <div style={{ fontSize: "10px", color: "#666", display: "flex", alignItems: "center", gap: "4px", marginBottom: "4px" }}>
+                      <div style={{ fontSize: "10px", color: "var(--text-muted)", display: "flex", alignItems: "center", gap: "4px", marginBottom: "4px" }}>
                         <Wallet style={{ width: "10px", height: "10px" }} /> Капитал
                       </div>
                       <div style={{ fontSize: "12px", color: "#fafafa", fontFamily: "'JetBrains Mono', monospace" }}>{pnl === null ? "—" : usd(t.exchange!.equityUsd, 0)}</div>
                     </div>
                     <div>
-                      <div style={{ fontSize: "10px", color: "#666", display: "flex", alignItems: "center", gap: "4px", marginBottom: "4px" }}>
+                      <div style={{ fontSize: "10px", color: "var(--text-muted)", display: "flex", alignItems: "center", gap: "4px", marginBottom: "4px" }}>
                         {pnl != null && pnl >= 0 ? <TrendingUp style={{ width: "10px", height: "10px" }} /> : <TrendingDown style={{ width: "10px", height: "10px" }} />} PnL
                       </div>
                       <div style={{ fontSize: "12px", color: pnl == null ? "#666" : pnl >= 0 ? "#10b981" : "#ef4444", fontFamily: "'JetBrains Mono', monospace" }}>
@@ -111,7 +111,7 @@ export default function Discover({ setCopyModal }: DiscoverProps) {
                       {fmt(t.aumUsd)}
                     </span>
                   </div>
-                  <div style={{ fontSize: "10px", color: "#666", marginBottom: "16px" }}>
+                  <div style={{ fontSize: "10px", color: "var(--text-muted)", marginBottom: "16px" }}>
                     {t.exchange ? `${t.exchange.openPositions.length} позиций` : "Lighter не ответил"} · с {new Date(t.since * 1000).toLocaleDateString("ru-RU")}
                   </div>
                   <button

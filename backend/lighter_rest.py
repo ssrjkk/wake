@@ -136,24 +136,42 @@ def get_candles(
     return data.get("c", [])[-count:]
 
 
-def get_24h_stats(market_id: int, network: str = LIGHTER_NETWORK) -> dict:
-    """Цена, изменение и оборот за 24 часа по 24 часовым свечам.
+def stats_from_candles(candles: list) -> dict:
+    """Цена, изменение, оборот и диапазон окна по готовым свечам.
 
-    Все три числа считаются по одному запросу и одному источнику, поэтому
-    «оборот 24ч» — это сумма quote-объёма реальных свечей (поле V), а не
-    оценка и не поле, которого в ответе Lighter нет. Самая свежая свеча ещё
-    формируется: изменение — от открытия первой свечи окна к её текущему close."""
-    candles = get_candles(market_id, "1h", 24, network)
+    Вынесено из get_24h_stats, чтобы у бота путь был один: он уже держит свечи
+    ради спарклайна, и второй запрос за теми же числами только удвоил бы
+    задержку ответа. Считается по тому же набору, что и изменение, — «диапазон
+    24ч» из тех же 24 часов, а не из другого окна.
+
+    Самая свежая свеча ещё формируется, поэтому high/low включают её текущий
+    максимум: это диапазон наблюдавшихся цен, а не закрытых часов."""
     if not candles:
-        raise RuntimeError(f"нет свечей для market_id={market_id}")
+        return {}
     first_open = float(candles[0]["o"])
     last_close = float(candles[-1]["c"])
     return {
         "price": last_close,
         "change_24h": (last_close / first_open - 1) if first_open > 0 else 0.0,
         "quote_volume_24h": sum(float(c["V"]) for c in candles),
+        "high_24h": max(float(c["h"]) for c in candles),
+        "low_24h": min(float(c["l"]) for c in candles),
+        "closes": [float(c["c"]) for c in candles],
         "candles_used": len(candles),
     }
+
+
+def get_24h_stats(market_id: int, network: str = LIGHTER_NETWORK) -> dict:
+    """Цена, изменение и оборот за 24 часа по 24 часовым свечам.
+
+    Все числа считаются по одному запросу и одному источнику, поэтому «оборот
+    24ч» — это сумма quote-объёма реальных свечей (поле V), а не оценка и не
+    поле, которого в ответе Lighter нет. Самая свежая свеча ещё формируется:
+    изменение — от открытия первой свечи окна к её текущему close."""
+    stats = stats_from_candles(get_candles(market_id, "1h", 24, network))
+    if not stats:
+        raise RuntimeError(f"нет свечей для market_id={market_id}")
+    return stats
 
 
 @cached("funding_rate", ttl=60)

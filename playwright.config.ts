@@ -28,6 +28,7 @@ export default defineConfig({
   webServer: {
     command: `npm run dev -- --host ${HOST} --port ${PORT} --strictPort`,
     url: BASE_URL,
-    reuseExistingServer: !process.env.CI,
+    env: { VITE_TELEGRAM_BOT_NAME: "", VITE_WALLETCONNECT_PROJECT_ID: "" },
+    reuseExistingServer: false,
   },
 })

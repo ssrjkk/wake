@@ -1,3 +1,5 @@
+import { LIGHTER_NETWORK } from "./config";
+
 // Thin client for Arcus's public REST API.
 // Docs: https://docs.arcus.xyz, https://arcus-11aecf6e.mintlify.app
 //
@@ -22,7 +24,7 @@ async function json<T>(res: Response): Promise<T> {
   return (await res.json()) as T;
 }
 
-let currentNetwork: ArcusNetwork = "mainnet";
+let currentNetwork: ArcusNetwork = LIGHTER_NETWORK;
 export function setNetwork(network: ArcusNetwork) {
   currentNetwork = network;
 }

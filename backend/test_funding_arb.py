@@ -7,6 +7,7 @@ from funding_arb import (
     base_asset,
     find_opportunity,
     funding_by_market,
+    funding_rate_rows,
     pairable_carry_markets,
     size_delta_neutral_position,
     snapshot_from_signed_rate,
@@ -209,6 +210,61 @@ class TestFundingByMarket(unittest.TestCase):
         )
 
 
+class TestFundingRateRows(unittest.TestCase):
+    """Одна форма ответа для GET /funding/rates и для telegram_bot: две копии
+    разбора ставок разъехались бы молча, и «бот показал другую годовую, чем
+    страница» пришлось бы расследовать по скриншотам."""
+
+    ROWS = [
+        {"exchange": "lighter", "market_id": 1, "rate": 0.0001, "symbol": "BTC"},
+        {"exchange": "lighter", "market_id": 0, "rate": -0.0002, "symbol": "ETH"},
+        {"exchange": "lighter", "market_id": 7, "rate": "0.0005"},
+        {"exchange": "bybit", "market_id": 1, "rate": 0.0009, "symbol": "BTC"},
+    ]
+
+    def test_sorted_by_annualized_and_annotated(self):
+        rows = funding_rate_rows(self.ROWS)
+        # Порядок по величине годовой, как его отдаёт и REST: ставка 0.0002 у ETH
+        # больше, чем 0.0001 у BTC, независимо от знака.
+        self.assertEqual([r["symbol"] for r in rows], ["market 7", "ETH", "BTC"])
+        self.assertEqual(rows[0]["annualized"], 0.0005 * HOURS_PER_YEAR)
+        self.assertEqual(rows[0]["direction"], "long")
+        self.assertEqual(
+            rows[1]["direction"], "short", "отрицательная ставка — платят шорты"
+        )
+        self.assertEqual(rows[1]["signed_rate"], -0.0002)
+        self.assertEqual(
+            rows[1]["hourly_rate"], 0.0002, "ставка без знака, знак — в direction"
+        )
+
+    def test_base_asset_is_next_to_the_original_symbol(self):
+        rows = funding_rate_rows(
+            [
+                {
+                    "exchange": "lighter",
+                    "market_id": 3,
+                    "rate": 0.0001,
+                    "symbol": "ETH/USDC",
+                }
+            ]
+        )
+        self.assertEqual((rows[0]["symbol"], rows[0]["base"]), ("ETH/USDC", "ETH"))
+
+    def test_venue_rows_of_other_exchanges_never_leak_in(self):
+        self.assertNotIn(
+            "bybit", {r["market_id"] for r in funding_rate_rows(self.ROWS)}
+        )
+        self.assertEqual(len(funding_rate_rows(self.ROWS)), 3)
+
+    def test_malformed_rows_are_skipped_not_fatal(self):
+        rows = self.ROWS + [
+            {"exchange": "lighter", "rate": 0.1},  # нет market_id
+            {"exchange": "lighter", "market_id": "abc", "rate": 0.1},
+            {"exchange": "lighter", "market_id": 9},  # нет rate
+        ]
+        self.assertEqual([r["market_id"] for r in funding_rate_rows(rows)], [7, 0, 1])
+
+
 class TestBaseAsset(unittest.TestCase):
     """Нормализация ВВОДА, не склейка площадок: замерено на живом /funding-rates,
     что все четыре площадки и так отдают голое имя базового актива. base_asset
@@ -218,8 +274,26 @@ class TestBaseAsset(unittest.TestCase):
     опирается на эту же функцию (см. TestPairableCarryMarkets)."""
 
     def test_every_typed_spelling_reaches_the_same_base(self):
-        for raw in ("BTC-PERP", "BTC", "btcusdt", "BTC/USDC", " btc_perp "):
+        for raw in (
+            "BTC-PERP",
+            "BTC",
+            "btcusdt",
+            "BTC/USDC",
+            " btc_perp ",
+            "BTC-USDC",
+            "btcperp",
+            "BTCPERP",
+            "BTC:USDC",
+            "BTC.USDC",
+        ):
             self.assertEqual(base_asset(raw), "BTC", raw)
+
+    def test_dash_and_dot_forms_work_like_the_slash_form(self):
+        """ "BTC-USDC" был в докстринге обещанием, которого код не выполнял:
+        кавычка-разделитель снималась, а хвост "BTC-" не совпадал ни с чем, и
+        запрос молча уходил в 404."""
+        self.assertEqual(base_asset("ETH-USDT"), "ETH")
+        self.assertEqual(base_asset("SOL-USD"), "SOL")
 
     def test_perp_suffix_and_quote_both_stripped(self):
         self.assertEqual(base_asset("ETH-PERP"), "ETH")

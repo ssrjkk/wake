@@ -127,11 +127,34 @@ describe('backendJson', () => {
     expect(message.toLowerCase()).toMatch(/не отвечает|недоступен/)
   })
 
-  it('probes /health for the backend status', async () => {
+  it('preserves the transport failure as the error cause', async () => {
+    const cause = new TypeError('Failed to fetch')
+    fetchMock.mockRejectedValue(cause)
+    await expect(backendJson('/leaders')).rejects.toMatchObject({ cause })
+  })
+
+  it('checks readiness as well as liveness before accepting the backend', async () => {
     const health = { status: 'ok', network: 'mainnet', dry_run: true }
-    fetchMock.mockResolvedValue({ ok: true, json: () => Promise.resolve(health) })
+    fetchMock
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve(health) })
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ status: 'ready' }) })
     await expect(probeBackend()).resolves.toEqual(health)
     expect(fetchMock.mock.calls[0][0]).toBe(`${BACKEND_URL}/health`)
+    expect(fetchMock.mock.calls[1][0]).toBe(`${BACKEND_URL}/ready`)
+  })
+
+  it('rejects a live backend whose dependencies are unavailable', async () => {
+    fetchMock
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ status: 'ok', network: 'mainnet', dry_run: true }) })
+      .mockResolvedValueOnce({ ok: false, status: 503, text: () => Promise.resolve('{"status":"not_ready","checks":{"database":"fail","redis":"fail"}}') })
+    await expect(probeBackend()).rejects.toThrow('not_ready')
+  })
+
+  it('does not accept a non-ready payload hidden behind HTTP 200', async () => {
+    fetchMock
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ status: 'ok', network: 'mainnet', dry_run: true }) })
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ status: 'not_ready' }) })
+    await expect(probeBackend()).rejects.toThrow('не готов')
   })
 })
 

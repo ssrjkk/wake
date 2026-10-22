@@ -1,63 +1,86 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Space+Grotesk:wght@700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
 @import "tailwindcss";
 
-/* Тема v4 живёт здесь, в CSS: tailwind.config.js в четвёртой версии не
-   подхватывается сам. Ниже только то, чем реально пользуется разметка —
-   шрифты и три появления. */
+/* Тема v4 живёт здесь: tailwind.config.js в четвёртой версии не подхватывается. */
 @theme {
   --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
   --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
 
-  --animate-fade-in: fade-in 0.3s ease-out;
-  --animate-scale-in: scale-in 0.2s ease-out;
-  --animate-slide-up: slide-up 0.4s ease-out;
+  --animate-fade-in: fade-in 0.16s ease-out;
 
   @keyframes fade-in {
     from { opacity: 0; }
     to { opacity: 1; }
   }
-
-  @keyframes scale-in {
-    from { transform: scale(0.95); opacity: 0; }
-    to { transform: scale(1); opacity: 1; }
-  }
-
-  @keyframes slide-up {
-    from { transform: translateY(10px); opacity: 0; }
-    to { transform: translateY(0); opacity: 1; }
-  }
 }
 
 @layer base {
   :root {
-    --bg-primary: #0a0a0a;
-    --bg-secondary: #111111;
-    --bg-tertiary: #1a1a1a;
-    --bg-elevated: #1f1f1f;
-    --bg-hover: #252525;
-    --border-subtle: #1a1a1a;
-    --border-default: #262626;
-    --border-strong: #333333;
-    --text-primary: #e5e5e5;
-    --text-secondary: #a3a3a3;
-    --text-tertiary: #737373;
-    --text-muted: #525252;
-    --green: #00d4aa;
-    --red: #ff3b5c;
-    --blue: #3b82f6;
-    /* --orange = цвет логотипа. В компонентах он прописан литералом #ff6b35 в
-       местах, где Tailwind-класс не может сослаться на токен; hover-оттенок
-       #ff8c5a — вторая половина того же градиента.
-       Три уровня акцента, чтобы они не спорили: оранжевый — идентичность и
-       глобальное действие (логотип, активная сеть, подчёркивание вкладки,
-       .btn-primary, вход); синий — выбор внутри панели (фильтр, слайдер,
-       выбранная строка) и ссылки; зелёный/красный — только направление сделки. */
-    --orange: #ff6b35;
-    --yellow: #fbbf24;
-    /* Компактные контролы держат 36px на десктопе и 44px на тач-экранах.
-       Значение живёт в переменной, потому что инлайн-стиль компонента
-       перебивает любое CSS-правило, а медиазапрос в инлайне не написать. */
+    /* Поверхности. Градиентов и блюра нет намеренно: это приборная панель,
+       и слой, который меняется от скролла, в ней только мешает. */
+    --bg-0: #0b0b0c;
+    --bg-1: #101011;
+    --bg-2: #161618;
+    --bg-3: #1c1c1f;
+    --line: #232326;
+    --line-strong: #303035;
+
+    --fg: #e6e6e8;
+    --fg-2: #a0a0a7;
+    --fg-3: #75757d;
+
+    /* Оранжевый — единственная marca: логотип, активная вкладка, выбранная
+       строка, первичное действие. Синий из выбора ушёл: два акцента на один
+       экран спорили, и «что выбрано» переставало читаться. */
+    --accent: #ff6b35;
+    --accent-dim: rgba(255, 107, 53, 0.12);
+
+    /* Направление сделки. Значения совпадают с литералами в компонентах
+       (#10b981 / #ef4444) — токен здесь один, а не два на цвет. */
+    --up: #10b981;
+    --down: #ef4444;
+    --green: #10b981;
+    --red: #ef4444;
+
+    /* Статус, а не направление: dry_run, ожидания, служебные пометки. */
+    --info: #3b82f6;
+    --warn: #fbbf24;
+
+    /* Шкала. 11 — подписи над значениями, 12 — все числа в таблице,
+       13 — интерфейс, 15 — заголовок панели, 26 — цена рынка. */
+    --fs-label: 10.5px;
+    --fs-data: 12px;
+    --fs-ui: 13px;
+    --fs-title: 15px;
+    --fs-price: 26px;
+
+    --r: 4px;
+
+    /* Компактные контролы: 36px на десктопе, 44px на тач-экранах. Переменная,
+       потому что инлайн-стиль перебивает любое правило, а медиазапрос в
+       инлайне не написать. */
     --touch: 36px;
+  }
+
+  /* Старые имена. Компоненты, которые ещё не переведены на шкалу выше,
+     ссылаются на них из инлайновых стилей; без этого блока var() разрешается
+     в пустоту, и текст становится невидимым, а не «серым». */
+  :root {
+    --bg-primary: var(--bg-0);
+    --bg-secondary: var(--bg-1);
+    --bg-tertiary: var(--bg-2);
+    --bg-elevated: var(--bg-3);
+    --bg-hover: var(--bg-3);
+    --border-subtle: var(--line);
+    --border-default: var(--line);
+    --border-strong: var(--line-strong);
+    --text-primary: var(--fg);
+    --text-secondary: var(--fg-2);
+    --text-tertiary: var(--fg-3);
+    --text-muted: var(--fg-3);
+    --orange: var(--accent);
+    --blue: var(--info);
+    --yellow: var(--warn);
   }
 
   @media (max-width: 768px) {
@@ -68,15 +91,15 @@
 
   body {
     @apply antialiased;
-    background-color: var(--bg-primary);
-    color: var(--text-primary);
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-    font-size: 13px;
-    line-height: 1.5;
+    background-color: var(--bg-0);
+    color: var(--fg);
+    font-family: var(--font-sans);
+    font-size: var(--fs-ui);
+    line-height: 1.45;
   }
 
   * {
-    border-color: var(--border-default);
+    border-color: var(--line);
     -webkit-tap-highlight-color: transparent;
   }
 
@@ -84,80 +107,444 @@
     touch-action: manipulation;
   }
 
-  code, pre, .font-mono {
-    font-family: 'JetBrains Mono', monospace;
+  button:focus-visible, a:focus-visible, input:focus-visible,
+  select:focus-visible, textarea:focus-visible, [tabindex]:focus-visible {
+    outline: 2px solid var(--accent) !important;
+    outline-offset: 2px;
+  }
+
+  /* Все числа — табличные: иначе колонка цен «гуляет» по ширине цифр. */
+  code, pre, .font-mono, .num {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+
+  .wake-modal {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    max-width: none;
+    max-height: none;
+    margin: 0;
+    padding: 16px;
+    border: none;
+    background: rgba(0, 0, 0, 0.72);
+    color: inherit;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .wake-modal::backdrop {
+    background: transparent;
   }
 }
 
 @layer components {
-  /* Layout — used by every tab component.
-     Высота берётся из содержимого: фиксированный расчёт от 100dvh не учитывал
-     шапку, вкладки и баннер, и нижняя панель терминала уезжала за экран. */
+  /* ── Каркас ─────────────────────────────────────────────────────────────
+     Высота из содержимого: фиксированный расчёт от 100dvh не учитывал шапку
+     и строку статуса, и нижняя панель уезжала за экран. */
   .terminal-layout {
     display: grid;
-    grid-template-columns: 1fr 340px;
+    grid-template-columns: minmax(0, 1fr) 320px;
     gap: 1px;
-    background: var(--border-subtle);
+    background: var(--line);
+    border-top: 1px solid var(--line);
   }
 
   .terminal-main {
     display: grid;
-    grid-template-rows: auto 1fr auto;
+    grid-template-rows: auto minmax(0, 1fr) auto;
     gap: 1px;
-    background: var(--border-subtle);
+    background: var(--line);
     overflow: hidden;
   }
 
-  /* Вкладки без правой колонки: одна колонка. */
   .terminal-layout.terminal-stack {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 
-  /* Полоса над каждой панелью: заголовок вкладки, строка фильтров, пустое
-     состояние. Компоненты задают в инлайне flexDirection/gap/flexWrap, которые
-     без display:flex не применяются. */
+  .terminal-panel {
+    background: var(--bg-1);
+    border: 1px solid var(--line);
+    border-radius: 0;
+  }
+
+  /* Полоса над панелью: заголовок, фильтры, пустое состояние. */
   .terminal-header {
     display: flex;
     align-items: center;
     gap: 16px;
-    padding: 12px 16px;
-    background: var(--bg-secondary);
+    padding: 10px 14px;
+    background: var(--bg-1);
   }
 
+  .panel-title {
+    font-size: var(--fs-title);
+    font-weight: 600;
+    color: var(--fg);
+    letter-spacing: -0.01em;
+  }
+
+  /* ── Строка рынка ─────────────────────────────────────────────────────── */
   .terminal-asset-header {
     display: flex;
-    align-items: center;
-    gap: 24px;
-    padding: 12px 16px;
-    background: #111;
+    align-items: flex-end;
+    gap: 28px;
+    padding: 14px;
+    background: var(--bg-1);
     flex-wrap: wrap;
   }
 
-  /* Список рынков — 50 строк; без потолка он раздувал бы панель. */
-  .markets-list {
-    max-height: min(420px, 50dvh);
+  .desk-symbol {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: none;
+    border: none;
+    padding: 0;
+    cursor: pointer;
+    color: inherit;
+    text-align: left;
   }
 
-  /* Пустое состояние панели. Восемь копий инлайновой разметки разошлись по
-     отступам (32/40/48px), и каждая выглядела как недогрузившийся блок. */
+  .desk-symbol:hover .desk-symbol-name { color: var(--accent); }
+
+  .desk-symbol-name {
+    font-size: var(--fs-title);
+    font-weight: 600;
+    color: var(--fg);
+    letter-spacing: -0.01em;
+  }
+
+  .desk-price {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: var(--fs-price);
+    font-weight: 600;
+    line-height: 1;
+    letter-spacing: -0.02em;
+    color: var(--fg);
+  }
+
+  .desk-stats {
+    display: flex;
+    align-items: flex-start;
+    gap: 24px;
+    margin-left: auto;
+    flex-wrap: wrap;
+  }
+
+  .desk-stat {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 72px;
+  }
+
+  .desk-stat > b {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: var(--fs-data);
+    font-weight: 500;
+    color: var(--fg);
+  }
+
+  /* ── Мелкие примитивы ─────────────────────────────────────────────────── */
+  .label {
+    font-size: var(--fs-label);
+    font-weight: 600;
+    color: var(--fg-3);
+    text-transform: uppercase;
+    letter-spacing: 0.07em;
+  }
+
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-family: var(--font-mono);
+    font-size: var(--fs-label);
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    padding: 3px 7px;
+    border: 1px solid var(--line-strong);
+    border-radius: 3px;
+    color: var(--fg-2);
+    background: var(--bg-2);
+    white-space: nowrap;
+  }
+
+  .chip-up { color: var(--up); border-color: rgba(16, 185, 129, 0.35); background: rgba(16, 185, 129, 0.08); }
+  .chip-down { color: var(--down); border-color: rgba(239, 68, 68, 0.35); background: rgba(239, 68, 68, 0.08); }
+  .chip-info { color: var(--info); border-color: rgba(59, 130, 246, 0.35); background: rgba(59, 130, 246, 0.08); }
+  .chip-warn { color: var(--warn); border-color: rgba(251, 191, 36, 0.35); background: rgba(251, 191, 36, 0.08); }
+
+  /* Сегментированный переключатель: сеть, сторона ордера, фильтр статуса. */
+  .seg {
+    display: inline-flex;
+    padding: 2px;
+    gap: 2px;
+    background: var(--bg-2);
+    border: 1px solid var(--line);
+    border-radius: var(--r);
+  }
+
+  .seg > button {
+    font-size: var(--fs-data);
+    font-weight: 500;
+    color: var(--fg-3);
+    background: none;
+    border: none;
+    border-radius: 3px;
+    padding: 5px 12px;
+    min-height: 28px;
+    cursor: pointer;
+    transition: color 0.12s, background 0.12s;
+  }
+
+  .seg > button:hover { color: var(--fg-2); }
+
+  .seg > button[aria-pressed="true"],
+  .seg > button[aria-current="true"] {
+    color: var(--fg);
+    background: var(--bg-3);
+    box-shadow: inset 0 0 0 1px var(--line-strong);
+  }
+
+  .btn-ghost {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: var(--fs-data);
+    color: var(--fg-2);
+    background: var(--bg-2);
+    border: 1px solid var(--line);
+    border-radius: var(--r);
+    padding: 6px 10px;
+    min-height: 30px;
+    cursor: pointer;
+    transition: color 0.12s, border-color 0.12s;
+  }
+
+  .btn-ghost:hover { color: var(--fg); border-color: var(--line-strong); }
+
+  /* ── Список рынков ────────────────────────────────────────────────────── */
+  .markets-list {
+    max-height: min(460px, 52dvh);
+    overflow-y: auto;
+  }
+
+  .desk-row {
+    display: grid;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    text-align: left;
+    padding: 7px 12px 7px 11px;
+    background: none;
+    border: none;
+    border-left: 2px solid transparent;
+    border-bottom: 1px solid var(--line);
+    color: var(--fg-2);
+    font-size: var(--fs-data);
+    cursor: pointer;
+  }
+
+  .desk-row:hover { background: var(--bg-2); color: var(--fg); }
+
+  .desk-row[aria-current="true"] {
+    background: var(--accent-dim);
+    border-left-color: var(--accent);
+    color: var(--fg);
+  }
+
+  .desk-row > .num { color: inherit; }
+  .desk-row > .right { text-align: right; }
+
+  /* ── Таблицы и строки данных ──────────────────────────────────────────── */
+  .data-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: var(--fs-data);
+  }
+
+  .data-table th {
+    font-size: var(--fs-label);
+    font-weight: 600;
+    color: var(--fg-3);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    text-align: right;
+    padding: 6px 12px;
+    border-bottom: 1px solid var(--line);
+    white-space: nowrap;
+  }
+
+  .data-table th:first-child { text-align: left; }
+  .data-table td { padding: 7px 12px; border-bottom: 1px solid var(--line); }
+  .data-table td.right, .data-table th.right { text-align: right; }
+  .data-table tbody tr:hover { background: var(--bg-2); }
+
+  .table-scroll {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .scrollbar-hide { scrollbar-width: none; }
+  .scrollbar-hide::-webkit-scrollbar { display: none; }
+
+  /* Вкладки: подчёркивание и вес, без подложки. Акцентная полоса — единственное,
+     что отвечает на вопрос «где я». */
+  .nav-tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    position: relative;
+    padding: 9px 12px;
+    font-size: var(--fs-ui);
+    font-weight: 500;
+    color: var(--fg-3);
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -1px;
+    white-space: nowrap;
+    min-height: var(--touch);
+    cursor: pointer;
+    transition: color 0.12s;
+  }
+
+  .nav-tab:hover { color: var(--fg-2); }
+
+  .nav-tab-active {
+    color: var(--fg);
+    font-weight: 600;
+    border-bottom-color: var(--accent);
+  }
+
+  .live-indicator {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: var(--up);
+    flex-shrink: 0;
+  }
+
+  /* ── Мелкие блоки терминала ───────────────────────────────────────────── */
+  .panel-caption {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 7px 14px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .muted { color: var(--fg-3); font-size: var(--fs-data); }
+
+  /* Высота задана явно: в grid-строке 1fr ResponsiveContainer на полноэкранном
+     снимке сжимался, и подписи оси X ложились поверх ленты сделок. */
+  .desk-chart {
+    height: clamp(220px, 40vh, 420px);
+    padding: 4px 0 0;
+  }
+
+  .kv {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    align-items: baseline;
+    gap: 5px 10px;
+  }
+
+  .kv > b { text-align: right; font-weight: 500; color: var(--fg); }
+  .kv-cols { grid-template-columns: auto 1fr auto 1fr; }
+  .kv-cols > b { text-align: right; }
+
+  .fineprint {
+    font-size: var(--fs-label);
+    line-height: 1.5;
+    color: var(--fg-3);
+    margin: 0;
+  }
+
+  .fineprint code { color: var(--fg-2); }
+
+  .chart-tip {
+    background: var(--bg-3);
+    border: 1px solid var(--line-strong);
+    border-radius: 3px;
+    padding: 5px 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+
+  .chart-tip b {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: var(--fs-data);
+    font-weight: 600;
+    color: var(--fg);
+  }
+
+  .chart-tip span { font-size: var(--fs-label); color: var(--fg-3); }
+
+  .list-head {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    gap: 10px;
+    padding: 6px 12px;
+    background: var(--bg-2);
+    border-bottom: 1px solid var(--line);
+    font-size: var(--fs-label);
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--fg-3);
+  }
+
+  .list-head > :nth-child(2), .list-head > :nth-child(3) { text-align: right; }
+
+  .list-foot {
+    width: 100%;
+    justify-content: center;
+    padding: 9px 12px;
+    border-top: 1px solid var(--line);
+    font-size: var(--fs-data);
+  }
+
+  /* ── Пустое и ошибочное состояние ─────────────────────────────────────── */
   .empty-state {
-    background: var(--bg-secondary);
-    border: 1px solid #1e1e1e;
-    border-radius: 6px;
-    padding: 40px 20px;
+    background: var(--bg-1);
+    border: 1px solid var(--line);
+    padding: 36px 20px;
     display: flex;
     flex-direction: column;
     align-items: center;
     justify-content: center;
     text-align: center;
+    gap: 6px;
   }
 
-  /* Переход в другую вкладку из пустой панели — не кнопка, а ссылка:
-     настоящее действие («Начать trial», «Войти») остаётся .btn-primary. */
   .link-action {
-    color: var(--blue);
-    font-size: 14px;
+    color: var(--fg);
+    font-size: var(--fs-ui);
     font-weight: 500;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+    text-decoration-color: var(--line-strong);
     display: inline-flex;
     align-items: center;
     gap: 4px;
@@ -167,81 +554,140 @@
     padding: 0;
   }
 
-  .link-action:hover {
-    color: #60a5fa;
+  .link-action:hover { color: var(--accent); text-decoration-color: currentColor; }
+
+  /* ── Формы и кнопки, общие для всех панелей ───────────────────────────── */
+  .input-mono {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: var(--fs-ui);
+    color: var(--fg);
+    background: var(--bg-0);
+    border: 1px solid var(--line-strong);
+    border-radius: var(--r);
+    padding: 9px 11px;
+    outline: none;
+    transition: border-color 0.12s;
   }
 
-  /* Одна колонка: панели идут друг под другом. */
-  @media (max-width: 1024px) {
-    .terminal-layout {
-      grid-template-columns: 1fr;
-    }
+  .input-mono:focus { border-color: var(--accent); }
 
-    .terminal-header,
-    .terminal-asset-header {
-      gap: 12px;
-      padding: 10px 12px;
-    }
+  .btn-primary {
+    background: var(--accent);
+    color: #0a0a0a;
+    font-weight: 600;
+    font-size: var(--fs-ui);
+    padding: 8px 14px;
+    border: none;
+    border-radius: var(--r);
+    min-height: 34px;
+    cursor: pointer;
+    transition: filter 0.12s;
   }
 
-  /* Mobile breakpoints */
-  @media (max-width: 768px) {
-    body {
-      font-size: 14px;
-    }
+  .btn-primary:hover { filter: brightness(1.1); }
+  .btn-primary:disabled { background: var(--bg-2); color: var(--fg-3); cursor: not-allowed; filter: none; }
 
-    .stat-label {
-      font-size: 12px;
-    }
-
-    .stat-value {
-      font-size: 14px;
-    }
-
-    .btn-primary {
-      padding: 12px 20px;
-      min-height: 44px;
-    }
-
-    .btn-action {
-      padding: 14px;
-      min-height: 44px;
-    }
-
-    .input-mono {
-      padding: 12px 14px;
-      font-size: 15px;
-    }
+  .btn-action {
+    padding: 10px 12px;
+    font-size: var(--fs-ui);
+    font-weight: 600;
+    border: none;
+    border-radius: var(--r);
+    min-height: var(--touch);
+    cursor: pointer;
+    transition: filter 0.12s;
   }
 
-  @media (max-width: 480px) {
-    body {
-      font-size: 15px;
-    }
-
-    .stat-value {
-      font-size: 15px;
-    }
+  .stat-label {
+    font-size: var(--fs-label);
+    font-weight: 600;
+    color: var(--fg-3);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
   }
 
-  /* Таблицы шире экрана: скролл внутри обёртки, а не всей страницы */
-  .table-scroll {
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
+  .stat-value {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: var(--fs-ui);
+    font-weight: 500;
+    color: var(--fg);
   }
 
-  /* Потолок высоты модального окна: dvh, чтобы его не срезало панелью
-     мобильного браузера, и внутренний скролл вместо обрезанной кнопки. */
+  .text-positive { color: var(--up); }
+  .text-negative { color: var(--down); }
+
+  /* ── Строка состояния ───────────────────────────────────────────────────
+     Раньше это была панель на треть экрана: системное сообщение стояло выше
+     самого рынка. Теперь — одна линия, подробности под <details>. */
+  .notice {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-wrap: wrap;
+    font-size: var(--fs-data);
+    color: var(--fg-2);
+    background: var(--bg-1);
+    border: 1px solid var(--line);
+    border-left: 2px solid var(--accent);
+    padding: 8px 12px;
+    margin-bottom: 12px;
+  }
+
+  .notice-warn { border-left-color: var(--warn); color: var(--fg-2); }
+  .notice code { color: var(--fg); }
+
+  .notice-more { margin-left: auto; }
+
+  .notice-more > summary {
+    font-size: var(--fs-data);
+    color: var(--fg-3);
+    cursor: pointer;
+    list-style: none;
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+
+  .notice-more > summary:hover { color: var(--fg); }
+  .notice-more[open] > summary { color: var(--fg-2); }
+  .notice-more[open] { flex-basis: 100%; margin-left: 0; }
+
+  .notice-more p {
+    flex-basis: 100%;
+    margin: 6px 0 0;
+    font-size: var(--fs-data);
+    line-height: 1.55;
+    color: var(--fg-3);
+  }
+
   .modal-card {
+    background: var(--bg-1);
+    border: 1px solid var(--line-strong);
+    border-radius: 6px;
     max-height: min(560px, 85dvh);
     overflow-y: auto;
   }
 
-  /* Touch-friendly controls. Только элементные селекторы, чтобы не перебивать
-     друг друга слоем: компонент, которому нужна своя высота, задаёт её через
-     --touch. Чекбоксы и радиокнопки исключены — 44px ломает выравнивание
-     рядом с текстом. */
+  /* ── Адаптив ──────────────────────────────────────────────────────────── */
+  @media (max-width: 1200px) {
+    .terminal-layout { grid-template-columns: minmax(0, 1fr) 280px; }
+    .desk-stats { gap: 16px; }
+  }
+
+  @media (max-width: 1024px) {
+    .terminal-layout { grid-template-columns: minmax(0, 1fr); }
+    .terminal-header, .terminal-asset-header { gap: 12px; padding: 10px 12px; }
+    .desk-stats { margin-left: 0; width: 100%; }
+  }
+
   @media (max-width: 768px) {
+    .desk-price { font-size: 22px; }
+    .desk-stats { gap: 14px 18px; }
+    .btn-primary { padding: 12px 18px; min-height: 44px; }
+    .btn-action { padding: 14px; }
+    .input-mono { padding: 12px 14px; font-size: 15px; }
+
     button,
     [role="button"],
     select,
@@ -254,148 +700,27 @@
       font-size: 16px;
     }
   }
-
-  /* Stat labels/values — used in App.tsx copy modal */
-  .stat-label {
-    font-size: 11px;
-    font-weight: 500;
-    color: var(--text-tertiary);
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-  }
-
-  .stat-value {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 13px;
-    font-weight: 500;
-    color: var(--text-secondary);
-  }
-
-  /* Input — used in App.tsx market picker and copy modal */
-  .input-mono {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 14px;
-    color: var(--text-primary);
-    background: var(--bg-primary);
-    border: 1px solid var(--border-default);
-    border-radius: 4px;
-    padding: 10px 12px;
-    outline: none;
-    transition: border-color 0.15s;
-  }
-
-  .input-mono:focus {
-    border-color: var(--blue);
-  }
-
-  /* Buttons — used in App.tsx header and modals.
-     Первичное действие — цвет логотипа, а не дефолтный синий: синяя плашка в шапке
-     читалась как чужая кнопка на графитовом интерфейсе. Текст тёмный, как на
-     фиче ордера, — на оранжевом белый контрастит меньше 3:1. */
-  .btn-primary {
-    background: var(--orange);
-    color: #0a0a0a;
-    font-weight: 600;
-    padding: 8px 16px;
-    border-radius: 6px;
-    transition: all 0.15s;
-  }
-
-  .btn-primary:hover {
-    background: #ff8c5a;
-  }
-
-  .btn-action {
-    padding: 12px;
-    font-size: 14px;
-    font-weight: 600;
-    border: none;
-    border-radius: 6px;
-    cursor: pointer;
-    transition: all 0.15s;
-  }
-
-  /* Color utilities — used in App.tsx copy modal */
-  .text-positive {
-    color: var(--green);
-  }
-
-  .text-negative {
-    color: var(--red);
-  }
 }
 
+/* Индикатор «данные живые»: медленный, низкий, без свечения. Пульсация
+   раньше меняла ещё и цвет на активной вкладке — вторая, ничего не значащая
+   сигнатура. prefers-reduced-motion выключает её целиком. */
 @keyframes livePulse {
-  0%, 100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.5;
-  }
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
 }
 
-.live-indicator {
-  animation: livePulse 2s ease-in-out infinite;
-}
+.live-indicator { animation: livePulse 2.4s ease-in-out infinite; }
 
+/* Скелетон загрузки: мягкое затемнение вместо пульсации цвета. */
 @keyframes wakeShimmer {
-  0%, 100% {
-    opacity: 0.4;
-  }
-  50% {
-    opacity: 0.7;
-  }
+  0%, 100% { opacity: 0.45; }
+  50% { opacity: 0.75; }
 }
 
 @keyframes spin {
-  from {
-    transform: rotate(0deg);
-  }
-  to {
-    transform: rotate(360deg);
-  }
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
 }
 
-@keyframes fade-in {
-  from {
-    opacity: 0;
-  }
-  to {
-    opacity: 1;
-  }
-}
-
-@keyframes scale-in {
-  from {
-    opacity: 0;
-    transform: scale(0.95);
-  }
-  to {
-    opacity: 1;
-    transform: scale(1);
-  }
-}
-
-.animate-fade-in {
-  animation: fade-in 0.2s ease-out;
-}
-
-.animate-scale-in {
-  animation: scale-in 0.2s ease-out;
-}
-
-.glass-panel {
-  background: rgba(17, 17, 17, 0.8);
-  backdrop-filter: blur(12px);
-  border: 1px solid rgba(42, 42, 42, 0.6);
-}
-
-.terminal-panel {
-  background: linear-gradient(135deg, rgba(26, 26, 26, 0.8) 0%, rgba(20, 20, 20, 0.8) 100%);
-  backdrop-filter: blur(12px);
-  border: 1px solid rgba(42, 42, 42, 0.6);
-}
-
-.glow-logo {
-  filter: drop-shadow(0 0 8px rgba(255, 107, 53, 0.3));
-}
+.animate-fade-in { animation: fade-in 0.16s ease-out; }

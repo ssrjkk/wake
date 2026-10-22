@@ -45,7 +45,7 @@ export async function backendJson<T>(path: string, init?: RequestInit): Promise<
     const message = isLocalhost
       ? "Сервер недоступен. Функция требует подключённый бэкенд Wake."
       : `${BACKEND_URL} не отвечает (${e instanceof Error ? e.message : String(e)}). Wake — отдельный сервис, в сборку сайта он не входит.`;
-    throw new Error(message);
+    throw new Error(message, { cause: e });
   }
   if (res.status === 401) {
     // Токен просрочен или подписан другим секретом: держать его дальше нельзя,
@@ -87,9 +87,9 @@ export function errorText(e: unknown, max = 140): string {
 
 export type BackendHealth = { status: "ok"; network: string; dry_run: boolean };
 
-// Разведка при старте. /health отдаёт JSON только бэкенд Wake, а Pages на любой
-// неизвестный путь отвечает index.html со статусом 200 — так что именно этот
-// запрос отличает «бэкенд не развернут» от «бэкенд есть».
 export async function probeBackend(): Promise<BackendHealth> {
-  return backendJson<BackendHealth>("/health", { signal: AbortSignal.timeout(5000) });
+  const health = await backendJson<BackendHealth>("/health", { signal: AbortSignal.timeout(5000) });
+  const ready = await backendJson<{ status: string }>("/ready", { signal: AbortSignal.timeout(5000) });
+  if (ready.status !== "ready") throw new Error("Бэкенд Wake не готов");
+  return health;
 }

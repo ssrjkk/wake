@@ -32,6 +32,7 @@ from funding_arb import (
     base_asset,
     find_opportunity,
     funding_by_market,
+    funding_rate_rows,
     pairable_carry_markets,
     size_delta_neutral_position,
     snapshot_from_signed_rate,
@@ -114,30 +115,9 @@ def funding_rates(limit: int = Query(25, ge=1, le=300), positive_only: bool = Fa
     except RuntimeError as e:
         raise HTTPException(status_code=502, detail=str(e)) from e
 
-    rates = funding_by_market(rows)
-    symbols = {
-        int(r["market_id"]): r.get("symbol") or ""
-        for r in rows
-        if r.get("exchange") == "lighter"
-    }
-    out = []
-    for market_id, rate in rates.items():
-        symbol = symbols.get(market_id) or f"market {market_id}"
-        snapshot = snapshot_from_signed_rate(market_id, symbol, rate)
-        if positive_only and snapshot.direction != "long":
-            continue
-        out.append(
-            {
-                "market_id": market_id,
-                "symbol": snapshot.symbol,
-                "base": base_asset(snapshot.symbol),
-                "hourly_rate": snapshot.hourly_rate,
-                "signed_rate": rate,
-                "direction": snapshot.direction,
-                "annualized": snapshot.hourly_rate * HOURS_PER_YEAR,
-            }
-        )
-    out.sort(key=lambda r: r["annualized"], reverse=True)
+    out = funding_rate_rows(rows)
+    if positive_only:
+        out = [r for r in out if r["direction"] == "long"]
     return {
         "network": LIGHTER_NETWORK,
         "epoch_hours": 1,

@@ -46,7 +46,7 @@ export class ErrorBoundary extends React.Component<Props, State> {
             </p>
             {this.state.error && (
               <details style={{ textAlign: "left", marginBottom: "16px" }}>
-                <summary style={{ fontSize: "11px", color: "#666", cursor: "pointer" }}>
+                <summary style={{ fontSize: "11px", color: "var(--text-muted)", cursor: "pointer" }}>
                   Детали ошибки
                 </summary>
                 <pre style={{ marginTop: "8px", fontSize: "11px", color: "#ef4444", background: "#0a0a0a", borderRadius: "4px", padding: "12px", overflowX: "auto", fontFamily: "'JetBrains Mono', monospace" }}>

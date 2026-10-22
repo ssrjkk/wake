@@ -10,6 +10,7 @@ The backend is one Docker image (`Dockerfile` at the repo root) that needs a Pos
 | PostgreSQL | the only store: followers/leaders/follows, Predict markets, subscriptions, agent history, audit | a connection string for `WAKE_DATABASE_URL` |
 | Redis | token-bucket rate limiting and single-use wallet challenges | a connection string for `WAKE_REDIS_URL` |
 | Signing service (optional) | signs Lighter orders | a second service from the same image, command `uvicorn signing_service:app --host 0.0.0.0 --port $PORT` |
+| Telegram bot (optional) | answers `/price`, `/markets`, `/funding`, `/predict` and opens the Mini App | a second service from the same image, command `python telegram_bot.py`; needs `TELEGRAM_BOT_TOKEN`, `WAKE_MINIAPP_URL` (https) and `WAKE_BACKEND_URL` (the API service's own domain — `localhost` in its container is not the API) |
 
 Railway hands out the connection strings when you attach a service. A plain `postgresql://…` without a driver is fine: `backend/config.py` appends `+asyncpg` while validating, and alembic uses the same value.
 
@@ -44,7 +45,11 @@ WAKE_DRY_RUN = true               false means live orders
 WAKE_SESSION_TTL_DAYS = 30
 WAKE_RATE_LIMIT_CAPACITY / REFILL = 40 / 20
 TELEGRAM_BOT_TOKEN                needed by the bot process and by Telegram login verification (503 without it)
+WAKE_MINIAPP_URL = http://localhost:5173/   the address the bot's Open Wake button opens; Telegram accepts https only, so on http the bot drops the button and logs why
+WAKE_BACKEND_URL = http://localhost:8000    where the bot fetches Predict markets from; on Railway this must be the API service's own https domain
 ```
+
+The bot registers its command menu at startup (`set_my_commands`), so nothing has to be typed into BotFather for `/price` and friends to appear in Telegram's autocomplete. What BotFather still owns is the web-view domain itself (`/setdomain`), and that is a manual step in his account.
 
 `WAKE_DB_PATH` and `WAKE_AUDIT_DB_PATH` are gone from these instructions: there is no file database any more, and nothing reads those variables.
 

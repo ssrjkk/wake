@@ -42,6 +42,13 @@ export function getNetwork(): LighterNetwork {
 }
 const BASE_URL = () => NETWORKS[currentNetwork];
 
+// Хост отдельной строкой: в состоянии «Lighter не отвечает» нужно показать,
+// именно куда не прошёл запрос, а не заставлять человека вычитать его из
+// переключателя сети.
+export function getApiHost(): string {
+  return new URL(BASE_URL()).host;
+}
+
 export type OrderBook = {
   symbol: string;
   market_id: number;

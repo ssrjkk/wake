@@ -29,11 +29,7 @@ export default function Earn({ isCopyable, setTab, leaderId, leaderFeeBps, setLe
   const [turnsPerMonth, setTurnsPerMonth] = useState(4);
 
   useEffect(() => {
-    if (!leaderId) {
-      setLeader(null);
-      setFollows(null);
-      return;
-    }
+    if (!leaderId) return;
     let cancelled = false;
     async function load() {
       try {
@@ -88,10 +84,10 @@ export default function Earn({ isCopyable, setTab, leaderId, leaderFeeBps, setLe
       <div className="terminal-layout terminal-stack">
         <div className="empty-state">
           <div style={{ width: "48px", height: "48px", borderRadius: "50%", background: "#1a1a1a", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: "12px" }}>
-            <Radio style={{ width: "24px", height: "24px", color: "#666" }} />
+            <Radio style={{ width: "24px", height: "24px", color: "var(--text-muted)" }} />
           </div>
           <p style={{ fontSize: "14px", color: "#a0a0a0", marginBottom: "4px" }}>Публикация выключена</p>
-          <p style={{ fontSize: "12px", color: "#666", marginBottom: "16px", maxWidth: "400px" }}>
+          <p style={{ fontSize: "12px", color: "var(--text-muted)", marginBottom: "16px", maxWidth: "400px" }}>
             «Публиковать мои сделки» в Терминале записывает твой аккаунт Lighter в таблицу <code style={{ color: "#a0a0a0" }}>leaders</code> — после этого
             карточка появляется в Discover, а сюда начинают приходить подписки из <code style={{ color: "#a0a0a0" }}>follows</code>.
           </p>
@@ -111,7 +107,7 @@ export default function Earn({ isCopyable, setTab, leaderId, leaderFeeBps, setLe
             <Radio style={{ width: "24px", height: "24px", color: "#fbbf24" }} />
           </div>
           <p style={{ fontSize: "14px", color: "#a0a0a0", marginBottom: "4px" }}>Переключатель включён, лидера в базе нет</p>
-          <p style={{ fontSize: "12px", color: "#666", marginBottom: "16px", maxWidth: "400px" }}>
+          <p style={{ fontSize: "12px", color: "var(--text-muted)", marginBottom: "16px", maxWidth: "400px" }}>
             Не удалось зарегистрировать лидера: бэкенд недоступен{lighterAccountIndex == null ? ", либо по этому адресу нет аккаунта Lighter" : ""}.
           </p>
           <button className="link-action" onClick={() => setTab("terminal")}>
@@ -138,7 +134,7 @@ export default function Earn({ isCopyable, setTab, leaderId, leaderFeeBps, setLe
               </div>
               <div>
                 <div style={{ fontSize: "14px", fontWeight: 600, color: "#fafafa" }}>{leader?.handle ?? "загрузка…"}</div>
-                <div style={{ fontSize: "12px", color: "#666", fontFamily: "JetBrains Mono, monospace" }}>
+                <div style={{ fontSize: "12px", color: "var(--text-muted)", fontFamily: "JetBrains Mono, monospace" }}>
                   Lighter #{leader?.lighterAccountIndex ?? lighterAccountIndex ?? "—"}
                   {leader && <> · в сети с {new Date(leader.since * 1000).toLocaleDateString("ru-RU")}</>}
                 </div>
@@ -150,33 +146,33 @@ export default function Earn({ isCopyable, setTab, leaderId, leaderFeeBps, setLe
 
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "12px", marginBottom: "12px" }}>
           <div style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", padding: "16px" }}>
-            <div style={{ fontSize: "11px", color: "#666", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "8px", display: "flex", alignItems: "center", gap: "6px" }}>
+            <div style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "8px", display: "flex", alignItems: "center", gap: "6px" }}>
               <Users style={{ width: "12px", height: "12px" }} /> Активные подписки
             </div>
             <div style={{ fontSize: "24px", fontFamily: "JetBrains Mono, monospace", fontWeight: 600, color: "#fafafa" }}>{leader ? fmt(leader.followers) : "—"}</div>
-            <div style={{ fontSize: "11px", color: "#666", marginTop: "4px" }}>строки follows где paused = 0</div>
+            <div style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "4px" }}>строки follows где paused = 0</div>
           </div>
           <div style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", padding: "16px" }}>
-            <div style={{ fontSize: "11px", color: "#666", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "8px", display: "flex", alignItems: "center", gap: "6px" }}>
+            <div style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "8px", display: "flex", alignItems: "center", gap: "6px" }}>
               <DollarSign style={{ width: "12px", height: "12px" }} /> AUM в копиях
             </div>
             <div style={{ fontSize: "24px", fontFamily: "JetBrains Mono, monospace", fontWeight: 600, color: "#fafafa" }}>{leader ? usd(aum, 0) : "—"}</div>
-            <div style={{ fontSize: "11px", color: "#666", marginTop: "4px" }}>сумма allocation_usd</div>
+            <div style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "4px" }}>сумма allocation_usd</div>
           </div>
           <div style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", padding: "16px" }}>
-            <div style={{ fontSize: "11px", color: "#666", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "8px", display: "flex", alignItems: "center", gap: "6px" }}>
+            <div style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "8px", display: "flex", alignItems: "center", gap: "6px" }}>
               {pnl != null && pnl >= 0 ? <TrendingUp style={{ width: "12px", height: "12px" }} /> : <TrendingDown style={{ width: "12px", height: "12px" }} />} Реализованный PnL
             </div>
             <div style={{ fontSize: "24px", fontFamily: "JetBrains Mono, monospace", fontWeight: 600, color: pnl == null ? "#666" : pnl >= 0 ? "#10b981" : "#ef4444" }}>
               {pnl == null ? "—" : `${pnl >= 0 ? "+" : ""}${usd(pnl, 0)}`}
             </div>
-            <div style={{ fontSize: "11px", color: "#666", marginTop: "4px" }}>{pnl == null ? "Lighter не ответил" : "публичный GET /account?by=index"}</div>
+            <div style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "4px" }}>{pnl == null ? "Lighter не ответил" : "публичный GET /account?by=index"}</div>
           </div>
         </div>
 
         <div style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", padding: "16px", marginBottom: "12px" }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px" }}>
-            <span style={{ fontSize: "11px", color: "#666", textTransform: "uppercase", letterSpacing: "0.5px", display: "flex", alignItems: "center", gap: "6px" }}>
+            <span style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.5px", display: "flex", alignItems: "center", gap: "6px" }}>
               <Percent style={{ width: "12px", height: "12px" }} /> Комиссия за скопированную сделку
             </span>
             <span style={{ fontFamily: "JetBrains Mono, monospace", color: "#fafafa", fontSize: "13px" }}>{(feeDraft / 100).toFixed(2)}%</span>
@@ -200,13 +196,13 @@ export default function Earn({ isCopyable, setTab, leaderId, leaderFeeBps, setLe
             </button>
             {feeError && <span style={{ fontSize: "12px", color: "#ef4444" }}>{feeError}</span>}
           </div>
-          <div style={{ fontSize: "11px", color: "#666", marginTop: "8px" }}>
+          <div style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "8px" }}>
             Сейчас в базе: {(feeBps / 100).toFixed(2)}% — это значение видят подписчики в Discover.
           </div>
         </div>
 
         <div style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", padding: "16px", marginBottom: "12px" }}>
-          <div style={{ fontSize: "11px", color: "#666", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "8px" }}>Сколько это может быть в месяц</div>
+          <div style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "8px" }}>Сколько это может быть в месяц</div>
           <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "12px" }}>
             <span style={{ fontSize: "13px", color: "#a0a0a0" }}>Оборотов на подписчика в месяц</span>
             <input
@@ -221,7 +217,7 @@ export default function Earn({ isCopyable, setTab, leaderId, leaderFeeBps, setLe
           <div style={{ fontFamily: "JetBrains Mono, monospace", fontSize: "13px", color: "#a0a0a0", marginBottom: "8px" }}>
             {usd(aum, 0)} × {feeBps} bps × {turnsPerMonth} = <span style={{ color: "#fbbf24" }}>{usd(projected, 2)}</span>
           </div>
-          <p style={{ fontSize: "12px", color: "#666", margin: 0 }}>
+          <p style={{ fontSize: "12px", color: "var(--text-muted)", margin: 0 }}>
             Арифметика по твоему допущению об обороте, а не начисление: в репозитории нет кода, который удерживает fee_bps со сделок подписчика.
             Комиссия сейчас — объявленное условие в таблице <code style={{ color: "#a0a0a0" }}>leaders</code>, которое видно в Discover, но которое пока
             не списывается. Сбор появится вместе с расчётным контуром поверх <code style={{ color: "#a0a0a0" }}>mirror_log</code>.
@@ -229,11 +225,11 @@ export default function Earn({ isCopyable, setTab, leaderId, leaderFeeBps, setLe
         </div>
 
         <div style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", padding: "16px", marginBottom: "12px" }}>
-          <div style={{ fontSize: "11px", color: "#666", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "12px" }}>Подписчики</div>
+          <div style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "12px" }}>Подписчики</div>
           {!follows ? (
-            <p style={{ fontSize: "13px", color: "#666" }}>Читаю follows…</p>
+            <p style={{ fontSize: "13px", color: "var(--text-muted)" }}>Читаю follows…</p>
           ) : follows.length === 0 ? (
-            <p style={{ fontSize: "13px", color: "#666" }}>
+            <p style={{ fontSize: "13px", color: "var(--text-muted)" }}>
               На тебя пока никто не подписан. Карточка появляется в Discover сразу после регистрации лидера — подписчик выбирает аллокацию и плечо,
               они попадают в <code style={{ color: "#a0a0a0" }}>follows</code>.
             </p>
@@ -241,7 +237,7 @@ export default function Earn({ isCopyable, setTab, leaderId, leaderFeeBps, setLe
             <div className="table-scroll">
             <table style={{ width: "100%", fontSize: "13px", minWidth: "500px" }}>
               <thead>
-                <tr style={{ textAlign: "left", fontSize: "11px", color: "#666", borderBottom: "1px solid #1e1e1e" }}>
+                <tr style={{ textAlign: "left", fontSize: "11px", color: "var(--text-muted)", borderBottom: "1px solid #1e1e1e" }}>
                   <th style={{ paddingBottom: "8px", fontWeight: 400 }}>Подписчик</th>
                   <th style={{ paddingBottom: "8px", fontWeight: 400 }}>Аллокация</th>
                   <th style={{ paddingBottom: "8px", fontWeight: 400 }}>Плечо</th>
@@ -258,19 +254,19 @@ export default function Earn({ isCopyable, setTab, leaderId, leaderFeeBps, setLe
                     <td style={{ padding: "10px 0", fontFamily: "JetBrains Mono, monospace", color: "#fafafa" }}>{usd(f.allocation_usd, 0)}</td>
                     <td style={{ padding: "10px 0", fontFamily: "JetBrains Mono, monospace", color: "#a0a0a0" }}>{f.max_leverage}x</td>
                     <td style={{ padding: "10px 0", fontFamily: "JetBrains Mono, monospace", color: "#a0a0a0" }}>{fmt(f.current_mirrored_size, 4)}</td>
-                    <td style={{ padding: "10px 0", fontFamily: "JetBrains Mono, monospace", color: "#666", fontSize: "11px" }}>{new Date(f.created_at * 1000).toLocaleDateString("ru-RU")}</td>
+                    <td style={{ padding: "10px 0", fontFamily: "JetBrains Mono, monospace", color: "var(--text-muted)", fontSize: "11px" }}>{new Date(f.created_at * 1000).toLocaleDateString("ru-RU")}</td>
                   </tr>
                 ))}
               </tbody>
             </table>
             </div>
           )}
-          <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11px", color: "#666", marginTop: "12px" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11px", color: "var(--text-muted)", marginTop: "12px" }}>
             <Wallet style={{ width: "12px", height: "12px" }} /> Идентификатор подписчика — внутренний id из таблицы followers; адреса кошельков здесь не показываются.
           </div>
         </div>
 
-        <p style={{ fontSize: "12px", color: "#666" }}>
+        <p style={{ fontSize: "12px", color: "var(--text-muted)" }}>
           Чтобы сделки действительно копировались, на сервере запущен <code style={{ color: "#a0a0a0" }}>backend/leader_listener.py</code>: он слушает
           позиции лидера, считает <code style={{ color: "#a0a0a0" }}>mirror_engine.compute_mirror_plan()</code> по каждой активной подписке и пишет итог
           в <code style={{ color: "#a0a0a0" }}>mirror_log</code>. Пока <code style={{ color: "#a0a0a0" }}>WAKE_DRY_RUN=true</code> (значение по умолчанию),

@@ -94,12 +94,48 @@ def funding_by_market(rows: list, venue: str = "lighter") -> dict:
     return out
 
 
+def funding_rate_rows(rows: list) -> list[dict]:
+    """Ставки Lighter одной площадкой, отранжированные по годовой по убыванию.
+
+    Форма ответа GET /funding/rates считается здесь, а не внутри роутера, потому
+    что её читают два клиента: сайт через HTTP и telegram_bot напрямую. Две
+    копии одного разбора разошлись бы молча — бот начал бы показывать другую
+    годовую, чем страница, и спорить о том, кому верить, пришлось бы по
+    скриншотам.
+
+    symbol берётся из той же строки lighter: у рынка без строки наружу уходит
+    "market N", а не пустая ячейка — список ставок с анонимными строками
+    неотличим от списка с битыми."""
+    symbols = {
+        int(r["market_id"]): r.get("symbol") or ""
+        for r in rows
+        if r.get("exchange") == "lighter" and str(r.get("market_id", "")).isdigit()
+    }
+    out = []
+    for market_id, rate in funding_by_market(rows).items():
+        symbol = symbols.get(market_id) or f"market {market_id}"
+        snapshot = snapshot_from_signed_rate(market_id, symbol, rate)
+        out.append(
+            {
+                "market_id": market_id,
+                "symbol": snapshot.symbol,
+                "base": base_asset(snapshot.symbol),
+                "hourly_rate": snapshot.hourly_rate,
+                "signed_rate": rate,
+                "direction": snapshot.direction,
+                "annualized": annualized_yield(snapshot),
+            }
+        )
+    out.sort(key=lambda r: r["annualized"], reverse=True)
+    return out
+
+
 QUOTES = ("USDC", "USDT", "USD")
 
 
 def base_asset(symbol: str) -> str:
     """Нормализация тикера к базовому активу: "BTC-PERP", "btcusdt", "BTC/USDC",
-    "BTC" -> "BTC".
+    "BTC-USDC", "btcperp", "BTC" -> "BTC".
 
     Замерено на живом /funding-rates (mainnet, 737 строк): все четыре площадки —
     Lighter, Binance, Bybit, Hyperliquid — и так отдают голое имя базового
@@ -108,18 +144,23 @@ def base_asset(symbol: str) -> str:
     инструменты на биржах, и запрос обязан найти те строки, которые API уже
     отдаёт по "BTC".
 
+    Разделитель берётся первым куском, а не «заменить на пустоту»: из "ETH/USDC"
+    иначе вышло бы "ETHUSDC", то есть другой актив. "PERP" снимается и в слитом
+    написании ("BTCPERP"), и там, где после разделения от тикера осталась голая
+    основа.
+
     Ограничение честно: сопоставление по имени, а не по идентификатору
     инструмента. Тикер, который сам заканчивается на название стейбла (PYUSD),
     сократится неверно — поэтому наружу всегда отдаётся и исходный symbol
     строки, и совпадение смотрятся по нему тоже."""
     s = str(symbol).upper().strip()
-    s = s.split("/")[0]
-    if s in QUOTES:
-        return s  # сам стейбл — тоже актив, превращать его в "C" нельзя
-    for junk in ("-PERP", "_PERP"):
-        if s.endswith(junk):
-            s = s[: -len(junk)]
-            break
+    for sep in ("/", "-", ":", "_", ".", " "):
+        s = s.split(sep)[0]
+    if not s or s in QUOTES:
+        # Голый стейбл — тоже актив: превращать "USDC" в "" нельзя.
+        return s
+    if s.endswith("PERP") and len(s) > 4:
+        s = s[:-4]
     for quote in QUOTES:
         if s.endswith(quote) and len(s) > len(quote):
             s = s[: -len(quote)]

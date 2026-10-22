@@ -1,10 +1,11 @@
-import { useState, useEffect, useMemo } from "react";
-import { Radio, Search } from "lucide-react";
-import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
-import { getCandles, getRecentTrades, getFundingRates, placeOrderViaSigningService, type LighterNetwork, type OrderBook, type Candle, type Trade } from "../lib/lighter";
+import { useEffect, useMemo, useState } from "react";
+import { Search } from "lucide-react";
+import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, ResponsiveContainer } from "recharts";
+import { getCandles, getRecentTrades, getFundingRates, getApiHost, placeOrderViaSigningService, type LighterNetwork, type OrderBook, type Candle, type Trade } from "../lib/lighter";
 import { SIGNING_SERVICE_URL } from "../lib/config";
 import { errorText } from "../lib/backend";
 import { fmt, usd } from "./utils";
+import { Modal, Skeleton } from "./ui";
 
 interface TerminalProps {
   asset: string;
@@ -19,11 +20,45 @@ interface TerminalProps {
   accountEquityUsd?: number;
 }
 
-const MONO = "'JetBrains Mono', monospace";
+/* Сколько строк списка обеспечено живыми ценами. Каждая строка — один запрос
+   свечей (публичного «тикера сразу по всем рынкам» у Lighter нет: /tickers и
+   /markets отвечают 403). 12 — тот же порядок, что у /markets/overview на
+   бэкенде, который считает оборот по 24 часовым свечам. */
+const TICKER_ROWS = 12;
+const TICKER_TTL_MS = 60_000;
 
-function Shimmer({ height = "16px", width = "100%" }: { height?: string; width?: string }) {
-  return <div style={{ height, width, background: "#1a1a1a", borderRadius: "3px", animation: "wakeShimmer 1.6s ease-in-out infinite" }} />;
+type Ticker = { price: number; changePct: number | null; volume24h: number };
+
+// Кэш на уровне модуля: список перерисовывается при поиске, и без него каждый
+// скролл заново спрашивал бы Lighter по тем же рынкам.
+const tickerCache = new Map<number, { at: number; value: Ticker | null }>();
+
+async function getTicker(marketId: number): Promise<Ticker | null> {
+  const hit = tickerCache.get(marketId);
+  if (hit && Date.now() - hit.at < TICKER_TTL_MS) return hit.value;
+  try {
+    const candles = await getCandles(marketId, "1h", 24);
+    if (!candles.length) {
+      tickerCache.set(marketId, { at: Date.now(), value: null });
+      return null;
+    }
+    const last = candles[candles.length - 1];
+    const first = candles[0];
+    const value: Ticker = {
+      price: last.c,
+      changePct: first.o ? (last.c - first.o) / first.o : null,
+      volume24h: candles.reduce((sum, c) => sum + c.V, 0),
+    };
+    tickerCache.set(marketId, { at: Date.now(), value });
+    return value;
+  } catch {
+    // Просроченный ответ не должен выбивать цены из всего списка: строка
+    // остаётся с прочерком и обновится на следующем витке.
+    return null;
+  }
 }
+
+const pct = (v: number | null) => (v == null ? "—" : `${v >= 0 ? "+" : ""}${(v * 100).toFixed(2)}%`);
 
 export default function Terminal({ asset, setAsset, markets, dataError, setToast, setMarketPickerOpen, network, accountEquityUsd }: TerminalProps) {
   const [candles, setCandles] = useState<Candle[]>([]);
@@ -33,15 +68,21 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
   const [leverage, setLeverage] = useState(5);
   const [searchQuery, setSearchQuery] = useState("");
   const [fundingRate, setFundingRate] = useState<number | null>(null);
-  const [candlesLoading, setCandlesLoading] = useState(false);
-  const [tradesLoading, setTradesLoading] = useState(false);
+  const [candlesPending, setCandlesPending] = useState(true);
+  const [tradesPending, setTradesPending] = useState(true);
   const [candlesError, setCandlesError] = useState<string | null>(null);
   const [tradesError, setTradesError] = useState<string | null>(null);
   const [showOrderConfirm, setShowOrderConfirm] = useState(false);
+  const [orderSending, setOrderSending] = useState(false);
   const [lastCandlesUpdate, setLastCandlesUpdate] = useState<Date | null>(null);
   const [lastTradesUpdate, setLastTradesUpdate] = useState<Date | null>(null);
+  const [tickers, setTickers] = useState<Record<number, Ticker | null>>({});
+  const [nonce, setNonce] = useState(0);
 
   const currentMarket = markets.find((m) => m.symbol === asset);
+  const marketId = currentMarket?.market_id;
+  const candlesLoading = marketId != null && candlesPending;
+  const tradesLoading = marketId != null && tradesPending;
   const isSpot = currentMarket?.market_type === "spot";
 
   const filteredMarkets = useMemo(() => {
@@ -50,82 +91,107 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
     return markets.filter((m) => m.symbol.toUpperCase().includes(q));
   }, [markets, searchQuery]);
 
+  const visibleIds = useMemo(
+    () => filteredMarkets.slice(0, TICKER_ROWS).map((m) => m.market_id).join(","),
+    [filteredMarkets]
+  );
+
   useEffect(() => {
-    if (!currentMarket) return;
-    setCandlesLoading(true);
-    setCandlesError(null);
-    getCandles(currentMarket.market_id, "1h", 48)
-      .then((data) => {
-        setCandles(data);
-        setLastCandlesUpdate(new Date());
-      })
-      .catch((e) => setCandlesError(errorText(e)))
-      .finally(() => setCandlesLoading(false));
-    const id = setInterval(() => {
-      getCandles(currentMarket.market_id, "1h", 48)
+    if (marketId == null) return;
+    let live = true;
+    function load() {
+      getCandles(marketId!, "1h", 48)
         .then((data) => {
+          if (!live) return;
           setCandles(data);
+          setCandlesError(null);
           setLastCandlesUpdate(new Date());
         })
-        .catch((e) => setCandlesError(errorText(e)));
-    }, 20000);
-    return () => clearInterval(id);
-  }, [currentMarket?.market_id]);
+        .catch((e) => { if (live) setCandlesError(errorText(e)); })
+        .finally(() => { if (live) setCandlesPending(false); });
+    }
+    load();
+    const id = setInterval(load, 20000);
+    return () => { live = false; clearInterval(id); };
+  }, [marketId]);
 
   useEffect(() => {
-    if (!currentMarket) return;
-    setTradesLoading(true);
-    setTradesError(null);
-    getRecentTrades(currentMarket.market_id, 16)
-      .then((data) => {
-        setTrades(data);
-        setLastTradesUpdate(new Date());
-      })
-      .catch((e) => setTradesError(errorText(e)))
-      .finally(() => setTradesLoading(false));
-    const id = setInterval(() => {
-      getRecentTrades(currentMarket.market_id, 16)
+    if (marketId == null) return;
+    let live = true;
+    function load() {
+      getRecentTrades(marketId!, 16)
         .then((data) => {
+          if (!live) return;
           setTrades(data);
+          setTradesError(null);
           setLastTradesUpdate(new Date());
         })
-        .catch((e) => setTradesError(errorText(e)));
-    }, 4000);
-    return () => clearInterval(id);
-  }, [currentMarket?.market_id]);
+        .catch((e) => { if (live) setTradesError(errorText(e)); })
+        .finally(() => { if (live) setTradesPending(false); });
+    }
+    load();
+    const id = setInterval(load, 4000);
+    return () => { live = false; clearInterval(id); };
+  }, [marketId]);
 
   useEffect(() => {
-    if (!currentMarket) {
-      setFundingRate(null);
-      return;
-    }
+    if (marketId == null) return;
+    let live = true;
     getFundingRates()
       .then((rows) => {
-        const row = rows.find((r) => r.market_id === currentMarket.market_id && r.exchange === "lighter");
+        if (!live) return;
+        const row = rows.find((r) => r.market_id === marketId && r.exchange === "lighter");
         setFundingRate(row?.rate ?? null);
       })
-      .catch(() => setFundingRate(null));
-  }, [currentMarket?.market_id]);
+      .catch(() => { if (live) setFundingRate(null); });
+    return () => { live = false; };
+  }, [marketId]);
+
+  // Цены списка: только видимые строки, с кэшем и общим витком на 60 секунд.
+  useEffect(() => {
+    const ids = visibleIds ? visibleIds.split(",").map(Number) : [];
+    let live = true;
+    for (const id of ids) {
+      void getTicker(id).then((value) => {
+        if (live) setTickers((prev) => (prev[id] === value ? prev : { ...prev, [id]: value }));
+      });
+    }
+    return () => { live = false; };
+  }, [visibleIds, nonce]);
+
+  useEffect(() => {
+    const id = setInterval(() => setNonce((n) => n + 1), TICKER_TTL_MS);
+    return () => clearInterval(id);
+  }, []);
 
   const lastCandle = candles[candles.length - 1];
   const firstCandle = candles[0];
   const price = lastCandle?.c ?? null;
-  const change = lastCandle && firstCandle ? ((lastCandle.c - firstCandle.o) / firstCandle.o) * 100 : null;
+  const change = lastCandle && firstCandle ? (lastCandle.c - firstCandle.o) / firstCandle.o : null;
+  const up = (change ?? 0) >= 0;
   const chartData = candles.map((c, i) => ({ i, t: c.t, v: c.c }));
 
-  // Засечки берём из самих свечей, равным шагом по индексам: предоставленный себе
-  // recharts поставил бы круглые метки времени, и при часовом окне часть из них
-  // оказалась бы за краями графика.
   const timeTicks = useMemo(() => {
     if (candles.length < 2) return [];
-    const n = Math.min(4, candles.length);
+    // Три метки, не четыре: подписи стоят по центру своей точки, и на 390px
+    // ширина поля под график ≈ 250px, где четыре метки «21.10 17:00» уже лепились
+    // друг к другу. Четыре метки на десктопе читались так же, а на телефоне —
+    // ничто.
+    const n = Math.min(3, candles.length);
     return Array.from({ length: n }, (_, k) => candles[Math.round((k * (candles.length - 1)) / (n - 1))].t);
   }, [candles]);
 
-  // Окно длиннее суток — к времени нужен день, иначе подписи повторяются. Собираем
-  // строку вручную: toLocaleString с {day, month, hour} даёт «08.06, 03» — и дата,
-  // и час есть, но читается как обрывок.
   const multiDay = (candles[candles.length - 1]?.t ?? 0) - (candles[0]?.t ?? 0) > 86_400_000;
+  // Окно цены с запасом 15% от диапазона: без него recharts берёт [0, max],
+  // и кривая при 80k прилипает к верху.
+  const priceDomain = useMemo<[number, number]>(() => {
+    if (candles.length < 2) return [0, 1];
+    const values = candles.map((c) => c.c);
+    const min = Math.min(...values);
+    const max = Math.max(...values);
+    const pad = Math.max((max - min) * 0.15, max * 0.0005);
+    return [min - pad, max + pad];
+  }, [candles]);
   const two = (n: number) => String(n).padStart(2, "0");
   const tickTime = (t: number) => {
     const d = new Date(t);
@@ -136,10 +202,11 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
   const stats24h = useMemo(() => {
     if (candles.length < 2) return null;
     const last24 = candles.slice(-24);
-    const high = Math.max(...last24.map((c) => c.h));
-    const low = Math.min(...last24.map((c) => c.l));
-    const volume = last24.reduce((s, c) => s + c.V, 0);
-    return { high, low, volume };
+    return {
+      high: Math.max(...last24.map((c) => c.h)),
+      low: Math.min(...last24.map((c) => c.l)),
+      volume: last24.reduce((s, c) => s + c.V, 0),
+    };
   }, [candles]);
 
   const liqPrice = useMemo(() => {
@@ -147,6 +214,8 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
     const dist = price * (1 / Math.max(leverage, 1)) * 0.9;
     return side === "long" ? price - dist : price + dist;
   }, [price, leverage, side]);
+
+  const decimals = currentMarket?.supported_price_decimals ?? 2;
 
   function requestOrder() {
     if (!currentMarket || price == null) {
@@ -170,6 +239,7 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
       return;
     }
     setShowOrderConfirm(false);
+    setOrderSending(true);
     setToast(`Отправляю на signing service (${SIGNING_SERVICE_URL})…`);
     try {
       const result = await placeOrderViaSigningService(currentMarket, side, size, price);
@@ -182,392 +252,312 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
       setToast(
         `Ордер не отправлен: ${errorText(e)}. Подпишите и запустите backend/signing_service.py, затем повторите.`
       );
+    } finally {
+      setOrderSending(false);
     }
   }
 
-  const decimals = currentMarket?.supported_price_decimals ?? 2;
-  const up = (change ?? 0) >= 0;
+  const stamp = (d: Date | null) => (d ? d.toLocaleTimeString("ru-RU", { hour12: false }) : "—");
+  const lineColor = up ? "var(--up)" : "var(--down)";
+  /* Пока не ответила сама книга, свечей просить не у чего: рынок не выбран.
+     Причина тогда общая — dataError, а не ошибка несуществующего запроса. */
+  const chartError = candles.length ? null : candlesError ?? (currentMarket ? null : dataError);
 
   return (
     <div className="terminal-layout">
-      <div style={{ display: "grid", gridTemplateRows: "auto 1fr auto", gap: "1px", background: "#1a1a1a", overflow: "hidden" }}>
-        {/* Asset header */}
+      <div className="terminal-main">
+        {/* ── Строка рынка ─────────────────────────────────────────────── */}
         <div className="terminal-asset-header">
-          <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-            <button onClick={() => setMarketPickerOpen(true)} style={{ display: "flex", alignItems: "center", gap: "8px", background: "transparent", border: "none", cursor: "pointer", padding: 0 }}>
-              <span style={{ fontSize: "16px", fontWeight: 600, color: "#fafafa" }}>{asset}</span>
-              <span style={{ fontSize: "11px", fontWeight: 500, color: "#666", textTransform: "uppercase", padding: "2px 6px", background: "#1a1a1a", borderRadius: "3px" }}>
-                {currentMarket?.market_type ?? "PERP"}
-              </span>
-            </button>
+          <button className="desk-symbol" aria-label="Выбрать рынок" onClick={() => setMarketPickerOpen(true)}>
+            <span className="desk-symbol-name">{asset}</span>
+            <span className="chip">{currentMarket?.market_type ?? "—"}{currentMarket ? ` · #${currentMarket.market_id}` : ""}</span>
+          </button>
+
+          <div style={{ display: "flex", alignItems: "baseline", gap: "10px" }}>
+            <span className="desk-price">{price == null ? "—" : `$${fmt(price, decimals)}`}</span>
+            <span className={`chip ${change == null ? "" : up ? "chip-up" : "chip-down"}`}>{pct(change)} / 24ч</span>
           </div>
 
-          <div style={{ display: "flex", alignItems: "center", gap: "16px" }}>
-            {price != null ? (
-              <span style={{ fontFamily: MONO, fontSize: "24px", fontWeight: 600, color: "#fafafa", letterSpacing: "-0.02em" }}>
-                ${fmt(price, decimals)}
-              </span>
-            ) : (
-              <Shimmer height="28px" width="140px" />
-            )}
-            {change != null && (
-              <span style={{ fontFamily: MONO, fontSize: "13px", fontWeight: 500, color: up ? "#10b981" : "#ef4444" }}>
-                {up ? "+" : ""}{change.toFixed(2)}%
-              </span>
-            )}
+          <div className="desk-stats">
+            <div className="desk-stat">
+              <span className="label">Максимум 24ч</span>
+              <b>{stats24h ? fmt(stats24h.high, decimals) : "—"}</b>
+            </div>
+            <div className="desk-stat">
+              <span className="label">Минимум 24ч</span>
+              <b>{stats24h ? fmt(stats24h.low, decimals) : "—"}</b>
+            </div>
+            <div className="desk-stat">
+              <span className="label">Оборот 24ч</span>
+              <b>{stats24h ? usd(stats24h.volume, 0) : "—"}</b>
+            </div>
+            <div className="desk-stat">
+              <span className="label">Funding</span>
+              <b>{fundingRate == null ? "нет ставки" : `${(fundingRate * 100).toFixed(4)}%/ч`}</b>
+            </div>
           </div>
-
-          {stats24h && (
-            <div style={{ display: "flex", gap: "24px", marginLeft: "auto" }}>
-              <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
-                <span style={{ fontSize: "11px", fontWeight: 500, color: "#666", textTransform: "uppercase", letterSpacing: "0.05em" }}>24h High</span>
-                <span style={{ fontFamily: MONO, fontSize: "13px", fontWeight: 500, color: "#a0a0a0" }}>${fmt(stats24h.high, decimals)}</span>
-              </div>
-              <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
-                <span style={{ fontSize: "11px", fontWeight: 500, color: "#666", textTransform: "uppercase", letterSpacing: "0.05em" }}>24h Low</span>
-                <span style={{ fontFamily: MONO, fontSize: "13px", fontWeight: 500, color: "#a0a0a0" }}>${fmt(stats24h.low, decimals)}</span>
-              </div>
-              <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
-                <span style={{ fontSize: "11px", fontWeight: 500, color: "#666", textTransform: "uppercase", letterSpacing: "0.05em" }}>24h Vol</span>
-                <span style={{ fontFamily: MONO, fontSize: "13px", fontWeight: 500, color: "#a0a0a0" }}>{usd(stats24h.volume, 0)}</span>
-              </div>
-            </div>
-          )}
-
-          {fundingRate != null && (
-            <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
-              <span style={{ fontSize: "11px", fontWeight: 500, color: "#666", textTransform: "uppercase", letterSpacing: "0.05em" }}>Funding</span>
-              <span style={{ fontFamily: MONO, fontSize: "13px", fontWeight: 500, color: "#a0a0a0" }}>{(fundingRate * 100).toFixed(4)}%/h</span>
-            </div>
-          )}
         </div>
 
-        {/* Chart */}
-        <div style={{ background: "#111", padding: "16px", minHeight: "300px", position: "relative" }}>
-          {lastCandlesUpdate && !candlesError && !dataError && (
-            <div style={{ position: "absolute", top: "8px", left: "10px", fontSize: "11px", color: "#525252", fontFamily: MONO, zIndex: 10 }}>
-              {lastCandlesUpdate.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+        {/* ── График ───────────────────────────────────────────────────── */}
+        <div style={{ background: "var(--bg-1)", position: "relative", minHeight: "260px" }}>
+          <div className="panel-caption">
+            <span className="label">Свечи 1ч · 48 шт · Lighter</span>
+            <span className="num muted">обновлено {stamp(lastCandlesUpdate)}</span>
+          </div>
+
+          {candlesLoading && candles.length === 0 ? (
+            <div className="desk-chart" style={{ padding: "16px 14px" }}><Skeleton height="100%" /></div>
+          ) : chartError ? (
+            <div className="empty-state desk-chart" style={{ border: "none", justifyContent: "center" }}>
+              <p style={{ color: "var(--down)", fontSize: "13px", margin: 0 }}>Lighter API не отвечает</p>
+              <p style={{ color: "var(--fg-3)", fontSize: "12px", margin: 0 }}>{getApiHost()} — {chartError}</p>
             </div>
-          )}
-          {dataError ? (
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", fontSize: "13px", color: "#666" }}>
-              <div style={{ textAlign: "center" }}>
-                <div style={{ marginBottom: "8px" }}>Lighter API не отвечает</div>
-                <div style={{ fontSize: "11px", color: "#525252" }}>
-                  {network}.zklighter.elliot.ai — {dataError}
-                </div>
-              </div>
-            </div>
-          ) : candlesError ? (
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "center", height: "100%", fontSize: "13px", color: "#666" }}>
-              <div style={{ textAlign: "center" }}>
-                <div style={{ marginBottom: "8px" }}>Не удалось загрузить график</div>
-                <div style={{ fontSize: "11px", color: "#525252" }}>{candlesError}</div>
-              </div>
-            </div>
-          ) : chartData.length > 1 ? (
-            <>
-              {candlesLoading && candles.length === 0 && (
-                <div style={{ position: "absolute", top: "8px", left: "10px", fontSize: "11px", color: "#666", display: "flex", alignItems: "center", gap: "6px", zIndex: 10 }}>
-                  <div style={{ width: "8px", height: "8px", border: "2px solid #3b82f6", borderTopColor: "transparent", borderRadius: "50%", animation: "spin 1s linear infinite" }} />
-                  загрузка…
-                </div>
-              )}
-              <ResponsiveContainer width="100%" height="100%" minWidth={200} minHeight={150}>
-                <AreaChart data={chartData} margin={{ top: 8, right: 4, bottom: 0, left: 4 }}>
-                  <defs>
-                    <linearGradient id="chartGrad" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor={up ? "#10b981" : "#ef4444"} stopOpacity={0.12} />
-                      <stop offset="100%" stopColor={up ? "#10b981" : "#ef4444"} stopOpacity={0} />
-                    </linearGradient>
-                  </defs>
-                  <CartesianGrid stroke="#171717" vertical={false} />
-                  {/* Ось цены справа и обязательно с доменом [dataMin, dataMax]: без
-                      YAxis recharts берёт [0, max], и кривая цены при 80k прилипает
-                      к верхней границе — график выглядит пустым. Правая сторона — как
-                      в терминалах: цена стоит против последней свечи, а не против
-                      пустой колонки слева. */}
-                  <YAxis
-                    orientation="right"
-                    width={62}
-                    domain={["dataMin", "dataMax"]}
-                    padding={{ top: 12, bottom: 12 }}
-                    tickCount={5}
-                    stroke="#242424"
-                    tick={{ fill: "#666", fontSize: 10, fontFamily: MONO }}
-                    tickFormatter={(v: number) => fmt(v, decimals)}
-                  />
-                  <XAxis
-                    dataKey="t"
-                    type="number"
-                    scale="time"
-                    domain={["dataMin", "dataMax"]}
-                    ticks={timeTicks}
-                    stroke="#242424"
-                    height={22}
-                    tickMargin={6}
-                    tick={{ fill: "#525252", fontSize: 10, fontFamily: MONO }}
-                    tickFormatter={tickTime}
-                  />
-                  <Tooltip
-                    cursor={{ stroke: "#333", strokeWidth: 1 }}
-                    content={({ active, payload }) => {
-                      const d = payload?.[0]?.payload as { t: number; v: number } | undefined;
-                      if (!active || !d) return null;
-                      return (
-                        <div style={{ background: "#0a0a0a", border: "1px solid #2a2a2a", borderRadius: "4px", padding: "6px 10px", fontFamily: MONO, fontSize: "11px", lineHeight: 1.5, pointerEvents: "none" }}>
-                          <div style={{ color: "#666" }}>{new Date(d.t).toLocaleString("ru-RU", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</div>
-                          <div style={{ color: "#e5e5e5" }}>${fmt(d.v, decimals)}</div>
-                        </div>
-                      );
-                    }}
-                  />
-                  <Area type="monotone" dataKey="v" stroke={up ? "#10b981" : "#ef4444"} strokeWidth={1.5} fill="url(#chartGrad)" dot={false} activeDot={{ r: 3, strokeWidth: 0 }} isAnimationActive={false} />
-                </AreaChart>
-              </ResponsiveContainer>
-            </>
           ) : (
-            <Shimmer height="100%" />
+            <div className="desk-chart">
+            <ResponsiveContainer width="100%" height="100%" minWidth={200} minHeight={200}>
+              {/* Отступ слева — под половину ширины первой подписи оси: метки
+                  стоят по центру своей точки, и на 30px «21.10 01:00» обрезалось
+                  по «1.10 01:00». */}
+              <AreaChart data={chartData} margin={{ top: 26, right: 30, bottom: 18, left: 42 }}>
+                <defs>
+                  <linearGradient id="deskFill" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor={lineColor} stopOpacity={0.18} />
+                    <stop offset="100%" stopColor={lineColor} stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <CartesianGrid stroke="var(--line)" strokeDasharray="0" vertical={false} />
+                <XAxis
+                  dataKey="t"
+                  ticks={timeTicks}
+                  tickFormatter={tickTime}
+                  stroke="var(--line)"
+                  tick={{ fill: "var(--fg-3)", fontSize: 10, fontFamily: "var(--font-mono)" }}
+                  tickLine={false}
+                  axisLine={{ stroke: "var(--line)" }}
+                  interval={0}
+                  tickMargin={8}
+                />
+                <YAxis
+                  orientation="right"
+                  width={72}
+                  domain={priceDomain}
+                  tickFormatter={(v: number) => fmt(v, decimals)}
+                  stroke="var(--line)"
+                  tick={{ fill: "var(--fg-3)", fontSize: 10, fontFamily: "var(--font-mono)" }}
+                  tickLine={false}
+                />
+                {price != null && (
+                  <ReferenceLine y={price} stroke={lineColor} strokeDasharray="3 3" strokeWidth={1} />
+                )}
+                <Tooltip
+                  content={({ active, payload }) => {
+                    if (!active || !payload?.length) return null;
+                    const point = payload[0].payload as { t: number; v: number };
+                    const d = new Date(point.t);
+                    return (
+                      <div className="chart-tip">
+                        <b>{fmt(point.v, decimals)}</b>
+                        <span>{d.toLocaleString("ru-RU", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", hour12: false })}</span>
+                      </div>
+                    );
+                  }}
+                />
+                <Area type="monotone" dataKey="v" stroke={lineColor} strokeWidth={1.5} fill="url(#deskFill)" isAnimationActive={false} />
+              </AreaChart>
+            </ResponsiveContainer>
+            </div>
           )}
         </div>
 
-        {/* Recent trades */}
-        <div style={{ background: "#111", maxHeight: "240px", display: "flex", flexDirection: "column" }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px", borderBottom: "1px solid #1a1a1a" }}>
-            <span style={{ fontSize: "11px", fontWeight: 600, color: "#666", textTransform: "uppercase", letterSpacing: "0.05em" }}>Recent Trades</span>
-            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-              {lastTradesUpdate && !tradesError && (
-                <span style={{ fontSize: "11px", color: "#525252", fontFamily: MONO }}>
-                  {lastTradesUpdate.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
-                </span>
-              )}
-              {tradesLoading && trades.length === 0 && (
-                <span style={{ fontSize: "11px", color: "#666" }}>загрузка…</span>
-              )}
-              <Radio style={{ width: "12px", height: "12px", color: trades.length ? "#10b981" : "#525252", animation: "livePulse 2s ease-in-out infinite" }} />
-            </div>
+        {/* ── Лента сделок ─────────────────────────────────────────────── */}
+        <div>
+          <div className="panel-caption" style={{ background: "var(--bg-1)" }}>
+            <span className="label">Лента сделок</span>
+            <span className="num muted">обновлено {stamp(lastTradesUpdate)}</span>
           </div>
-          <div style={{ flex: 1, overflowY: "auto", padding: "4px 0" }}>
-            {tradesError ? (
-              <div style={{ padding: "12px", fontSize: "12px", color: "#666", textAlign: "center" }}>
-                <div style={{ marginBottom: "4px" }}>Ошибка загрузки сделок</div>
-                <div style={{ fontSize: "11px", color: "#525252" }}>{tradesError}</div>
-              </div>
+
+          <div className="table-scroll" style={{ maxHeight: "220px", overflowY: "auto", background: "var(--bg-1)" }}>
+            {tradesError && trades.length === 0 ? (
+              <p style={{ padding: "16px 14px", margin: 0, fontSize: "12px", color: "var(--down)" }}>{tradesError}</p>
             ) : trades.length === 0 ? (
-              <div style={{ padding: "12px" }}>
-                {Array.from({ length: 8 }, (_, i) => (
-                  <Shimmer key={i} height="20px" />
-                ))}
-              </div>
+              <p style={{ padding: "16px 14px", margin: 0, fontSize: "12px", color: "var(--fg-3)" }}>
+                {tradesLoading ? "загрузка…" : chartError ? "Сделок нет: Lighter не ответил." : "Сделок в окне выборки нет."}
+              </p>
             ) : (
-              trades.slice(0, 20).map((t) => (
-                <div key={t.id} style={{ display: "grid", gridTemplateColumns: "80px 1fr 80px", gap: "8px", padding: "4px 12px", fontFamily: MONO, fontSize: "12px" }}>
-                  <span style={{ fontWeight: 500, color: t.isAsk ? "#ef4444" : "#10b981" }}>
-                    {fmt(t.price, decimals)}
-                  </span>
-                  <span style={{ color: "#666", textAlign: "right" }}>{t.size}</span>
-                  <span style={{ color: "#525252", textAlign: "right" }}>
-                    {t.timestamp ? new Date(t.timestamp).toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "—"}
-                  </span>
-                </div>
-              ))
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Цена</th>
+                    <th className="right">Размер</th>
+                    <th className="right">Время</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {trades.map((t) => (
+                    <tr key={`${t.id}-${t.timestamp}`}>
+                      <td className="num right" style={{ color: t.isAsk ? "var(--down)" : "var(--up)", textAlign: "left" }}>
+                        {fmt(t.price, decimals)}
+                      </td>
+                      <td className="num right" style={{ color: "var(--fg-2)" }}>{t.size}</td>
+                      <td className="num right" style={{ color: "var(--fg-3)" }}>
+                        {t.timestamp ? new Date(t.timestamp).toLocaleTimeString("ru-RU", { hour12: false }) : "—"}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             )}
           </div>
         </div>
       </div>
 
-      {/* Sidebar */}
-      <div style={{ display: "grid", gridTemplateRows: "auto 1fr", gap: "1px", background: "#1a1a1a", overflow: "hidden" }}>
-        {/* Order form */}
-        <div style={{ background: "#111", padding: "16px" }}>
-          <div style={{ display: "flex", gap: "4px", marginBottom: "16px", padding: "3px", background: "#0a0a0a", borderRadius: "6px" }}>
-            <button
-              style={{
-                flex: 1, padding: "12px 8px", fontSize: "13px", fontWeight: 600, border: "none", borderRadius: "4px", cursor: "pointer", transition: "all 0.15s", minHeight: "44px",
-                background: side === "long" ? "#10b981" : "transparent",
-                color: side === "long" ? "#0a0a0a" : "#666",
-              }}
-              onClick={() => setSide("long")}
-            >
-              {isSpot ? "Buy" : "Long"}
-            </button>
-            <button
-              style={{
-                flex: 1, padding: "12px 8px", fontSize: "13px", fontWeight: 600, border: "none", borderRadius: "4px", cursor: "pointer", transition: "all 0.15s", minHeight: "44px",
-                background: side === "short" ? "#ef4444" : "transparent",
-                color: side === "short" ? "#0a0a0a" : "#666",
-              }}
-              onClick={() => setSide("short")}
-            >
-              {isSpot ? "Sell" : "Short"}
-            </button>
+      {/* ── Правая колонка: тикет и список рынков ───────────────────────── */}
+      <div style={{ background: "var(--bg-1)", display: "grid", gridTemplateRows: "auto auto minmax(0,1fr)", gap: "1px" }}>
+        <div style={{ padding: "12px", display: "grid", gap: "10px" }}>
+          <div className="seg" role="group" aria-label="Сторона ордера" style={{ display: "flex" }}>
+            <button aria-pressed={side === "long"} onClick={() => setSide("long")} style={{ flex: 1 }}>Long</button>
+            <button aria-pressed={side === "short"} onClick={() => setSide("short")} style={{ flex: 1 }}>Short</button>
           </div>
 
-          <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
-            <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-              <label style={{ fontSize: "11px", fontWeight: 500, color: "#666", textTransform: "uppercase", letterSpacing: "0.05em" }}>Size (USD)</label>
-              <input
-                type="number"
-                value={size}
-                onChange={(e) => setSize(Number(e.target.value))}
-                min={10}
-                style={{ fontFamily: MONO, fontSize: "14px", color: "#fafafa", background: "#0a0a0a", border: "1px solid #1e1e1e", borderRadius: "4px", padding: "10px 12px", outline: "none" }}
-              />
-            </div>
+          <label htmlFor="terminal-size" className="label">Размер, USD</label>
+          <input
+            id="terminal-size"
+            className="input-mono"
+            type="number"
+            min={currentMarket ? Number(currentMarket.min_quote_amount) : 1}
+            value={size}
+            onChange={(e) => setSize(Math.max(0, Number(e.target.value)))}
+            style={{ width: "100%" }}
+          />
 
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+            <label htmlFor="terminal-leverage" className="label">Плечо</label>
+            <span className="num" style={{ fontSize: "13px", fontWeight: 600 }}>{leverage}x</span>
+          </div>
+          <input
+            id="terminal-leverage"
+            type="range"
+            aria-label="Плечо"
+            min="1"
+            max="20"
+            value={leverage}
+            onChange={(e) => setLeverage(Number(e.target.value))}
+            style={{ width: "100%", accentColor: "var(--accent)" }}
+          />
+
+          <div className="kv">
+            <span className="label">Маржа</span>
+            <b className="num">{usd(size / Math.max(leverage, 1), 0)}</b>
             {!isSpot && (
-              <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-                <label style={{ fontSize: "11px", fontWeight: 500, color: "#666", textTransform: "uppercase", letterSpacing: "0.05em" }}>Leverage</label>
-                <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-                  <input
-                    type="range"
-                    min="1"
-                    max="20"
-                    value={leverage}
-                    onChange={(e) => setLeverage(Number(e.target.value))}
-                    style={{ flex: 1, accentColor: "#3b82f6" }}
-                  />
-                  <span style={{ fontFamily: MONO, fontSize: "14px", fontWeight: 600, color: "#3b82f6", minWidth: "40px", textAlign: "right" }}>{leverage}x</span>
-                </div>
-              </div>
+              <>
+                <span className="label">Ликвидация</span>
+                <b className="num">{liqPrice == null ? "—" : `$${fmt(liqPrice, decimals)}`}</b>
+              </>
             )}
+          </div>
 
-            {!isSpot && liqPrice != null && (
-              <div style={{ display: "flex", justifyContent: "space-between", padding: "8px 12px", background: "#0a0a0a", borderRadius: "4px", fontSize: "12px" }}>
-                <span style={{ color: "#666" }}>Liq. Price</span>
-                <span style={{ fontFamily: MONO, fontWeight: 500, color: "#a0a0a0" }}>${fmt(liqPrice, 0)}</span>
-              </div>
-            )}
+          <button
+            onClick={requestOrder}
+            disabled={orderSending || !currentMarket || price == null}
+            aria-busy={orderSending}
+            className="btn-action"
+            style={{ background: side === "long" ? "var(--up)" : "var(--down)", color: "#04100b", opacity: orderSending || !currentMarket || price == null ? 0.45 : 1 }}
+          >
+            {orderSending ? "Отправка…" : !currentMarket ? "Рынок не загружен" : price == null ? "Цена недоступна" : `${side === "long" ? "Открыть long" : "Открыть short"} · ${usd(size, 0)}`}
+          </button>
 
-            {!isSpot && (
-              <div style={{ display: "flex", justifyContent: "space-between", padding: "8px 12px", background: "#0a0a0a", borderRadius: "4px", fontSize: "12px" }}>
-                <span style={{ color: "#666" }}>Margin</span>
-                <span style={{ fontFamily: MONO, fontWeight: 500, color: "#a0a0a0" }}>${fmt(size / leverage, 0)}</span>
-              </div>
-            )}
+          <p className="fineprint">
+            Ордер уходит в <code>signing_service.py</code> по цене последней свечи. Соло-режим:{" "}
+            {network === "mainnet" ? "mainnet" : "testnet"}
+            {accountEquityUsd != null ? `, баланс счёта ${usd(accountEquityUsd, 0)}` : ", баланс счёта не подключён"}.
+          </p>
+        </div>
 
-            <button
-              onClick={requestOrder}
-              disabled={!currentMarket || price == null}
-              style={{
-                padding: "12px", fontSize: "14px", fontWeight: 600, border: "none", borderRadius: "6px", cursor: currentMarket && price != null ? "pointer" : "not-allowed",
-                background: side === "long" ? "#10b981" : "#ef4444",
-                color: "#0a0a0a",
-                opacity: !currentMarket || price == null ? 0.5 : 1,
-                transition: "all 0.15s",
-                position: "relative",
-                overflow: "hidden",
-              }}
-              onMouseEnter={(e) => {
-                if (currentMarket && price != null) {
-                  e.currentTarget.style.filter = "brightness(1.1)";
-                }
-              }}
-              onMouseLeave={(e) => {
-                e.currentTarget.style.filter = "brightness(1)";
-              }}
-            >
-              {!currentMarket ? "Рынок не загружен" : price == null ? "Цена недоступна" : isSpot ? (side === "long" ? "Buy" : "Sell") : side === "long" ? "Open Long" : "Open Short"}
-            </button>
-
-            <div style={{ fontSize: "11px", color: "#525252", lineHeight: 1.5, padding: "8px", background: "#0a0a0a", borderRadius: "4px" }}>
-              Ордер уходит на signing_service.py с ценой последней свечи. Плечо определяет только оценку ликвидационной цены.
-            </div>
+        <div style={{ padding: "0 12px 10px" }}>
+          <div style={{ position: "relative" }}>
+            <Search style={{ position: "absolute", left: "10px", top: "50%", transform: "translateY(-50%)", width: "13px", height: "13px", color: "var(--fg-3)" }} />
+            <input
+              aria-label="Поиск по рынку"
+              className="input-mono"
+              placeholder="Поиск рынка"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              style={{ width: "100%", paddingLeft: "28px" }}
+            />
           </div>
         </div>
 
-        {/* Markets panel */}
-        <div style={{ background: "#111", display: "flex", flexDirection: "column", overflow: "hidden" }}>
-          <div style={{ padding: "12px", borderBottom: "1px solid #1a1a1a" }}>
-            <div style={{ position: "relative" }}>
-              <Search style={{ position: "absolute", left: "12px", top: "50%", transform: "translateY(-50%)", width: "14px", height: "14px", color: "#525252" }} />
-              <input
-                type="text"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                placeholder="Search markets..."
-                style={{ width: "100%", fontFamily: MONO, fontSize: "12px", color: "#fafafa", background: "#0a0a0a", border: "1px solid #1e1e1e", borderRadius: "4px", padding: "8px 12px 8px 32px", outline: "none", boxSizing: "border-box" }}
-              />
-            </div>
+        <div className="markets-list">
+          <div className="list-head">
+            <span>Рынок</span>
+            <span>Последняя</span>
+            <span style={{ textAlign: "right" }}>24ч</span>
           </div>
-          <div className="markets-list" style={{ flex: 1, overflowY: "auto", padding: "4px 0" }}>
-            {filteredMarkets.slice(0, 50).map((m) => (
-              <button
-                key={m.market_id}
-                onClick={() => setAsset(m.symbol)}
-                style={{
-                  display: "flex", justifyContent: "space-between", alignItems: "center", padding: "10px 12px", fontSize: "12px", cursor: "pointer",
-                  border: "none", background: m.symbol === asset ? "#1a1a1a" : "transparent", color: "#fafafa", textAlign: "left", width: "100%",
-                  borderLeft: m.symbol === asset ? "2px solid #3b82f6" : "2px solid transparent",
-                  transition: "background 0.1s",
-                }}
-                onMouseEnter={(e) => { if (m.symbol !== asset) e.currentTarget.style.background = "#1a1a1a"; }}
-                onMouseLeave={(e) => { if (m.symbol !== asset) e.currentTarget.style.background = "transparent"; }}
-              >
-                <span style={{ fontFamily: MONO, fontWeight: 600 }}>{m.symbol}</span>
-                <span style={{ fontSize: "11px", color: "#525252", textTransform: "uppercase" }}>{m.market_type}</span>
-              </button>
-            ))}
-          </div>
+          {dataError && markets.length === 0 ? (
+            <p style={{ padding: "14px 12px", margin: 0, fontSize: "12px", color: "var(--down)" }}>{dataError}</p>
+          ) : filteredMarkets.length === 0 ? (
+            <p style={{ padding: "14px 12px", margin: 0, fontSize: "12px", color: "var(--fg-3)" }}>
+              Ничего не найдено по «{searchQuery}».
+            </p>
+          ) : (
+            filteredMarkets.slice(0, TICKER_ROWS).map((m) => {
+              const t = tickers[m.market_id];
+              const rowUp = (t?.changePct ?? 0) >= 0;
+              return (
+                <button
+                  key={m.market_id}
+                  className="desk-row"
+                  style={{ gridTemplateColumns: "minmax(0,1fr) auto auto" }}
+                  aria-current={m.symbol === asset}
+                  onClick={() => setAsset(m.symbol)}
+                >
+                  <span style={{ display: "flex", alignItems: "center", gap: "6px", minWidth: 0 }}>
+                    <b className="num" style={{ color: "var(--fg)", fontWeight: 600 }}>{m.symbol}</b>
+                    <span style={{ fontSize: "10px", color: "var(--fg-3)", textTransform: "uppercase" }}>{m.market_type}</span>
+                  </span>
+                  <span className="num" style={{ color: "var(--fg-2)" }}>{t ? fmt(t.price, m.supported_price_decimals) : "—"}</span>
+                  <span className="num right" style={{ color: t ? (rowUp ? "var(--up)" : "var(--down)") : "var(--fg-3)" }}>{pct(t?.changePct ?? null)}</span>
+                </button>
+              );
+            })
+          )}
+          {markets.length > TICKER_ROWS && (
+            <button className="link-action list-foot" onClick={() => setMarketPickerOpen(true)}>
+              Все рынки ({markets.length})
+            </button>
+          )}
         </div>
       </div>
 
       {showOrderConfirm && currentMarket && price != null && (
-        <div style={{ position: "fixed", inset: 0, background: "rgba(0, 0, 0, 0.8)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1000, padding: "24px" }}>
-          <div className="modal-card" style={{ background: "#111", border: "1px solid #2a2a2a", borderRadius: "8px", padding: "24px", maxWidth: "420px", width: "100%" }}>
-            <h3 style={{ margin: "0 0 16px 0", fontSize: "16px", fontWeight: 600, color: "#fafafa" }}>Подтверждение ордера</h3>
-            <div style={{ display: "flex", flexDirection: "column", gap: "12px", marginBottom: "20px" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: "13px" }}>
-                <span style={{ color: "#666" }}>Рынок</span>
-                <span style={{ fontFamily: MONO, fontWeight: 600, color: "#fafafa" }}>{currentMarket.symbol}</span>
-              </div>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: "13px" }}>
-                <span style={{ color: "#666" }}>Сторона</span>
-                <span style={{ fontFamily: MONO, fontWeight: 600, color: side === "long" ? "#10b981" : "#ef4444" }}>
-                  {side === "long" ? "Long" : "Short"}
-                </span>
-              </div>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: "13px" }}>
-                <span style={{ color: "#666" }}>Размер</span>
-                <span style={{ fontFamily: MONO, fontWeight: 600, color: "#fafafa" }}>${size}</span>
-              </div>
-              <div style={{ display: "flex", justifyContent: "space-between", fontSize: "13px" }}>
-                <span style={{ color: "#666" }}>Цена</span>
-                <span style={{ fontFamily: MONO, fontWeight: 600, color: "#fafafa" }}>${fmt(price, decimals)}</span>
-              </div>
-              {!isSpot && (
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: "13px" }}>
-                  <span style={{ color: "#666" }}>Плечо</span>
-                  <span style={{ fontFamily: MONO, fontWeight: 600, color: "#fafafa" }}>{leverage}x</span>
-                </div>
-              )}
-              <div style={{ borderTop: "1px solid #2a2a2a", paddingTop: "12px", display: "flex", justifyContent: "space-between", fontSize: "13px" }}>
-                <span style={{ color: "#666", fontWeight: 600 }}>Итого</span>
-                <span style={{ fontFamily: MONO, fontWeight: 700, color: "#fafafa", fontSize: "15px" }}>
-                  ${fmt(size, 0)}
-                </span>
-              </div>
+        <Modal label="Подтверждение ордера" onClose={() => setShowOrderConfirm(false)}>
+          <div className="modal-card" style={{ maxWidth: "400px", width: "100%", padding: "20px" }}>
+            <h3 className="panel-title" style={{ margin: "0 0 14px" }}>Подтверждение ордера</h3>
+            <div className="kv kv-cols" style={{ marginBottom: "16px" }}>
+              <span className="label">Рынок</span><b className="num">{currentMarket.symbol}</b>
+              <span className="label">Сторона</span><b className="num" style={{ color: side === "long" ? "var(--up)" : "var(--down)" }}>{side === "long" ? "Long" : "Short"}</b>
+              <span className="label">Размер</span><b className="num">{usd(size, 0)}</b>
+              <span className="label">Цена</span><b className="num">{fmt(price, decimals)}</b>
+              {!isSpot && (<><span className="label">Плечо</span><b className="num">{leverage}x</b></>)}
+              <span className="label">Маржа</span><b className="num">{usd(size / Math.max(leverage, 1), 0)}</b>
             </div>
+            <p className="fineprint" style={{ marginBottom: "14px" }}>
+              IOC-ордер по рынку. В сухом режиме сервис считает план и не отправляет его в Lighter.
+            </p>
             <div style={{ display: "flex", gap: "8px" }}>
-              <button
-                onClick={() => setShowOrderConfirm(false)}
-                style={{ flex: 1, padding: "10px", fontSize: "13px", fontWeight: 600, border: "1px solid #2a2a2a", borderRadius: "6px", cursor: "pointer", background: "transparent", color: "#a0a0a0", transition: "all 0.15s" }}
-                onMouseEnter={(e) => { e.currentTarget.style.background = "#1a1a1a"; }}
-                onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
-              >
+              <button onClick={() => setShowOrderConfirm(false)} className="btn-ghost" style={{ flex: 1, justifyContent: "center" }}>
                 Отмена
               </button>
               <button
                 onClick={() => void placeOrder()}
-                style={{ flex: 1, padding: "14px 10px", fontSize: "13px", fontWeight: 600, border: "none", borderRadius: "6px", cursor: "pointer", background: side === "long" ? "#10b981" : "#ef4444", color: "#0a0a0a", transition: "all 0.15s", minHeight: "44px" }}
-                onMouseEnter={(e) => { e.currentTarget.style.filter = "brightness(1.1)"; }}
-                onMouseLeave={(e) => { e.currentTarget.style.filter = "brightness(1)"; }}
+                className="btn-action"
+                style={{ flex: 1, background: side === "long" ? "var(--up)" : "var(--down)", color: "#04100b" }}
               >
                 Подтвердить
               </button>
             </div>
           </div>
-        </div>
+        </Modal>
       )}
     </div>
   );

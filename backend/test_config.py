@@ -13,7 +13,10 @@
 """
 
 import os
+import subprocess
+import sys
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from pydantic import ValidationError
@@ -128,6 +131,23 @@ class TestDatabaseUrl(unittest.TestCase):
     def test_asyncpg_url_passed_through(self):
         url = "postgresql+asyncpg://wake:pw@host:5432/db"
         self.assertEqual(build(wake_database_url=url).wake_database_url, url)
+
+    def test_alembic_accepts_url_encoded_credentials(self):
+        result = subprocess.run(
+            [sys.executable, "-m", "alembic", "upgrade", "head", "--sql"],
+            cwd=Path(__file__).parent,
+            env={
+                **os.environ,
+                "WAKE_DATABASE_URL": "postgresql+asyncpg://wake:p%40ss%25word@localhost:5432/wake_migrate",
+                "WAKE_DRY_RUN": "true",
+                "WAKE_MAINNET_LIVE": "false",
+            },
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("CREATE TABLE", result.stdout)
 
     def test_file_database_rejected(self):
         with self.assertRaises(ValidationError):

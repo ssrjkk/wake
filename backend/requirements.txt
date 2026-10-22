@@ -1,7 +1,7 @@
 # pip install -r requirements.txt --break-system-packages
 
 # Core
-lighter-sdk
+lighter-sdk>=1.1.8
 fastapi
 pydantic
 pydantic-settings
@@ -25,8 +25,11 @@ eth-account
 # Encryption (encrypted_key_store.py)
 cryptography
 
-# Telegram bot (telegram_bot.py) — optional, code works without it
-aiogram
+# Telegram bot (telegram_bot.py) — optional, code works without it.
+# 3.4 — нижняя граница не косметика: DefaultBotProperties(parse_mode=HTML), которым
+# бот задаёт HTML для всех ответов, появился в 3.4; на более старом aiogram импорт
+# падает на старте процесса, а не молча теряет форматирование.
+aiogram>=3.4
 
 # Error monitoring (optional — only used if SENTRY_DSN is set)
 sentry-sdk

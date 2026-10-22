@@ -81,6 +81,32 @@ answer 500 when the server has no token configured rather than running
 anonymously. CORS only allows `Content-Type` and `Authorization`, so this header
 is not reachable from a browser: it is operator tooling, not a client role.
 
+### The Telegram bot is a reader with client-supplied input
+
+`backend/telegram_bot.py` holds no session, no private key and no Lighter
+account index, and it has no code path to `/place-order`: nothing a Telegram
+message can do is write anything. Three invariants keep that true:
+
+- **Everything the bot renders is escaped.** Answers use Telegram's HTML parse
+  mode, so a Predict market question (typed by a curator) or a ticker (typed by
+  any user) would otherwise become markup in a message sent to other people. All
+  non-numeric text goes through `esc()`; `card()` escapes the title and body and
+  takes notes only as module constants. Tests cover the injection case.
+- **Callback data is treated as hostile.** Buttons carry `p:<TICKER>`; a client
+  can send any bytes there, so the value must match `TICKER_RE` — at most 12
+  characters of `[A-Z0-9$]` with a letter in it — before it reaches
+  `lighter_rest`. An unrecognised value answers "old button" and never hits the
+  network.
+- **The Mini App button is dropped rather than sent** when `WAKE_MINIAPP_URL` is
+  not https: Telegram rejects the whole reply, not just the button, so an http
+  address would break every message the bot sends.
+
+The bot does not authenticate the sender: it answers the same public numbers for
+whoever asks, which is why no command accepts an account id, a chat id or an
+amount. If the bot ever gains a write path, it inherits every rule in the
+identity and order-execution sections above — the chat id of the sender is not
+authorization for anything.
+
 ### Order execution
 
 Three code paths can reach Lighter, and each checks `WAKE_DRY_RUN` in its own
@@ -162,12 +188,31 @@ container restart.
 
 ### Dependency auditing
 
-CI runs `pip-audit` against `backend/requirements.txt` and fails on any new
-advisory, with one documented exception: `lighter-sdk` pins `urllib3<2.1.0`, and
-its transitive advisories cannot be resolved in this repository without breaking
-order signing. The gate is keyed on the package, not silenced with a skip flag,
-and it stops firing as soon as the vendor releases the pin. `npm audit` covers
-the frontend.
+CI runs `pip-audit --strict` against `backend/requirements.txt`. Audit errors
+and advisories outside the exact list below fail the job, including new urllib3
+advisories. `npm audit` checks both production and development frontend packages.
+
+The following urllib3 advisories were reviewed on 2026-10-22. `lighter-sdk`
+1.1.8 still requires `urllib3<2.1.0`, so its dependency constraints exclude the
+patched releases. Its async REST client uses aiohttp; Wake does not configure
+urllib3 proxy TLS, use its low-level cross-origin proxy API, or stream responses
+through urllib3. These are bounded exceptions, not fixes: do not expose the
+signing service, add untrusted SDK hosts, or introduce those HTTP paths without
+revisiting the exceptions. Remove the exceptions when the SDK permits an update.
+
+| Advisory | Affected path |
+| --- | --- |
+| CVE-2024-37891 | Proxy authorization header forwarded across origins |
+| CVE-2025-50181 | Pool-level redirect limits ignored |
+| CVE-2025-66418 | Unbounded chained response decompression |
+| CVE-2025-66471 | Streaming response decompression exceeds read limits |
+| CVE-2026-21441 | Redirect response decompression during streaming |
+| CVE-2026-44431 | Sensitive headers forwarded by the low-level proxy API |
+| CVE-2026-97687 | Proxy and target TLS policies mixed |
+| CVE-2026-97689 | Unbounded chunk-size field while streaming |
+
+The decompression exceptions remain residual risk for dependency code that reads
+responses in full; trusted HTTPS hosts reduce exposure but do not remove it.
 
 ## What These Measures Do Not Cover
 
@@ -291,6 +336,32 @@ dry-run-инстанс), видимый эффект, предложение п�
 CORS разрешает только `Content-Type` и `Authorization`, так что этот заголовок не
 добирается из браузера: это инструмент оператора, а не роль клиента.
 
+### Telegram-бот — читатель с недоверчивым вводом
+
+`backend/telegram_bot.py` не держит сессию, приватный ключ и account index
+Lighter, и из него нет ни одного пути к `/place-order`: сообщение в Telegram не
+может ничего написать. Эти инварианты и делают утверждение верным:
+
+- **Всё, что бот рисует, экранируется.** Ответы идут в HTML-режиме Telegram,
+  поэтому вопрос Predict-рынка (его набирает куратор) или тикер (его набирает
+  любой) иначе превратились бы в разметку в чужих сообщениях. Любой не-числовой
+  текст проходит через `esc()`; `card()` экранирует заголовок и тело, а сноски
+  принимает только константами модуля. Случай инъекции покрыт тестом.
+- **callback_data считается враждебным.** Кнопки несут `p:<TICKER>`, а туда
+  клиент может подставить что угодно, поэтому значение обязано совпасть с
+  `TICKER_RE` (до 12 символов `[A-Z0-9$]`, обязательно с буквой) прежде, чем
+  попадёт в `lighter_rest`. Нераспознанное значение отвечает «кнопка устарела» и
+  в сеть не идёт.
+- **Кнопка Mini App снимается, а не отправляется**, если `WAKE_MINIAPP_URL` не
+  https: Telegram отбраковывает весь ответ целиком, поэтому http-адрес ломал бы
+  каждое сообщение бота.
+
+Бот не аутентифицирует отправителя: он отвечает одинаковыми публичными числами
+всякому, кто спросит, — и поэтому ни одна команда не принимает id аккаунта, id
+чата или сумму. Если у бота появится путь на запись, он наследует все правила
+разделов про личность и исполнение ордеров выше: id чата отправителя
+авторизацией не является.
+
 ### Исполнение ордеров
 
 До Lighter дотягиваются три пути, и каждый проверяет `WAKE_DRY_RUN` в собственном
@@ -369,11 +440,32 @@ Core/ORM со связанными параметрами; строк SQL в б�
 
 ### Проверка зависимостей
 
-CI гоняет `pip-audit` по `backend/requirements.txt` и падает на любом новом
-адвайзори, кроме одного обоснованного исключения: `lighter-sdk` жёстко пинит
-`urllib3<2.1.0`, и его транзитивные уязвимости отсюда не вычистить, не сломав
-подпись ордеров. Гейт привязан к пакету, а не заглушён флагом, и перестанет
-срабатывать, как только вендор снимет кап. Фронтенд проверяет `npm audit`.
+CI запускает `pip-audit --strict` по `backend/requirements.txt`. Ошибки аудита
+и уязвимости вне точного списка ниже роняют джоб, включая новые уязвимости
+urllib3. `npm audit` проверяет фронтенд вместе с dev-зависимостями.
+
+Перечисленные уязвимости urllib3 проверены 2026-10-22. `lighter-sdk` 1.1.8
+по-прежнему требует `urllib3<2.1.0`, поэтому исправленные версии не проходят его
+ограничения. Асинхронный REST-клиент SDK работает через aiohttp; Wake не
+настраивает TLS прокси urllib3, не использует его низкоуровневые междоменные
+прокси-запросы и не читает потоковые ответы через urllib3. Это ограниченные
+исключения, а не исправления: публикация сервиса подписи, недоверенные хосты SDK
+или добавление этих HTTP-путей требуют пересмотра исключений. После снятия
+ограничения SDK исключения надо удалить.
+
+| Уязвимость | Затронутый путь |
+| --- | --- |
+| CVE-2024-37891 | Передача заголовка авторизации прокси другому хосту |
+| CVE-2025-50181 | Игнорирование запрета редиректов на уровне пула |
+| CVE-2025-66418 | Неограниченная цепочка распаковки ответа |
+| CVE-2025-66471 | Распаковка потокового ответа превышает лимит чтения |
+| CVE-2026-21441 | Распаковка ответа редиректа при потоковом чтении |
+| CVE-2026-44431 | Передача секретных заголовков низкоуровневым API прокси |
+| CVE-2026-97687 | Смешивание TLS-настроек прокси и целевого сервера |
+| CVE-2026-97689 | Неограниченное поле размера чанка при потоковом чтении |
+
+Распаковка остаётся остаточным риском для кода зависимостей, читающего ответ
+целиком: доверенные HTTPS-хосты уменьшают риск, но не устраняют его.
 
 ## Что эти меры НЕ закрывают
 

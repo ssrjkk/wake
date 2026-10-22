@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { AlertTriangle, CheckCircle2, ExternalLink, RefreshCw, X } from "lucide-react";
+import { Modal } from "./ui";
 import {
   claimPredictMarket,
   getPredictMarkets,
@@ -60,10 +61,14 @@ export default function Predict({ signedIn, setToast, onConnect }: PredictProps)
   const [trade, setTrade] = useState<{ market: PredictMarket; outcome: "yes" | "no"; held: number } | null>(null);
   const [sellMode, setSellMode] = useState(false);
   const [shares, setShares] = useState(10);
-  const [preview, setPreview] = useState<number | null>(null);
-  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [quote, setQuote] = useState<{ key: string; cost: number | null; error: string | null } | null>(null);
   const [sending, setSending] = useState(false);
-  const [tradeConfirmed, setTradeConfirmed] = useState(false);
+  const [confirmedQuote, setConfirmedQuote] = useState<string | null>(null);
+  const quoteKey = trade ? `${trade.market.id}:${trade.outcome}:${shares}:${sellMode}` : "";
+  const preview = quote?.key === quoteKey ? quote.cost : null;
+  const previewError = quote?.key === quoteKey ? quote.error : null;
+  const confirmationKey = `${quoteKey}:${preview}`;
+  const tradeConfirmed = preview !== null && confirmedQuote === confirmationKey;
 
   // Одно место вместо четырёх копий условия в disabled, фоне, тексте и рамке кнопки.
   const tradeBlocked = sending || preview == null || shares <= 0 || (sellMode && trade != null && shares > trade.held);
@@ -89,11 +94,9 @@ export default function Predict({ signedIn, setToast, onConnect }: PredictProps)
 
   useEffect(() => {
     let live = true;
-    setMarkets(null);
-    setMarketsError(null);
     getPredictMarkets(status)
       .then((rows) => {
-        if (live) setMarkets(rows);
+        if (live) { setMarkets(rows); setMarketsError(null); }
       })
       .catch((e) => {
         // Пустой список и «бэкенд не ответил» — разные состояния: во втором случае
@@ -106,10 +109,7 @@ export default function Predict({ signedIn, setToast, onConnect }: PredictProps)
   }, [status, nonce]);
 
   useEffect(() => {
-    if (!signedIn) {
-      setPositions(null);
-      return;
-    }
+    if (!signedIn) return;
     let live = true;
     getPredictPositions()
       .then((rows) => {
@@ -147,9 +147,8 @@ export default function Predict({ signedIn, setToast, onConnect }: PredictProps)
     setTrade({ market, outcome, held: heldByKey.get(`${market.id}:${outcome}`)?.shares ?? 0 });
     setSellMode(false);
     setShares(10);
-    setPreview(null);
-    setTradeConfirmed(false);
-    setPreviewError(null);
+    setQuote(null);
+    setConfirmedQuote(null);
   }
 
   useEffect(() => {
@@ -158,28 +157,18 @@ export default function Predict({ signedIn, setToast, onConnect }: PredictProps)
     const outcome = trade.outcome;
     let live = true;
     const qty = sellMode ? -Math.abs(shares) : Math.abs(shares);
-    if (!qty) {
-      setPreview(null);
-      setPreviewError(null);
-      return;
-    }
+    if (!qty) return;
     previewPredictTrade(marketId, outcome, qty)
       .then((d) => {
-        if (!live) return;
-        setPreview(d.cost_usd);
-        setPreviewError(null);
+        if (live) setQuote({ key: quoteKey, cost: d.cost_usd, error: null });
       })
       .catch((e) => {
-        if (!live) return;
-        setPreview(null);
-        setPreviewError(errorText(e));
+        if (live) setQuote({ key: quoteKey, cost: null, error: errorText(e) });
       });
     return () => {
       live = false;
     };
-    // marketId, а не весь trade: цена двигается с каждой чужой сделкой, и объект
-    // рынка при обновлении списка новый, а переспрашивать из-за этого нечего.
-  }, [trade?.market.id, trade?.outcome, shares, sellMode]);
+  }, [trade, shares, sellMode, quoteKey]);
 
   async function confirmTrade() {
     if (!trade || !signedIn || preview == null) return;
@@ -235,7 +224,7 @@ export default function Predict({ signedIn, setToast, onConnect }: PredictProps)
               <RefreshCw style={{ width: "12px", height: "12px" }} /> Обновить
             </button>
           </div>
-          <p style={{ fontSize: "12px", color: "#666", margin: "8px 0 0 0", maxWidth: "800px" }}>
+          <p style={{ fontSize: "12px", color: "var(--text-muted)", margin: "8px 0 0 0", maxWidth: "800px" }}>
             Бинарные рынки на LMSR-пуле. Ценовые закрываются автоматически по mark-цене Lighter, событийные — куратором.
           </p>
         </div>
@@ -244,7 +233,7 @@ export default function Predict({ signedIn, setToast, onConnect }: PredictProps)
         {FILTERS.map((f) => (
           <button
             key={f.id}
-            onClick={() => setStatus(f.id)}
+            onClick={() => { setStatus(f.id); setMarkets(null); setMarketsError(null); }}
             style={{
               padding: "8px 12px",
               borderRadius: "4px",
@@ -273,7 +262,7 @@ export default function Predict({ signedIn, setToast, onConnect }: PredictProps)
             {f.label}
           </button>
         ))}
-        <span style={{ fontSize: "11px", color: "#666", marginLeft: "auto" }}>
+        <span style={{ fontSize: "11px", color: "var(--text-muted)", marginLeft: "auto" }}>
           {positions ? `позиций: ${positions.length}` : signedIn ? "позиции грузятся…" : "позиции — после входа"}
           {claimable.length > 0 && <span style={{ color: "#10b981", fontWeight: 500 }}> · доступно к выплате {claimable.length}</span>}
         </span>
@@ -287,13 +276,13 @@ export default function Predict({ signedIn, setToast, onConnect }: PredictProps)
 
       {positions && positions.length > 0 && (
         <div style={{ background: "linear-gradient(135deg, #111 0%, #0f0f0f 100%)", border: "1px solid #1e1e1e", borderRadius: "6px", overflow: "hidden", boxShadow: "0 1px 3px rgba(0, 0, 0, 0.2)" }}>
-          <div style={{ padding: "10px 16px", borderBottom: "1px solid #1e1e1e", fontSize: "10px", textTransform: "uppercase", letterSpacing: "0.05em", color: "#666", background: "rgba(26, 26, 26, 0.3)", fontWeight: 600 }}>
+          <div style={{ padding: "10px 16px", borderBottom: "1px solid #1e1e1e", fontSize: "10px", textTransform: "uppercase", letterSpacing: "0.05em", color: "var(--text-muted)", background: "rgba(26, 26, 26, 0.3)", fontWeight: 600 }}>
             Мои позиции
           </div>
           <div className="table-scroll">
             <table style={{ width: "100%", fontSize: "12px", borderCollapse: "collapse" }}>
               <thead>
-                <tr style={{ textAlign: "left", fontSize: "10px", textTransform: "uppercase", letterSpacing: "0.05em", color: "#666", background: "rgba(26, 26, 26, 0.2)" }}>
+                <tr style={{ textAlign: "left", fontSize: "10px", textTransform: "uppercase", letterSpacing: "0.05em", color: "var(--text-muted)", background: "rgba(26, 26, 26, 0.2)" }}>
                   <th style={{ padding: "10px 16px", fontWeight: 500 }}>Рынок</th>
                   <th style={{ padding: "10px 12px", fontWeight: 500, textAlign: "right" }}>Доля</th>
                   <th style={{ padding: "10px 12px", fontWeight: 500, textAlign: "right" }}>shares</th>
@@ -316,7 +305,7 @@ export default function Predict({ signedIn, setToast, onConnect }: PredictProps)
                     >
                       <td style={{ padding: "12px 16px", color: "#fafafa" }}>
                         <div style={{ maxWidth: "350px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.question}</div>
-                        <div style={{ fontSize: "10px", color: "#666", marginTop: "2px" }}>
+                        <div style={{ fontSize: "10px", color: "var(--text-muted)", marginTop: "2px" }}>
                           {p.outcome.toUpperCase()} ·{" "}
                           {p.market_status === "open" ? predictTimeLeft(p.resolve_at, now) : `исход ${p.market_outcome ?? "не указан"}`}
                           {p.claimed && " · забрано"}
@@ -387,7 +376,7 @@ export default function Predict({ signedIn, setToast, onConnect }: PredictProps)
           <p style={{ fontSize: "12px", color: "#ccc", margin: "0 0 4px 0" }}>
             {status === "open" ? "Открытых рынков нет" : status === "resolved" ? "Резолвленных рынков пока нет" : "Рынков нет"}
           </p>
-          <p style={{ fontSize: "10px", color: "#666", margin: 0 }}>
+          <p style={{ fontSize: "10px", color: "var(--text-muted)", margin: 0 }}>
             Создать может только куратор: POST /predict/markets/price или /predict/markets/event с заголовком X-Curator-Token.
           </p>
         </div>
@@ -402,23 +391,23 @@ export default function Predict({ signedIn, setToast, onConnect }: PredictProps)
             return (
               <div key={m.id} style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", padding: "16px", display: "flex", flexDirection: "column" }}>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px", gap: "8px" }}>
-                  <span style={{ fontSize: "10px", color: "#666", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                  <span style={{ fontSize: "10px", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
                     {m.kind === "price" ? "Цена на Lighter" : "Событие"}
                   </span>
-                  <span style={{ fontSize: "10px", color: "#666" }}>
+                  <span style={{ fontSize: "10px", color: "var(--text-muted)" }}>
                     {resolved ? "закрыт" : predictTimeLeft(m.resolve_at, now)}
                   </span>
                 </div>
                 <div style={{ fontSize: "12px", color: "#fafafa", fontWeight: 500, marginBottom: "4px" }}>{m.question}</div>
-                {conditionOf(m) && <div style={{ fontSize: "10px", color: "#666", fontFamily: "'JetBrains Mono', monospace", marginBottom: "12px" }}>{conditionOf(m)}</div>}
+                {conditionOf(m) && <div style={{ fontSize: "10px", color: "var(--text-muted)", fontFamily: "'JetBrains Mono', monospace", marginBottom: "12px" }}>{conditionOf(m)}</div>}
 
                 {resolved ? (
                   <div style={{ background: "#0a0a0a", border: "1px solid #1e1e1e", borderRadius: "4px", padding: "10px 12px", fontSize: "11px", marginBottom: "12px" }}>
-                    <span style={{ color: "#666" }}>исход </span>
+                    <span style={{ color: "var(--text-muted)" }}>исход </span>
                     <span style={{ color: "#fafafa", fontWeight: 600, textTransform: "uppercase" }}>{m.outcome ?? "не указан"}</span>
-                    <span style={{ color: "#666" }}> · </span>
-                    <span style={{ color: "#666" }}>победившая доля — $1, проигравшая — $0</span>
-                    {m.resolved_by && <div style={{ color: "#666", marginTop: "4px", fontFamily: "'JetBrains Mono', monospace" }}>закрыл: {m.resolved_by}</div>}
+                    <span style={{ color: "var(--text-muted)" }}> · </span>
+                    <span style={{ color: "var(--text-muted)" }}>победившая доля — $1, проигравшая — $0</span>
+                    {m.resolved_by && <div style={{ color: "var(--text-muted)", marginTop: "4px", fontFamily: "'JetBrains Mono', monospace" }}>закрыл: {m.resolved_by}</div>}
                     {m.evidence_url && (
                       <a
                         href={m.evidence_url}
@@ -452,13 +441,13 @@ export default function Predict({ signedIn, setToast, onConnect }: PredictProps)
                   <button
                     onClick={() => openTrade(m, "no")}
                     disabled={resolved}
-                    style={{ flex: 1, background: resolved ? "#1a1a1a" : "#ef4444", color: resolved ? "#666" : "#fff", fontSize: "11px", fontWeight: 600, padding: "10px 0", border: "none", borderRadius: "4px", cursor: resolved ? "default" : "pointer", minHeight: "44px" }}
+                    style={{ flex: 1, background: resolved ? "#1a1a1a" : "#ef4444", color: resolved ? "#666" : "#0a0a0a", fontSize: "11px", fontWeight: 600, padding: "10px 0", border: "none", borderRadius: "4px", cursor: resolved ? "default" : "pointer", minHeight: "44px" }}
                   >
                     {resolved ? "NO" : `Купить NO ${cents(m.price_no)}`}
                   </button>
                 </div>
 
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", marginTop: "10px", fontSize: "10px", color: "#666" }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", marginTop: "10px", fontSize: "10px", color: "var(--text-muted)" }}>
                   <span>
                     объём {fmtUsdCompact(m.volume_usd)} · сделок {m.trade_count}
                   </span>
@@ -476,16 +465,13 @@ export default function Predict({ signedIn, setToast, onConnect }: PredictProps)
         </div>
       )}
 
-      <p style={{ fontSize: "10px", color: "#666", marginTop: "12px" }}>
+      <p style={{ fontSize: "10px", color: "var(--text-muted)", marginTop: "12px" }}>
         Объём и число сделок — сделки через Wake, а не глубина пула: прямого доступа к книге LMSR у сайта нет.
         Рынок с нулевым объёмом ещё никто не торговал, и это не значит, что он пустой.
       </p>
 
       {trade && (
-        <div
-          style={{ position: "fixed", inset: 0, display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50, padding: "16px", backgroundColor: "rgba(0,0,0,0.6)" }}
-          onClick={() => setTrade(null)}
-        >
+        <Modal label={`${sellMode ? "Продать" : "Купить"} ${trade.outcome.toUpperCase()} — ${trade.market.question}`} onClose={() => setTrade(null)}>
           <div
             className="modal-card"
             style={{ width: "100%", maxWidth: "380px", background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", padding: "20px" }}
@@ -495,7 +481,7 @@ export default function Predict({ signedIn, setToast, onConnect }: PredictProps)
               <h3 style={{ fontSize: "13px", color: "#fafafa", fontWeight: 600, margin: 0 }}>
                 {sellMode ? "Продать" : "Купить"} {trade.outcome.toUpperCase()} — {trade.market.question}
               </h3>
-              <button onClick={() => setTrade(null)} aria-label="Закрыть" style={{ color: "#666", background: "none", border: "none", cursor: "pointer", padding: "14px", flexShrink: 0 }}>
+              <button onClick={() => setTrade(null)} aria-label="Закрыть" style={{ color: "var(--text-muted)", background: "none", border: "none", cursor: "pointer", padding: "14px", flexShrink: 0 }}>
                 <X style={{ width: "16px", height: "16px" }} />
               </button>
             </div>
@@ -517,8 +503,9 @@ export default function Predict({ signedIn, setToast, onConnect }: PredictProps)
               </div>
             )}
 
-            <label style={{ fontSize: "11px", color: "#888", marginBottom: "4px", display: "block" }}>Количество shares</label>
+            <label htmlFor="predict-shares" style={{ fontSize: "11px", color: "#888", marginBottom: "4px", display: "block" }}>Количество shares</label>
             <input
+              id="predict-shares"
               type="number"
               min={1}
               max={sellMode ? trade.held : undefined}
@@ -527,10 +514,10 @@ export default function Predict({ signedIn, setToast, onConnect }: PredictProps)
               style={{ background: "#0a0a0a", border: "1px solid #1e1e1e", borderRadius: "4px", padding: "8px 12px", marginBottom: "4px", color: "#fafafa", fontFamily: "'JetBrains Mono', monospace", fontSize: "12px", outline: "none", width: "100%", boxSizing: "border-box" }}
             />
             {sellMode && (
-              <p style={{ fontSize: "10px", color: "#666", marginBottom: "8px" }}>Продать можно не больше {trade.held} shares.</p>
+              <p style={{ fontSize: "10px", color: "var(--text-muted)", marginBottom: "8px" }}>Продать можно не больше {trade.held} shares.</p>
             )}
 
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11px", color: "#666", marginTop: "12px", marginBottom: "4px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11px", color: "var(--text-muted)", marginTop: "12px", marginBottom: "4px" }}>
               <span>{sellMode ? "Вернётся на счёт" : "Стоимость сейчас"}</span>
               <span style={{ fontFamily: "'JetBrains Mono', monospace", color: "#ccc" }}>
                 {previewError ? (
@@ -542,7 +529,7 @@ export default function Predict({ signedIn, setToast, onConnect }: PredictProps)
                 )}
               </span>
             </div>
-            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11px", color: "#666", marginBottom: "16px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11px", color: "var(--text-muted)", marginBottom: "16px" }}>
               {sellMode ? (
                 <>
                   <span>Останется shares</span>
@@ -559,7 +546,7 @@ export default function Predict({ signedIn, setToast, onConnect }: PredictProps)
             <button
               onClick={() => {
                 if (!tradeConfirmed) {
-                  setTradeConfirmed(true);
+                  setConfirmedQuote(confirmationKey);
                   return;
                 }
                 void confirmTrade();
@@ -592,22 +579,22 @@ export default function Predict({ signedIn, setToast, onConnect }: PredictProps)
                       ? `Продать ${shares}`
                       : `Купить ${shares} за ${money(preview)}`}
             </button>
-            <p style={{ fontSize: "10px", color: "#666", marginTop: "12px", textAlign: "center", lineHeight: 1.5 }}>
+            <p style={{ fontSize: "10px", color: "var(--text-muted)", marginTop: "12px", textAlign: "center", lineHeight: 1.5 }}>
               Номинал — это не прибыль: share победившего исхода после резолюции стоит $1, проигравшего — $0,
               а вход по LMSR-кривой обычно дороже {cents(0.5)} и двигается против тебя с каждой покупкой.
               Верхнюю границу продажи и запрет торговать по закрытому рынку держит бэкенд, а не эта форма.
             </p>
           </div>
-        </div>
+        </Modal>
       )}
 
       {!signedIn && (
         <div style={{ marginTop: "16px", background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", padding: "16px", display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: "12px" }}>
           <div style={{ display: "flex", alignItems: "flex-start", gap: "10px" }}>
-            <CheckCircle2 style={{ width: "14px", height: "14px", color: "#666", marginTop: "2px" }} />
+            <CheckCircle2 style={{ width: "14px", height: "14px", color: "var(--text-muted)", marginTop: "2px" }} />
             <div>
               <p style={{ fontSize: "12px", color: "#ccc", margin: 0 }}>Рынки видны без входа, а позиция и выплаты — нет.</p>
-              <p style={{ fontSize: "10px", color: "#666", marginTop: "4px" }}>
+              <p style={{ fontSize: "10px", color: "var(--text-muted)", marginTop: "4px" }}>
                 Вход через Telegram или кошелёк: трейд и выплата записываются на аккаунт, подтверждённый токеном входа, — в запросе нет поля «чей это пользователь».
               </p>
             </div>

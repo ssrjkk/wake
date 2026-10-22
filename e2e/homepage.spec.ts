@@ -3,20 +3,8 @@
 // силами — навигация, окно входа, честное состояние «данных нет». Проверять здесь
 // курсы или PnL было бы самообманом: в CI эти числа неоткуда взять.
 import { test, expect, type Page } from "@playwright/test";
-import { existsSync, readFileSync } from "node:fs";
 
 const TABS = ["Обзор", "Терминал", "Discover", "Портфель", "Earn", "Predict", "Агент", "Risk", "Funding"];
-
-// VITE_TELEGRAM_BOT_NAME читает dev-сервер, а не процесс тестов, поэтому значение
-// достаётся из .env напрямую: проверка «вход через Telegram выключен» имеет смысл
-// только когда бота не задавали. В CI файла .env нет (он в .gitignore) и проверка
-// прогоняется целиком; локально с именем бота в .env страница показывает виджет
-// Telegram, а не заглушку, и требовать от неё текста про выключенный вход нельзя.
-function telegramBotConfigured(): boolean {
-  if (!existsSync(".env")) return false;
-  const value = readFileSync(".env", "utf8").match(/^VITE_TELEGRAM_BOT_NAME=(.*)$/m)?.[1];
-  return Boolean(value?.trim());
-}
 
 function nav(page: Page) {
   return page.getByRole("navigation");
@@ -30,7 +18,7 @@ function devOrigin(): string {
 
 test.beforeEach(async ({ page }) => {
   const origin = devOrigin();
-  await page.route("**/*", (route) => (route.request().url().startsWith(origin) ? route.continue() : route.abort()));
+  await page.route("**/*", (route) => (new URL(route.request().url()).origin === origin ? route.continue() : route.abort()));
 });
 
 test.describe("Оболочка приложения", () => {
@@ -38,7 +26,7 @@ test.describe("Оболочка приложения", () => {
     await page.goto("/");
     await expect(page).toHaveTitle(/Wake/i);
     for (const label of TABS) {
-      await expect(nav(page).getByRole("button", { name: label })).toBeVisible();
+      await expect(nav(page).getByRole("button", { name: label, exact: true })).toBeVisible();
     }
   });
 
@@ -51,11 +39,119 @@ test.describe("Оболочка приложения", () => {
     await expect(nav(page).getByRole("button", { name: "Обзор" })).not.toHaveAttribute("aria-current");
   });
 
+  test("переключатель сети меняет и публичный API Arcus", async ({ page }) => {
+    await page.route("**/v1/markets", (route) => route.fulfill({ json: { markets: [] } }));
+    await page.route("**/v1/mids", (route) => route.fulfill({ json: { mids: {}, globalSequenceId: 1 } }));
+    const mainnet = page.waitForRequest("https://api.arcus.xyz/v1/markets");
+    await page.goto("/");
+    await mainnet;
+    const testnet = page.waitForRequest("https://api.testnet.arcus.xyz/v1/markets");
+    await page.getByRole("button", { name: /^testnet$/i }).click();
+    await testnet;
+  });
+
+  test("все вкладки открываются без ошибки рендера", async ({ page }) => {
+    await page.goto("/");
+    for (const label of TABS) {
+      await nav(page).getByRole("button", { name: label }).click();
+      await expect(nav(page).getByRole("button", { name: label })).toHaveAttribute("aria-current", "page");
+      await expect(page.getByText(/Ошибка загрузки|Что-то пошло не так/)).toHaveCount(0);
+    }
+  });
+
+  test("настройка reduced motion отключает анимацию индикаторов", async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: "reduce" });
+    await page.goto("/");
+    const indicator = nav(page).getByRole("button", { name: "Обзор" }).locator('span[title="Данные обновляются без бэкенда Wake"]');
+    const duration = await indicator.evaluate((element) => Number.parseFloat(getComputedStyle(element).animationDuration));
+    expect(duration).toBeLessThan(0.001);
+  });
+
+  test("мобильный экран не переполняется на каждой вкладке", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/");
+    for (const label of TABS) {
+      await nav(page).getByRole("button", { name: label }).click();
+      await expect(nav(page).getByRole("button", { name: label })).toHaveAttribute("aria-current", "page");
+      await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(1);
+    }
+  });
+
+  test("Терминал рисует свечи и блокирует повторную отправку до ответа signing service", async ({ page }) => {
+    const errors: string[] = [];
+    page.on("pageerror", (error) => errors.push(error.message));
+    await page.route("**/api/v1/orderBooks?*", (route) => route.fulfill({ json: { order_books: [{
+      symbol: "BTC", market_id: 0, market_type: "perp", status: "active", taker_fee: "0", maker_fee: "0",
+      min_base_amount: "0.00001", min_quote_amount: "10", supported_price_decimals: 1,
+      supported_size_decimals: 5, open_interest: "370.84",
+    }] } }));
+    const candles = Array.from({ length: 48 }, (_, index) => ({
+      t: Date.now() - (47 - index) * 3600000, o: 88000, h: 88050, l: 87950, c: 88000, v: 1, V: 88000,
+    }));
+    await page.route("**/api/v1/candles?*", (route) => route.fulfill({ json: { c: candles } }));
+    await page.route("**/api/v1/recentTrades?*", (route) => route.fulfill({ json: { trades: [] } }));
+    await page.route("**/api/v1/funding-rates", (route) => route.fulfill({ json: { funding_rates: [] } }));
+    let release: (() => void) | undefined;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    await page.route("**/place-order", async (route) => {
+      await pending;
+      await route.fulfill({ json: { dry_run: true, tx_hash: null } });
+    });
+    await page.goto("/");
+    await nav(page).getByRole("button", { name: "Терминал" }).click();
+    await expect(page.locator("svg.recharts-surface")).toBeVisible();
+    await expect(page.locator(".recharts-xAxis .recharts-cartesian-axis-tick")).not.toHaveCount(0);
+    await expect(page.locator(".recharts-yAxis .recharts-cartesian-axis-tick")).not.toHaveCount(0);
+    await page.getByRole("button", { name: /^Открыть long/ }).click();
+    await page.getByRole("dialog", { name: "Подтверждение ордера" }).getByRole("button", { name: "Подтвердить", exact: true }).click();
+    await expect(page.getByRole("button", { name: "Отправка…", exact: true })).toBeDisabled();
+    release?.();
+    await expect(page.getByRole("status")).toContainText("ордер в Lighter не ушёл");
+    await expect(page.getByRole("button", { name: /^Открыть long/ })).toBeEnabled();
+    expect(errors).toEqual([]);
+  });
+
   test("без ответа Lighter в Терминале — сообщение об отсутствии данных, а не пустые цифры", async ({ page }) => {
     await page.goto("/");
     await nav(page).getByRole("button", { name: "Терминал" }).click();
     await expect(page.getByText("Lighter API не отвечает")).toBeVisible();
     await expect(page.getByText(/\.zklighter\.elliot\.ai —/)).toBeVisible();
+  });
+});
+
+test.describe("Predict", () => {
+  test("изменение shares сбрасывает котировку и подтверждение", async ({ page }) => {
+    await page.addInitScript(() => {
+      localStorage.setItem("wake.session.v1", JSON.stringify({
+        token: "test-only-session", userId: "tg_123", expiresAt: Date.now() / 1000 + 3600,
+        lighterAccountIndex: null, label: "Trader", via: "telegram",
+      }));
+    });
+    await page.route("**/predict/markets?status=*", (route) => route.fulfill({ json: [{
+      id: "test-market", kind: "event", question: "Тестовый исход", lighter_market_id: null,
+      threshold: null, comparator: null, resolve_at: Date.now() / 1000 + 3600,
+      b: 100, status: "open", outcome: null, resolved_by: null, evidence_url: null,
+      price_yes: 0.5, price_no: 0.5, volume_usd: 0, trade_count: 0,
+    }] }));
+    await page.route("**/predict/positions", (route) => route.fulfill({ json: [] }));
+    let release: (() => void) | undefined;
+    const pending = new Promise<void>((resolve) => { release = resolve; });
+    await page.route("**/predict/markets/test-market/preview?*", async (route) => {
+      const shares = Number(new URL(route.request().url()).searchParams.get("shares"));
+      if (shares === 20) await pending;
+      await route.fulfill({ json: { cost_usd: shares / 2 } });
+    });
+    await page.goto("/");
+    await nav(page).getByRole("button", { name: "Predict" }).click();
+    await page.getByRole("button", { name: /^Купить YES/ }).click();
+    const dialog = page.getByRole("dialog", { name: /Купить YES/ });
+    await dialog.getByRole("button", { name: /Купить 10 за/ }).click();
+    await expect(dialog.getByRole("button", { name: "Подтвердить", exact: true })).toBeEnabled();
+    await dialog.getByRole("spinbutton", { name: "Количество shares" }).fill("20");
+    await expect(dialog.getByRole("button", { name: "Цена недоступна", exact: true })).toBeDisabled();
+    release?.();
+    await expect(dialog.getByRole("button", { name: /Купить 20 за/ })).toBeEnabled();
+    await expect(dialog.getByRole("button", { name: "Подтвердить", exact: true })).toHaveCount(0);
   });
 });
 
@@ -74,14 +170,45 @@ test.describe("Вход", () => {
   });
 
   test("без VITE_TELEGRAM_BOT_NAME кнопки Telegram нет — вместо неё объяснение", async ({ page }) => {
-    test.skip(telegramBotConfigured(), "VITE_TELEGRAM_BOT_NAME задан локально — страница показывает виджет, а не заглушку");
     await openPicker(page);
     await expect(page.getByText(/Вход через Telegram выключен/)).toBeVisible();
+  });
+
+  test("фокус остаётся в окне входа и возвращается после Escape", async ({ page }) => {
+    await openPicker(page);
+    const dialog = page.getByRole("dialog", { name: "Войти в Wake" });
+    const close = dialog.getByRole("button", { name: "Закрыть", exact: true });
+    const wallet = dialog.getByRole("button", { name: "Injected" });
+    // Стартовый фокус задаёт сам Modal: панель модалки — прокручиваемый
+    // контейнер, а Chrome отдаёт таким контейнерам фокус по умолчанию, поэтому
+    // «первая кнопка» здесь — намерение, а не совпадение.
+    await expect(close).toBeFocused();
+    await page.keyboard.press("Shift+Tab");
+    await expect(wallet).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(close).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(dialog).not.toBeVisible();
+    await expect(page.getByRole("button", { name: "Войти через TG или кошелёк" })).toBeFocused();
+  });
+
+  test("Escape закрывает выбор рынка прямо из поля поиска", async ({ page }) => {
+    await page.goto("/");
+    await nav(page).getByRole("button", { name: "Терминал" }).click();
+    const picker = page.getByRole("button", { name: "Выбрать рынок" });
+    await picker.click();
+    const dialog = page.getByRole("dialog", { name: "Выбор рынка" });
+    const search = dialog.getByRole("textbox", { name: "Поиск рынка" });
+    await expect(search).toBeFocused();
+    await search.fill("BTC");
+    await search.press("Escape");
+    await expect(dialog).not.toBeVisible();
+    await expect(picker).toBeFocused();
   });
 
   test("клик по кошельку без установленного провайдера даёт причину, а не молчание", async ({ page }) => {
     await openPicker(page);
     await page.getByRole("button", { name: "Injected" }).click();
-    await expect(page.getByText(/Кошелёк не подключился/)).toBeVisible();
+    await expect(page.getByRole("dialog", { name: "Войти в Wake" }).getByRole("status")).toContainText(/Кошелёк не подключился/);
   });
 });

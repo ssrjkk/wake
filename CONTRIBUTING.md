@@ -1,6 +1,6 @@
 # Contributing to Wake
 
-Wake is a trading terminal for [Lighter](https://lighter.xyz): a React frontend, a FastAPI backend and a Telegram bot that read and write the same backend. This document covers how to get the stack running locally, which checks CI runs, and the conventions the code follows.
+Wake is a trading terminal for [Lighter](https://lighter.xyz): a React frontend, a FastAPI backend and a read-only Telegram bot. The frontend writes through the backend; the bot reads Lighter's public REST with the same client the backend uses, and calls the backend only for Predict markets, which live in its database. This document covers how to get the stack running locally, which checks CI runs, and the conventions the code follows.
 
 ## What the backend needs to start
 
@@ -86,7 +86,7 @@ alembic check
 
 ## Tests
 
-**Backend** — one command, 296 tests, against a real PostgreSQL:
+**Backend** — one command, 333 tests, against a real PostgreSQL:
 
 ```bash
 cd backend
@@ -107,14 +107,14 @@ Three rules the suite enforces on itself, from `backend/testsupport.py`:
 npm ci
 npm run lint                      # ESLint over src/, e2e/ and the config files
 npx tsc --noEmit
-npm run test:run                  # vitest: 62 tests in 8 files
+npm run test:run                  # vitest: 99 tests in 11 files
 npm run build
-PW_PORT=5178 npx playwright test  # 6 tests in chromium; first run needs `npx playwright install chromium`
+PW_PORT=5178 npx playwright test  # first run needs `npx playwright install chromium`
 ```
 
 CI runs `npm run test:run -- --coverage` and `npm run test:e2e`. The e2e suite drives the frontend alone against the vite dev server — its route stubs intercept everything outside their own origin, so it neither needs nor tests the backend.
 
-One of the six e2e tests skips itself when `VITE_TELEGRAM_BOT_NAME` is set locally: it asserts that without a bot name the page shows an explanation instead of a login widget, and that is only checkable when the variable really is absent. CI does not set it, so there all six run.
+Playwright starts its own dev server with `VITE_TELEGRAM_BOT_NAME` and `VITE_WALLETCONNECT_PROJECT_ID` explicitly empty. Local `.env` values cannot skip tests or change the sign-in scenario. The Telegram component's configured path is covered by unit tests; e2e also checks keyboard focus, Escape, tab navigation and mobile overflow.
 
 `PW_PORT` exists because the suite starts its own dev server; set it when 5173 is already taken.
 
@@ -124,7 +124,7 @@ One of the six e2e tests skips itself when `VITE_TELEGRAM_BOT_NAME` is set local
 cd backend && pip-audit -r requirements.txt
 ```
 
-The CI gate fails on any new vulnerability, with one exception, and that exception is a fact about the dependency tree rather than a suppression: `signing_service.py` builds orders through `lighter.SignerClient`, and `lighter-sdk` pins `urllib3<2.1.0` while every patched urllib3 is ≥2.2. Raising the cap would break order signing. When upstream loosens the pin, the condition stops matching on its own.
+CI uses `pip-audit --strict` with the exact advisory exceptions reviewed in [SECURITY.md](SECURITY.md#dependency-auditing). The SDK's `urllib3<2.1.0` constraint still blocks patched releases. New advisories, including urllib3 advisories outside that list, and audit execution errors fail the job. Exceptions do not mean the dependency is patched.
 
 Adding a dependency: it goes into `backend/requirements.txt` (which is what the image installs) or into `package.json`. Test-only tools stay out of `requirements.txt` — `pytest`, `allure-pytest` and `fakeredis` are installed by the CI job, not by the production image.
 
@@ -133,12 +133,12 @@ Adding a dependency: it goes into `backend/requirements.txt` (which is what the 
 | Job | What it checks |
 | --- | --- |
 | backend-lint | `ruff check .` and `ruff format --check .` with ruff 0.15.8 |
-| backend-security | `pip-audit -r requirements.txt`, fails on anything outside the urllib3 exception |
+| backend-security | `pip-audit --strict -r requirements.txt`, with only the reviewed advisory IDs in `SECURITY.md` excluded |
 | backend-tests | creates `wake_test`, `alembic upgrade head`, `alembic check`, `pytest` with an Allure report, then a runtime smoke under real uvicorn: `/health`, `/ready` must say ready, `/subscription` without a token must answer 401 with `"code":"SESSION_REQUIRED"` |
-| frontend-check | `npm run lint`, `npx tsc --noEmit`, `npm run build` |
+| frontend-check | `npm audit`, `npm run lint -- --max-warnings 0`, `npx tsc --noEmit`, `npm run build` |
 | frontend-tests | `npm run test:run -- --coverage` |
 | e2e-tests | Playwright in chromium against the dev server |
-| docker-build | builds the image on pushes to main and verifies `import app` inside it |
+| docker-build | builds the image on every push and every pull request to `main`, then runs `import app` and `alembic heads` inside it with no network |
 
 The runtime smoke step is separate from the tests on purpose: inside pytest the app runs through `ASGITransport`, which never exercises startup hooks, a real connection pool or `/ready` against a real Redis.
 
@@ -204,7 +204,7 @@ Open an issue.
 
 # Contributing в Wake
 
-Wake — торговый терминал для [Lighter](https://lighter.xyz): React-приложение, FastAPI-бэкенд и Telegram-бот, которые читают и пишут в один и тот же бэкенд. Здесь описано, как поднять стек локально, какие проверки делает CI и каким соглашениям следует код.
+Wake — торговый терминал для [Lighter](https://lighter.xyz): React-приложение, FastAPI-бэкенд и read-only Telegram-бот. Фронт пишет через бэкенд; бот читает публичный REST Lighter тем же клиентом, которым пользуется бэкенд, и обращается к бэкенду только за Predict-рынками — они живут в его базе. Здесь описано, как поднять стек локально, какие проверки делает CI и каким соглашениям следует код.
 
 ## Что нужно бэкенду для запуска
 
@@ -290,7 +290,7 @@ alembic check
 
 ## Тесты
 
-**Бэкенд** — одна команда, 296 тестов, против настоящего PostgreSQL:
+**Бэкенд** — одна команда, 333 теста, против настоящего PostgreSQL:
 
 ```bash
 cd backend
@@ -311,16 +311,14 @@ python -m pytest . -q
 npm ci
 npm run lint                      # ESLint по src/, e2e/ и конфигам
 npx tsc --noEmit
-npm run test:run                  # vitest: 62 теста в 8 файлах
+npm run test:run                  # vitest: 99 тестов в 11 файлах
 npm run build
-PW_PORT=5178 npx playwright test  # 6 тестов в chromium; первый прогон требует `npx playwright install chromium`
+PW_PORT=5178 npx playwright test  # первый прогон требует `npx playwright install chromium`
 ```
 
 CI запускает `npm run test:run -- --coverage` и `npm run test:e2e`. E2e-проверка работает только с фронтом против dev-сервера vite: её route-заглушки отсекают весь трафик вне собственного origin, поэтому бэкенд ей не нужен и не проверяется.
 
-Один из шести тестов пропускается сам, если локально задан `VITE_TELEGRAM_BOT_NAME`: он проверяет, что без имени бота страница показывает объяснение вместо виджета входа, а это наблюдемо только когда переменной действительно нет. CI её не задаёт, поэтому там прогоняются все шесть.
-
-Один из шести e2e-тестов пропускает сам себя, если локально задан `VITE_TELEGRAM_BOT_NAME`: он проверяет, что без имени бота страница показывает объяснение вместо виджета входа, а это можно увидеть только когда переменной реально нет. CI её не задаёт, поэтому там проходят все шесть.
+Playwright поднимает собственный dev-сервер с явно пустыми `VITE_TELEGRAM_BOT_NAME` и `VITE_WALLETCONNECT_PROJECT_ID`. Локальный `.env` больше не пропускает тесты и не меняет сценарий входа. Настроенный Telegram-виджет покрыт unit-тестами; e2e проверяет фокус с клавиатуры, Escape, навигацию по вкладкам и отсутствие переполнения на мобильном экране.
 
 `PW_PORT` существует потому, что suite поднимает свой dev-сервер; ставьте его, когда 5173 занят.
 
@@ -330,7 +328,7 @@ CI запускает `npm run test:run -- --coverage` и `npm run test:e2e`. E2
 cd backend && pip-audit -r requirements.txt
 ```
 
-Гейт в CI падает на любой новой уязвимости, с одним исключением, и это не заглушка, а факт о дереве зависимостей: `signing_service.py` строит ордеры через `lighter.SignerClient`, а `lighter-sdk` жёстко пинит `urllib3<2.1.0` при том, что все пропатченные urllib3 ≥2.2. Поднять кап значит сломать подпись ордеров. Как только upstream ослабит пин, условие перестанет срабатывать само.
+CI использует `pip-audit --strict` с точечными исключениями, разобранными в [SECURITY.md](SECURITY.md#проверка-зависимостей). Ограничение SDK `urllib3<2.1.0` всё ещё запрещает исправленные версии. Новые уязвимости, включая новые уязвимости urllib3 вне списка, и ошибки самого аудита роняют джоб. Исключения не означают, что зависимость исправлена.
 
 Новая зависимость идёт в `backend/requirements.txt` (его ставит образ) или в `package.json`. Тестовые инструменты в `requirements.txt` не попадают: `pytest`, `allure-pytest` и `fakeredis` ставит CI-джоб, а не продакшн-образ.
 
@@ -339,12 +337,12 @@ cd backend && pip-audit -r requirements.txt
 | Джоб | Что проверяет |
 | --- | --- |
 | backend-lint | `ruff check .` и `ruff format --check .` на ruff 0.15.8 |
-| backend-security | `pip-audit -r requirements.txt`, падает на всём кроме исключения urllib3 |
+| backend-security | `pip-audit --strict -r requirements.txt`, исключены только разобранные в `SECURITY.md` ID уязвимостей |
 | backend-tests | создаёт `wake_test`, `alembic upgrade head`, `alembic check`, `pytest` c Allure-отчётом, затем runtime-smoke под настоящим uvicorn: `/health`, `/ready` обязан ответить ready, `/subscription` без токена — 401 с `"code":"SESSION_REQUIRED"` |
-| frontend-check | `npm run lint`, `npx tsc --noEmit`, `npm run build` |
+| frontend-check | `npm audit`, `npm run lint -- --max-warnings 0`, `npx tsc --noEmit`, `npm run build` |
 | frontend-tests | `npm run test:run -- --coverage` |
 | e2e-tests | Playwright в chromium против dev-сервера |
-| docker-build | собирает образ на push в main и проверяет внутри него `import app` |
+| docker-build | собирает образ на каждый push и каждый pull request в `main`, затем внутри него без сети выполняет `import app` и `alembic heads` |
 
 Шаг с smoke намеренно отдельный: в pytest приложение поднимается через `ASGITransport`, поэтому startup-хуки, настоящий пул соединений и `/ready` с живым Redis в тестах не исполняются никогда.
 

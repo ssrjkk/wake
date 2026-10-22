@@ -1,5 +1,5 @@
 """
-Telegram-бот Wake: /price, /markets, /funding, /predict и кнопка на полный
+Telegram-бот Wake: карточки рынков, funding, Predict-рынки и кнопка на полный
 интерфейс (Mini App).
 
 Что здесь проверено, а что — нет, по частям:
@@ -8,31 +8,58 @@ Telegram-бот Wake: /price, /markets, /funding, /predict и кнопка на 
     живые ответы mainnet (orderBooks, candles, funding-rates). Сеть задаётся
     config.LIGHTER_NETWORK — бот не может смотреть в тестнет, пока сайт и
     резолюция рынков читают mainnet.
-  - Формат ответов бэкенда (/predict/markets, /funding/rates) — из api/predict.py
-    и api/funding.py, оба роута покрыты тестами (test_predict_integration.py,
-    test_api_smoke.py).
-  - Текст-формообразователи (price_report/markets_report/predict_report) — чистые
-    функции, прогнаны тестами на фикстурах формы живого ответа: test_telegram_bot.py.
+  - /funding считается в этом процессе теми же funding_arb.funding_rate_rows,
+    что отдаёт GET /funding/rates на сайте. Разбор ставок живёт в одном месте
+    специально: две копии разъехались бы молча, и спор «кому верить — боту или
+    странице» решался бы по скриншотам. Бэкенд для funding не нужен.
+  - /predict — единственный раздел, который ходит на HTTP: Predict-рынки живут в
+    базе Wake, их неоткуда взять, кроме как из api/predict.py. Если бэкенда нет,
+    бот так и пишет вместо пустого списка.
+  - Текст-формообразователи (price_report/markets_report/predict_report/
+    funding_report/sparkline) — чистые функции, прогнаны тестами на фикстурах
+    ФОРМЫ живого ответа: test_telegram_bot.py.
   - НЕ прогонялся отсюда сам цикл Telegram: polling требует токен от @BotFather и
     процесс 24/7. Поэтому Bot создаётся лениво в main() — модуль импортируется и
     тестируется без токена, а хендлеры остаются тонкой обвязкой над тестированными
     функциями.
 
+Как это ложится в Telegram:
+
+  - Команды регистрируются в меню бота при старте (set_my_commands): список
+    появляется и в «/»-автодополнении, и в кнопке Menu. Без этого шага бот на
+    /price физически отвечает, но узнать об этом можно только из чужого
+    скриншота.
+  - Ответы — HTML: заголовок и числа в моноширинном блоке, поэтому колонки
+    оборотов и ставок не разъезжаются. Всё, что пришло извне (вопрос
+    Predict-рынка, тикер из callback), проходит через esc().
+  - Список рынков и карточка funding отдают тикеры кнопками: выбор тапом, а не
+    ручным вводом. callback_data проверяется регуляркой — это поле клиент
+    подставить может.
+  - Обычное слово BTC / eth / BTC-USDC в чате — тот же /price: синтаксис команды
+    помнить не нужно.
+
 Запуск:
     pip install -r requirements.txt
     export TELEGRAM_BOT_TOKEN=...            # @BotFather -> /newbot
     export WAKE_MINIAPP_URL=https://...      # сайт целиком: кнопка открывает его вебвью, для Telegram нужен https
-    export WAKE_BACKEND_URL=http://...       # где лежит backend/app.py
+    export WAKE_BACKEND_URL=http://...       # где лежит backend/app.py (нужно только для /predict)
     python telegram_bot.py
 """
 
 import asyncio
 import datetime
+import html
+import logging
+import re
 
 import httpx
 from aiogram import Bot, Dispatcher, F
-from aiogram.filters import Command
+from aiogram.client.default import DefaultBotProperties
+from aiogram.enums import ParseMode
+from aiogram.filters import Command, CommandObject
 from aiogram.types import (
+    BotCommand,
+    CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     Message,
@@ -41,14 +68,37 @@ from aiogram.types import (
 
 import lighter_rest
 from config import BACKEND_URL, LIGHTER_NETWORK, MINIAPP_URL, TELEGRAM_BOT_TOKEN
-from funding_arb import base_asset
+from funding_arb import base_asset, funding_rate_rows
+
+log = logging.getLogger(__name__)
 
 WAKE_MINIAPP_URL = MINIAPP_URL
 WAKE_BACKEND = BACKEND_URL
 
+# Тикер наружу: значение приходит и из callback_data, и из текста сообщения.
+# 12 символов с запасом покрывают книгу Lighter, минимальный ряд — самый
+# длинный там же ("1000PEPE" начинается с цифры, поэтому первая позиция не
+# обязана быть буквой). Буква внутри обязательна: "1" и "$" тикерами не считаются.
+TICKER_RE = re.compile(r"(?=.*[A-Z])[A-Z0-9$]{1,12}")
+
 # Бот создаётся в main(), а не на импорте: aiogram валидирует токен в конструкторе,
 # и без TELEGRAM_BOT_TOKEN модуль не удавалось даже импортировать в тестах.
 dp = Dispatcher()
+
+BOT_COMMANDS = (
+    BotCommand(command="price", description="Карточка рынка: цена, 24ч, funding"),
+    BotCommand(command="markets", description="Топ перпов по обороту за 24ч"),
+    BotCommand(command="funding", description="Ставки funding по годовой"),
+    BotCommand(command="predict", description="Predict-рынки Wake"),
+    BotCommand(command="wake", description="Открыть Wake в Telegram"),
+    BotCommand(command="help", description="Что бот умеет"),
+)
+
+
+def esc(value: object) -> str:
+    """Экранирование для HTML-режима. Всё, что пришло не из форматеров чисел
+    ниже, проходит отсюда: вопрос рынка набирает куратор, тикер — клиент."""
+    return html.escape(str(value), quote=False)
 
 
 def fmt_usd(value: float) -> str:
@@ -75,6 +125,31 @@ def fmt_pct(value: float) -> str:
     return f"{value * 100:+.2f}%"
 
 
+_SPARK = "▁▂▃▄▅▆▇█"
+
+
+def sparkline(closes: list, width: int = 24) -> str:
+    """Часовые закрытия одной строкой. Плоский ряд рисуется средней чертой:
+    пустая строка выглядела бы как «данных нет», хотя данные есть и они не
+    менялись."""
+    values = [float(c) for c in closes[-width:] if c is not None]
+    if len(values) < 2:
+        return ""
+    lo, hi = min(values), max(values)
+    if hi == lo:
+        return _SPARK[len(_SPARK) // 2] * len(values)
+    top = len(_SPARK) - 1
+    return "".join(_SPARK[round((v - lo) / (hi - lo) * top)] for v in values)
+
+
+def parse_ticker(text: str) -> str | None:
+    """Тикер из ввода пользователя: «btc», «BTC-USDC», «1000PEPE» → «BTC»,
+    «BTC», «1000PEPE». Непохожее на тикер — None, чтобы вызывающий мог ответить
+    «не понял», а не молча искать пустой символ."""
+    wanted = base_asset(text or "")
+    return wanted if TICKER_RE.fullmatch(wanted) else None
+
+
 def find_perp(symbol: str) -> dict | None:
     """Активный перп Lighter по вписанному тикеру.
 
@@ -96,9 +171,13 @@ def price_report(symbol: str, book: dict, stats: dict, funding: dict | None) -> 
         f"Цена (close последней 1ч свечи): {fmt_price(stats['price'])}",
         f"Изменение за 24ч: {fmt_pct(stats['change_24h'])}",
         f"Оборот за 24ч: {fmt_usd(stats['quote_volume_24h'])}",
+        f"Диапазон 24ч: {fmt_price(stats['high_24h'])} – {fmt_price(stats['low_24h'])}",
         f"Открытый интерес: {fmt_open_interest(book)} базового актива",
         f"Мин. размер: {book['min_base_amount']} · шаг: {book['supported_size_decimals']} знаков",
     ]
+    spark = sparkline(stats.get("closes") or [])
+    if spark:
+        lines.append(f"Закрытия по часам: {spark}")
     if funding is None:
         lines.append("Funding: нет ставки по этому рынку")
     else:
@@ -106,7 +185,8 @@ def price_report(symbol: str, book: dict, stats: dict, funding: dict | None) -> 
         # перпа (и именно так строится cash-and-carry: шорт перпа + лонг спота).
         pays = "лонги" if funding["direction"] == "long" else "шорты"
         lines.append(
-            f"Funding: {funding['rate'] * 100:.4f}%/ч (годовая ≈ {funding['rate'] * 24 * 365 * 100:.1f}%), платят {pays}"
+            f"Funding: {funding['rate'] * 100:.4f}%/ч (годовая ≈ "
+            f"{funding['rate'] * 24 * 365 * 100:.1f}%), платят {pays}"
         )
     return "\n".join(lines)
 
@@ -142,7 +222,6 @@ def markets_report(overview: dict, limit: int = 10) -> str:
     missing = overview.get("no_market") or []
     if missing:
         lines.append(f"Без активного перпа: {', '.join(missing)}")
-    lines.append("Полный список и поиск — в мини-аппе.")
     return "\n".join(lines)
 
 
@@ -180,19 +259,17 @@ def predict_report(
             if m.get("resolve_at"):
                 detail += f" · {_fmt_left(float(m['resolve_at']), now)}"
         lines.append(f"• {m['question']}\n{detail}")
-    lines.append("Купить долю и забрать выигрыш — в мини-аппе.")
     return "\n".join(lines)
 
 
 def funding_report(rates: list, limit: int = 10) -> str:
     rows = rates[:limit]
     if not rows:
-        return "Подходящих ставок funding нет — бэкенд не ответил или все рынки платят шортам."
-    lines = [
-        "Funding Lighter (эпох 1 час), годовая по убыванию. Показаны рынки, где ставку"
-    ]
+        return "Подходящих ставок funding нет — Lighter не ответил или все рынки платят шортам."
+    lines = ["Funding Lighter (эпох 1 час), годовая по убыванию. Показаны рынки, где"]
     lines.append(
-        "получают шорты перпа — только они забираются cash-and-carry без займа актива:"
+        "ставку получают шорты перпа — только они забираются cash-and-carry без "
+        "займа актива:"
     )
     for r in rows:
         lines.append(
@@ -200,20 +277,60 @@ def funding_report(rates: list, limit: int = 10) -> str:
             f"{r['annualized'] * 100:.1f}% годовых · платят "
             f"{'лонги' if r['direction'] == 'long' else 'шорты'}"
         )
-    lines.append("Список пар, где физически есть обе ноги (перп+спот), — в мини-аппе.")
     return "\n".join(lines)
 
 
-def _miniapp_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="Открыть Wake", web_app=WebAppInfo(url=WAKE_MINIAPP_URL)
-                )
-            ]
+def card(title: str, body: str, note: str = "") -> str:
+    """Заголовок + моноширинное тело. Числа живут в <pre>: Telegram набирает их
+    пропорциональным шрифтом, и без моноширинного блока колонки оборотов
+    разъезжаются, а сравнение глазам по правому краю — весь смысл списка."""
+    text = f"<b>{esc(title)}</b>\n<pre>{esc(body)}</pre>"
+    return f"{text}\n{note}" if note else text
+
+
+def web_app_button() -> InlineKeyboardButton | None:
+    """Кнопка Mini App — только когда адрес https.
+
+    Bot API отбраковывает web_app с http на валидации ответа: с дефолтным
+    localhost бот падал бы с 400 на каждом сообщении с такой клавиатурой, а не
+    только там, где кнопка. Лучше кнопка исчезнет, а причина попадёт в лог и в
+    ответ /start."""
+    if not WAKE_MINIAPP_URL.startswith("https://"):
+        return None
+    return InlineKeyboardButton(
+        text="Открыть Wake", web_app=WebAppInfo(url=WAKE_MINIAPP_URL)
+    )
+
+
+def ticker_rows(symbols: list) -> list[list[InlineKeyboardButton]]:
+    """Тикеры кнопками, ровно 4 в ряду: при другом размере ряда Telegram режет
+    их по ширине экрана, и на телефоне список превращается в лесенку."""
+    wanted = [s for s in symbols if s and TICKER_RE.fullmatch(s)][:8]
+    return [
+        [
+            InlineKeyboardButton(text=s, callback_data=f"p:{s}")
+            for s in wanted[i : i + 4]
+        ]
+        for i in range(0, len(wanted), 4)
+    ]
+
+
+def nav_keyboard(
+    top_rows: list[list[InlineKeyboardButton]] | None = None,
+) -> InlineKeyboardMarkup:
+    """Навигация внизу каждого ответа: разделы + ссылка на полный интерфейс."""
+    rows = list(top_rows or [])
+    rows.append(
+        [
+            InlineKeyboardButton(text="Рынки", callback_data="c:markets"),
+            InlineKeyboardButton(text="Funding", callback_data="c:funding"),
+            InlineKeyboardButton(text="Predict", callback_data="c:predict"),
         ]
     )
+    app = web_app_button()
+    if app is not None:
+        rows.append([app])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 async def _get_json(path: str) -> object:
@@ -223,87 +340,250 @@ async def _get_json(path: str) -> object:
         return resp.json()
 
 
-@dp.message(Command("start", "help"))
-async def cmd_start(message: Message):
-    await message.answer(
-        "Wake — терминал на Lighter: перпы, споты, funding, копи-трейдинг, Predict-рынки.\n\n"
-        "/price BTC — цена, изменение и оборот за 24ч, funding\n"
-        "/markets — топ перпов по реальному обороту\n"
-        "/funding — ставки funding по годовой\n"
-        "/predict — Predict-рынки Wake (/predict resolved — резолвленные)\n\n"
-        "Сеть: " + LIGHTER_NETWORK + ". Полный интерфейс — кнопкой ниже.",
-        reply_markup=_miniapp_keyboard(),
+async def price_payload(ticker: str) -> tuple[str, InlineKeyboardMarkup]:
+    book = await asyncio.to_thread(find_perp, ticker)
+    if book is None:
+        return (
+            card(
+                f"{ticker}: активного перпа на Lighter нет",
+                "Список того, что торгуется прямо сейчас — /markets.",
+            ),
+            nav_keyboard(),
+        )
+    market_id = int(book["market_id"])
+    stats = await asyncio.to_thread(lighter_rest.get_24h_stats, market_id)
+    try:
+        funding = await asyncio.to_thread(lighter_rest.get_funding_rate, market_id)
+    except RuntimeError:
+        funding = None
+    return (
+        card(
+            f"{ticker} · Lighter {LIGHTER_NETWORK}",
+            price_report(ticker, book, stats, funding),
+            "График и ордер — в веб-терминале." if app_available() else "",
+        ),
+        nav_keyboard(),
     )
 
 
-@dp.message(Command("price"))
-async def cmd_price(message: Message):
-    parts = (message.text or "").split()
-    symbol = parts[1] if len(parts) > 1 else "BTC"
+async def markets_payload(limit: int = 10) -> tuple[str, InlineKeyboardMarkup]:
+    overview = await asyncio.to_thread(lighter_rest.get_market_overview)
+    rows = ticker_rows([str(r["symbol"]) for r in overview["rows"][:limit]])
+    return (
+        card(
+            f"Рынки Lighter · {LIGHTER_NETWORK}",
+            markets_report(overview, limit),
+            "Тапни тикер — будет карточка с funding." if rows else "",
+        ),
+        nav_keyboard(rows or None),
+    )
+
+
+async def funding_payload(limit: int = 10) -> tuple[str, InlineKeyboardMarkup]:
+    raw = await asyncio.to_thread(lighter_rest.get_funding_rates, LIGHTER_NETWORK)
+    # Те же строки, что отдаёт GET /funding/rates: разбор один на сайт и бота.
+    rates = [r for r in funding_rate_rows(raw) if r["direction"] == "long"]
+    rows = ticker_rows([str(r["symbol"]) for r in rates[:limit]])
+    return (
+        card(
+            f"Funding · Lighter {LIGHTER_NETWORK}",
+            funding_report(rates, limit),
+            "Спред по площадкам и расчёт ног — на странице Funding."
+            if app_available()
+            else "",
+        ),
+        nav_keyboard(rows or None),
+    )
+
+
+async def predict_payload(status: str = "open") -> tuple[str, InlineKeyboardMarkup]:
     try:
-        book = await asyncio.to_thread(find_perp, symbol)
-        if book is None:
-            await message.answer(
-                f"Активного перпа {symbol} на Lighter нет. Список — /markets."
+        markets = await _get_json(f"/predict/markets?status={status}")
+    except (httpx.HTTPError, ValueError) as e:
+        return (
+            card(
+                "Predict недоступен",
+                "Рынки предсказаний Wake живут в базе бэкенда, взять их больше "
+                "неоткуда.\n"
+                f"WAKE_BACKEND_URL = {WAKE_BACKEND}\n{type(e).__name__}: {e}",
+            ),
+            nav_keyboard(),
+        )
+    note = (
+        "Купить долю и забрать выигрыш — в мини-аппе."
+        if app_available()
+        else "Купить долю — в веб-терминале."
+    )
+    return (card(f"Predict · {status}", predict_report(markets), note), nav_keyboard())
+
+
+def app_available() -> bool:
+    return web_app_button() is not None
+
+
+def help_text() -> str:
+    """Список команд собирается из BOT_COMMANDS — из того же кортежа, который
+    ставится в меню Telegram. Два текста, написанные раздельно, разошлись бы в
+    первый же день, когда команду добавили в меню и забыли в справке."""
+    nav = (
+        "Полный интерфейс — кнопкой ниже."
+        if app_available()
+        else "Кнопки на Mini App нет: задай WAKE_MINIAPP_URL с https — Telegram "
+        "не принимает http-адрес вебвью."
+    )
+    commands = "\n".join(f"/{c.command:<8} {c.description}" for c in BOT_COMMANDS)
+    return (
+        "<b>Wake · терминал на Lighter</b>\n"
+        f"<pre>{esc(commands)}</pre>"
+        "Можно просто написать тикер: <code>BTC</code> или <code>eth</code>.\n"
+        f"Числа — публичный REST Lighter в сети {LIGHTER_NETWORK}. Бот ничего не "
+        f"выставляет и аккаунт не открывает.\n{nav}"
+    )
+
+
+async def _answer(message: Message, payload: tuple[str, InlineKeyboardMarkup]) -> None:
+    await message.answer_chat_action("typing")
+    await message.answer(*payload)
+
+
+async def _reply(
+    callback: CallbackQuery, payload: tuple[str, InlineKeyboardMarkup]
+) -> None:
+    await callback.answer()
+    if callback.message is None:
+        return
+    await callback.message.answer(*payload)
+
+
+@dp.message(Command("start", "help"))
+async def cmd_start(message: Message):
+    await message.answer(help_text(), reply_markup=nav_keyboard())
+
+
+@dp.message(Command("price"))
+async def cmd_price(message: Message, command: CommandObject):
+    symbol = (command.args or "").strip()
+    ticker = parse_ticker(symbol) if symbol else "BTC"
+    if ticker is None:
+        await message.answer(
+            card(
+                "Тикер не понятен", f"Написано: {symbol}. Жду что-то вроде BTC или ETH."
             )
-            return
-        market_id = int(book["market_id"])
-        stats = await asyncio.to_thread(lighter_rest.get_24h_stats, market_id)
-        try:
-            funding = await asyncio.to_thread(lighter_rest.get_funding_rate, market_id)
-        except RuntimeError:
-            funding = None
-        await message.answer(price_report(base_asset(symbol), book, stats, funding))
-    except RuntimeError as e:
-        await message.answer(str(e))
+        )
+        return
+    await _answer(message, await price_payload(ticker))
 
 
 @dp.message(Command("markets"))
 async def cmd_markets(message: Message):
-    try:
-        overview = await asyncio.to_thread(lighter_rest.get_market_overview)
-    except RuntimeError as e:
-        await message.answer(str(e))
-        return
-    await message.answer(markets_report(overview), reply_markup=_miniapp_keyboard())
+    await _answer(message, await markets_payload())
 
 
 @dp.message(Command("funding"))
 async def cmd_funding(message: Message):
-    try:
-        body = await _get_json("/funding/rates?limit=10")
-    except httpx.HTTPError as e:
-        await message.answer(f"Бэкенд недоступен: {e} (запущен ли backend/app.py?)")
-        return
-    rates = [r for r in body["rates"] if r["direction"] == "long"]
-    await message.answer(funding_report(rates))
+    await _answer(message, await funding_payload())
 
 
 @dp.message(Command("predict"))
-async def cmd_predict(message: Message):
-    parts = (message.text or "").split()
-    status = (
-        parts[1]
-        if len(parts) > 1 and parts[1] in ("open", "resolved", "all")
-        else "open"
+async def cmd_predict(message: Message, command: CommandObject):
+    status = (command.args or "").strip().lower()
+    await _answer(
+        message,
+        await predict_payload(
+            status if status in ("open", "resolved", "all") else "open"
+        ),
     )
-    try:
-        markets = await _get_json(f"/predict/markets?status={status}")
-    except httpx.HTTPError as e:
-        await message.answer(f"Бэкенд недоступен: {e} (запущен ли backend/app.py?)")
+
+
+@dp.message(Command("wake"))
+async def cmd_wake(message: Message):
+    button = web_app_button()
+    if button is None:
+        await message.answer(
+            card(
+                "Ссылки на терминал нет",
+                f"Telegram принимает только https, а WAKE_MINIAPP_URL = {WAKE_MINIAPP_URL}.",
+            )
+        )
         return
-    await message.answer(predict_report(markets), reply_markup=_miniapp_keyboard())
+    await message.answer(
+        card("Wake в браузере", "Кнопка открывает вебвью с этим адресом."),
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[[button]]),
+    )
+
+
+@dp.callback_query(F.data.startswith("p:"))
+async def cb_price(callback: CallbackQuery):
+    ticker = parse_ticker(callback.data.removeprefix("p:"))
+    if ticker is None:
+        await callback.answer(
+            "Кнопка из старой версии — список рынков: /markets", show_alert=True
+        )
+        return
+    await _reply(callback, await price_payload(ticker))
+
+
+@dp.callback_query(F.data == "c:markets")
+async def cb_markets(callback: CallbackQuery):
+    await _reply(callback, await markets_payload())
+
+
+@dp.callback_query(F.data == "c:funding")
+async def cb_funding(callback: CallbackQuery):
+    await _reply(callback, await funding_payload())
+
+
+@dp.callback_query(F.data == "c:predict")
+async def cb_predict(callback: CallbackQuery):
+    await _reply(callback, await predict_payload())
+
+
+@dp.callback_query()
+async def cb_unknown(callback: CallbackQuery):
+    """Всё нераспознанное — в основном callback от клавиатур прошлой версии бота:
+    они живут в чате столько, сколько живёт сообщение."""
+    await callback.answer("Кнопка устарела, список команд — /start", show_alert=True)
 
 
 @dp.message(F.text)
 async def fallback(message: Message):
-    await message.answer("Не понял. /start — список команд.")
+    ticker = parse_ticker(message.text or "")
+    if ticker:
+        await _answer(message, await price_payload(ticker))
+        return
+    await message.answer(
+        card(
+            "Не знакомый запрос",
+            "Бот читает команды и тикеры: /markets или BTC. Ордера он не "
+            "выставляет и аккаунт не открывает — только числа из публичного API.",
+        ),
+        reply_markup=nav_keyboard(),
+    )
+
+
+async def register_commands(bot: Bot) -> None:
+    """Меню команд ставится при старте, а не руками в @BotFather: иначе
+    автодополнение по «/» пустое, и про команды узнают только из чужого
+    скриншота. Неудача не роняет бота — polling работает и без меню."""
+    try:
+        await bot.set_my_commands(list(BOT_COMMANDS))
+    except Exception as e:
+        log.warning("команды бота не зарегистрированы: %s", e)
 
 
 async def main():
     if not TELEGRAM_BOT_TOKEN:
         raise RuntimeError("TELEGRAM_BOT_TOKEN не задан — получи у @BotFather")
-    bot = Bot(token=TELEGRAM_BOT_TOKEN)
+    if not app_available():
+        log.warning(
+            "WAKE_MINIAPP_URL=%s: кнопка Mini App не ставится, Telegram требует https",
+            WAKE_MINIAPP_URL,
+        )
+    bot = Bot(
+        token=TELEGRAM_BOT_TOKEN,
+        default=DefaultBotProperties(parse_mode=ParseMode.HTML),
+    )
+    await register_commands(bot)
     await dp.start_polling(bot)
 
 

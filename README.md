@@ -1,15 +1,11 @@
 # Wake
 
-Trading terminal for [Lighter](https://lighter.xyz) (zk perp DEX): a React web app, a FastAPI backend, and a Telegram bot ([@waketrade_bot](https://t.me/waketrade_bot)) with a Mini App — the bot and the site read and write the same backend.
+Trading terminal for [Lighter](https://lighter.xyz) (zk perp DEX): a React web app, a FastAPI backend, and a read-only Telegram bot ([@waketrade_bot](https://t.me/waketrade_bot)) with a Mini App — the site writes through the backend, the bot answers with the same market data the site shows.
 
 Default configuration is **mainnet** with `WAKE_DRY_RUN=true`: real market data from the real network, and no order ever leaves the process until you turn dry-run off yourself.
 
 Live frontend: https://wake-7k6.pages.dev  
-Live backend: https://wake-backend-production-3483.up.railway.app
-
-## Screenshots
-
-<!-- TODO: Add demo screenshot -->
+Live backend: https://wake-backend-production-3483.up.railway.app — `/health` answers `{"status":"ok","network":"mainnet","dry_run":true}`, `/ready` currently answers 503 (`database: fail, redis: fail`): the process is deployed, the PostgreSQL and Redis services are not attached to it yet. Market-data panels work; sign-in, copy trading and Predict do not. [docs/RAILWAY_DEPLOY.md](docs/RAILWAY_DEPLOY.md) is the path from this state to a ready one.
 
 ## Contact
 
@@ -120,7 +116,23 @@ cd backend
 python telegram_bot.py     # reads TELEGRAM_BOT_TOKEN from the environment
 ```
 
-Commands: `/start`, `/help`, `/price BTC`, `/markets`, `/funding`, `/predict`, `/predict resolved`. The bot's answers come from the same endpoints the site uses (`/markets/overview`, `/funding/rates`, `/predict/markets`), so the two cannot drift apart. `WAKE_MINIAPP_URL` is the address the bot's "Open Wake" button opens — Telegram requires it to be https.
+Commands: `/price BTC`, `/markets`, `/funding`, `/predict` (`/predict resolved`), `/wake`, `/help`. Typing a bare ticker (`BTC`, `eth`, `BTC-USDC`) is the same as `/price` — nobody remembers command syntax. Answers are HTML cards: the numbers sit in a monospace block, so the 24h volume columns actually line up, and a market list comes with the tickers as buttons, so the next tap chooses the market instead of typing it.
+
+The command menu is written to Telegram at startup (`set_my_commands`), otherwise autocomplete on `/` is empty and the bot's capabilities are only knowable from a screenshot. If the menu cannot be registered, the bot logs it and keeps polling — the menu is discoverability, not a dependency.
+
+Where the numbers come from is the part that decides whether the bot and the site can disagree:
+
+| Command | Source | Needs the Wake backend |
+| --- | --- | --- |
+| `/price`, `/markets` | `lighter_rest.py` — public Lighter REST, same client and same `WAKE_LIGHTER_NETWORK` as the Terminal | no |
+| `/funding` | `funding_arb.funding_rate_rows` — the exact function `GET /funding/rates` returns | no |
+| `/predict` | `GET /predict/markets` on `WAKE_BACKEND_URL` | yes, the markets live in the Wake database |
+
+`/predict` says so when the backend is unreachable, and names `WAKE_BACKEND_URL` in the message, instead of showing an empty list. Inside docker-compose that variable is `http://app:8000`: `localhost` inside the bot's own container has nothing listening on 8000.
+
+`WAKE_MINIAPP_URL` is the address the "Open Wake" button opens. Telegram's Bot API rejects a `web_app` button whose URL is not https — and it rejects the whole message, not just the button — so with an http address the bot drops the button, says why in `/start`, and logs the reason at startup rather than failing on every reply.
+
+The bot is read-only by construction: it holds no session, no key and no account index, and there is no code path from a Telegram message to `/place-order`.
 
 ### Predict resolver
 
@@ -171,7 +183,7 @@ Price markets close themselves at the deadline only while this process runs; oth
 # backend — run from backend/; needs a scratch PostgreSQL database
 createdb wake_test
 export WAKE_TEST_DATABASE_URL=postgresql+asyncpg://wake:wake@localhost:5432/wake_test
-python -m unittest discover        # 296 tests, all through discovery
+python -m unittest discover        # 333 tests, all through discovery
 python -m pytest -q                # the same set under pytest (+ Allure in CI)
 
 # frontend
@@ -202,7 +214,7 @@ PW_PORT=5178 npx playwright test
   - `funding.py` — venue comparison and carry calculations
 - Storage is one PostgreSQL base: `database.py` (async engine), `pg_models.py` (schema), `alembic/` (migrations), and the repositories `db.py`, `predict_db.py`, `agent_db.py`, `audit_log.py`, `subscription.py`
 - Core logic lives in root modules and is tested on its own: `mirror_engine.py`, `leader_position_tracker.py`, `predict_amm.py`, `predict_resolution.py`, `portfolio_risk.py`, `funding_arb.py`, `agent_decision.py`, `agent_memory.py`, `risk_limits.py`, `rate_limiter.py`, `cache.py`
-- Configuration is read once in `backend/config.py`, and every variable is validated there — a bad combination (live orders on mainnet without the second switch, a non-Postgres URL) stops the process at startup
+- Configuration is read once in `backend/config.py`, and every variable it owns is validated there — a bad combination (live orders on mainnet without the second switch, a non-Postgres URL) stops the process at startup. A handful of variables stay outside it because they belong to one process: the signing key triple in `signing_service.py`, `WAKE_MASTER_KEY` and `WAKE_KEYSTORE_PATH` in `encrypted_key_store.py`, `WAKE_TEST_DATABASE_URL` in the tests, `WAKE_ORDER_*` in `place_order_example.py`. They are listed in `backend/.env.example` too, with the process that reads each one.
 
 ### Frontend (React + TypeScript + Vite + Tailwind + wagmi)
 
@@ -220,8 +232,17 @@ PW_PORT=5178 npx playwright test
 
 Project `wake` → https://wake-7k6.pages.dev.
 
-- build command `npm run build`, output directory `dist`, Node 24
-- set the `VITE_*` variables as build env vars; they are compiled into the bundle, so changing one requires a rebuild
+- The project is **not** connected to Git and has no Cloudflare build configuration: the artifact is produced locally and uploaded with wrangler. `npx wrangler pages project list` shows `Git Provider: No`, and `builds` is null on the project.
+- Consequence worth knowing: `VITE_*` values come from the root `.env` **on the machine that builds**, because the deployment carries no environment variables of its own. They are compiled into the bundle, so changing one requires a rebuild and a redeploy. A `.env` with an empty `VITE_TELEGRAM_BOT_NAME` produces a site whose Telegram login is switched off, and the Cloudflare dashboard will not show you that — this is how a wrong bot handle reached production once.
+- Verify what actually shipped instead of trusting the build log:
+
+```bash
+npx wrangler pages deployment list --project-name wake | head -5
+curl -s https://wake-7k6.pages.dev/ -o /tmp/i.html
+grep -o 'assets/index-[A-Za-z0-9_-]*\.js' /tmp/i.html      # the bundle name is the build id
+curl -s https://wake-7k6.pages.dev/assets/<that-name>.js | grep -c waketrade_bot
+```
+
 - `public/_redirects` contains `/* /index.html 200` so deep links into the SPA resolve
 
 One consequence worth knowing: because Pages answers *any* unknown path with `index.html` and status 200, an API request to a host with no backend returns HTML. `src/lib/backend.ts` turns that into a readable "there is no backend at this address" message instead of a JSON parse error, and the panels print which three still work.

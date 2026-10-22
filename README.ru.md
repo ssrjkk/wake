@@ -1,20 +1,16 @@
 # Wake
 
-Торговый терминал для [Lighter](https://lighter.xyz) (zk perp DEX): React-приложение, FastAPI-бэкенд и Telegram-бот ([@wake_trade](https://t.me/waketrade_bot)) с Mini App — бот и сайт читают и пишут в один и тот же бэкенд.
+Торговый терминал для [Lighter](https://lighter.xyz) (zk perp DEX): React-приложение, FastAPI-бэкенд и read-only Telegram-бот ([@waketrade_bot](https://t.me/waketrade_bot)) с Mini App — сайт пишет через бэкенд, бот отвечает теми же рыночными данными, что видит сайт.
 
 Конфигурация по умолчанию — **mainnet** и `WAKE_DRY_RUN=true`: настоящие рыночные данные из реальной сети, и ни один ордер не выходит из процесса, пока вы сами не выключите dry-run.
 
 Живой фронтенд: https://wake-7k6.pages.dev  
-Живой бэкенд: https://wake-backend-production-3483.up.railway.app
-
-## Скриншоты
-
-<!-- TODO: добавить снимок настоящего интерфейса -->
+Живой бэкенд: https://wake-backend-production-3483.up.railway.app — `/health` отвечает `{"status":"ok","network":"mainnet","dry_run":true}`, `/ready` сейчас отвечает 503 (`database: fail, redis: fail`): процесс развёрнут, но PostgreSQL и Redis к нему не подключены. Панели с рыночными данными работают; вход, копи-трейд и Predict — нет. Путь из этого состояния в готовое описан в [docs/RAILWAY_DEPLOY.md](docs/RAILWAY_DEPLOY.md).
 
 ## Контакты
 
 - **Telegram:** [@ssrjkk](https://t.me/ssrjkk)
-- **Wake Trade бот:** [@wake_trade](https://t.me/waketrade_bot)
+- **Wake Trade бот:** [@waketrade_bot](https://t.me/waketrade_bot)
 - **GitHub:** [@ssrjkk](https://github.com/ssrjkk)
 
 ## Что делает каждая панель
@@ -120,7 +116,23 @@ cd backend
 python telegram_bot.py     # берёт TELEGRAM_BOT_TOKEN из окружения
 ```
 
-Команды: `/start`, `/help`, `/price BTC`, `/markets`, `/funding`, `/predict`, `/predict resolved`. Ответы бота приходят из тех же эндпоинтов, что и сайт (`/markets/overview`, `/funding/rates`, `/predict/markets`), поэтому расходиться им нечем. `WAKE_MINIAPP_URL` — адрес, который открывает кнопка «Открыть Wake»; Telegram требует https.
+Команды: `/price BTC`, `/markets`, `/funding`, `/predict` (`/predict resolved`), `/wake`, `/help`. Написанное голым текстом название (`BTC`, `eth`, `BTC-USDC`) — тот же `/price`: синтаксис команд никто не помнит. Ответы — HTML-карточки: числа стоят в моноширинном блоке, поэтому колонки оборота за 24ч действительно выровнены, а список рынков отдаёт тикеры кнопками — следующий рынок выбирается тапом, а не ручным вводом.
+
+Меню команд проставляется в Telegram при старте (`set_my_commands`): без него автодополнение по «/» пустое, и про возможности бота можно узнать только из чужого скриншота. Если меню поставить не удалось, бот пишет об этом в лог и продолжает работать: меню — это подсказка, а не зависимость.
+
+Откуда именно берутся числа — это то, что решает, могут ли бот и сайт расходиться:
+
+| Команда | Источник | Нужен бэкенд Wake |
+| --- | --- | --- |
+| `/price`, `/markets` | `lighter_rest.py` — публичный REST Lighter, тот же клиент и та же `WAKE_LIGHTER_NETWORK`, что у «Терминала» | нет |
+| `/funding` | `funding_arb.funding_rate_rows` — та же функция, ответ которой отдаёт `GET /funding/rates` | нет |
+| `/predict` | `GET /predict/markets` на `WAKE_BACKEND_URL` | да: рынки живут в базе Wake |
+
+Если бэкенд недоступен, `/predict` так и пишет и называет в сообщении `WAKE_BACKEND_URL`, а не показывает пустой список. Внутри docker-compose эта переменная — `http://app:8000`: в контейнере бота на `localhost:8000` слушать некому.
+
+`WAKE_MINIAPP_URL` — адрес, который открывает кнопка «Открыть Wake». Bot API отбраковывает кнопку `web_app` с не-https адресом, и не кнопку, а весь ответ целиком; поэтому на http-адресе бот кнопку не ставит, объясняет причину в `/start` и пишет о ней в лог на старте, а не падает на каждом сообщении.
+
+Бот read-only по устройству: сессии, ключа и account index у него нет, и из сообщения Telegram в проекте не осталось ни одного пути к `/place-order`.
 
 ### Резолвер Predict
 
@@ -171,7 +183,7 @@ Price-рынки закрываются по дедлайну только по�
 # бэкенд — из backend/; нужна отдельная PostgreSQL-база для тестов
 createdb wake_test
 export WAKE_TEST_DATABASE_URL=postgresql+asyncpg://wake:wake@localhost:5432/wake_test
-python -m unittest discover        # 296 тестов, всё через discover
+python -m unittest discover        # 333 теста, всё через discover
 python -m pytest -q                # тот же набор под pytest (в CI ещё и Allure)
 
 # фронтенд
@@ -202,7 +214,7 @@ PW_PORT=5178 npx playwright test
   - `funding.py` — сравнение площадок и расчёты carry
 - Хранилище одно — PostgreSQL: `database.py` (async-движок), `pg_models.py` (схема), `alembic/` (миграции) и репозитории `db.py`, `predict_db.py`, `agent_db.py`, `audit_log.py`, `subscription.py`
 - Ядро логики — в корневых модулях, и тестируется отдельно: `mirror_engine.py`, `leader_position_tracker.py`, `predict_amm.py`, `predict_resolution.py`, `portfolio_risk.py`, `funding_arb.py`, `agent_decision.py`, `agent_memory.py`, `risk_limits.py`, `rate_limiter.py`, `cache.py`
-- Конфигурация читается один раз — `backend/config.py`, и каждая переменная там валидируется: недопустимое сочетание (живые ордера на mainnet без второго переключателя, не-PostgreSQL URL) останавливает процесс на старте
+- Конфигурация читается один раз — `backend/config.py`, и каждая его собственная переменная валидируется там: недопустимое сочетание (живые ордера на mainnet без второго переключателя, не-PostgreSQL URL) останавливает процесс на старте. Несколько переменных живут вне него, потому что относятся к одному процессу: тройка ключей подписи в `signing_service.py`, `WAKE_MASTER_KEY` и `WAKE_KEYSTORE_PATH` в `encrypted_key_store.py`, `WAKE_TEST_DATABASE_URL` в тестах, `WAKE_ORDER_*` в `place_order_example.py`. Все они перечислены в `backend/.env.example` с указанием, кто именно их читает.
 
 ### Фронтенд (React + TypeScript + Vite + Tailwind + wagmi)
 
@@ -220,8 +232,17 @@ PW_PORT=5178 npx playwright test
 
 Проект `wake` → https://wake-7k6.pages.dev.
 
-- команда сборки `npm run build`, выходная директория `dist`, Node 24
-- переменные `VITE_*` задаются как build-ENV: они компилируются в бандл, значит смена одной из них требует пересборки
+- Проект **не** привязан к Git и не имеет конфигурации сборки на Cloudflare: артефакт собирается локально (`npm run build`, выход — `dist`) и загружается wrangler'ом. `npx wrangler pages project list` показывает `Git Provider: No`, а `builds` у проекта — null.
+- Отсюда следствие, о котором лучше знать заранее: значения `VITE_*` берутся из корневого `.env` **на машине, которая собирает**, потому что у самого деплоя переменных окружения нет. Они компилируются в бандл, и смена одной из них требует пересборки и перезагрузки. `.env` с пустым `VITE_TELEGRAM_BOT_NAME` даёт сайт с выключенным входом через Telegram, и дашборд Cloudflare об этом не сообщит — именно так в прод однажды уехал не тот @-имя бота.
+- Проверяйте, что реально уехало, а не лог сборки:
+
+```bash
+npx wrangler pages deployment list --project-name wake | head -5
+curl -s https://wake-7k6.pages.dev/ -o /tmp/i.html
+grep -o 'assets/index-[A-Za-z0-9_-]*\.js' /tmp/i.html      # имя бандла и есть id сборки
+curl -s https://wake-7k6.pages.dev/assets/<это-имя>.js | grep -c waketrade_bot
+```
+
 - `public/_redirects` содержит `/* /index.html 200`, чтобы глубокие ссылки SPA открывались
 
 Важное следствие: Pages отвечает `index.html` со статусом 200 на **любой** неизвестный путь, поэтому запрос к API на хост без бэкенда возвращает HTML. `src/lib/backend.ts` превращает это в читаемое «по этому адресу бэкенда Wake нет» вместо SyntaxError, и панели печатают, какие три продолжают работать.

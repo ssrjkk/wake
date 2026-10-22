@@ -54,35 +54,17 @@ jobs:
         run: pip install pip-audit --quiet
       - name: Scan dependencies for vulnerabilities
         working-directory: backend
-        # ВоркAround запрещён, поэтому gate честный: падает на ЛЮБОЙ новой
-        # уязвимости. Единственное исключение — urllib3, и оно обосновано, а не
-        # заглушено: signing_service.py строит ордеры через lighter.SignerClient,
-        # а lighter-sdk жёстко пинит urllib3<2.1.0 (в 1.1.5 и в свежем 1.1.6),
-        # тогда как все пропатченные urllib3 ≥2.2. Версию поднять нельзя, не
-        # сломав подпись ордеров. Как только lighter-sdk ослабит кап и urllib3
-        # обновится, это условие перестанет срабатывать само — кода-заглушки нет.
+        # Individual urllib3 advisories blocked by lighter-sdk; risk review is in SECURITY.md.
         run: |
-          pip-audit -r requirements.txt --format json > audit.json || true
-          python - <<'PY'
-          import json, sys
-          data = json.load(open("audit.json"))
-          vulns = data.get("dependencies", [])
-          offenders = [
-              v["name"]
-              for v in vulns
-              if v.get("vulns") and v["name"].lower() != "urllib3"
-          ]
-          blocked = [v["name"] for v in vulns if v.get("vulns")]
-          if blocked:
-              print("::warning title=Блок транзитивной зависимости::"
-                    "urllib3 уязвим, но заперт капом lighter-sdk (urllib3<2.1.0); "
-                    "нужен upstream-фикс, обход сломает подпись ордеров.")
-          if offenders:
-              print("::error::Уязвимости вне известного исключения: "
-                    + ", ".join(sorted(set(offenders))))
-              sys.exit(1)
-          print("OK: новых уязвимостей нет (учтено исключение urllib3).")
-          PY
+          pip-audit -r requirements.txt --strict \
+            --ignore-vuln CVE-2024-37891 \
+            --ignore-vuln CVE-2025-50181 \
+            --ignore-vuln CVE-2025-66418 \
+            --ignore-vuln CVE-2025-66471 \
+            --ignore-vuln CVE-2026-21441 \
+            --ignore-vuln CVE-2026-44431 \
+            --ignore-vuln CVE-2026-97687 \
+            --ignore-vuln CVE-2026-97689
 
   # ── Backend tests (pytest + Allure) ──────────────────────────────────────
   backend-tests:
@@ -221,8 +203,10 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
       - run: npm ci
+      - name: Audit frontend dependencies
+        run: npm audit
       - name: ESLint
-        run: npm run lint
+        run: npm run lint -- --max-warnings 0
       - name: TypeScript type check
         run: npx tsc --noEmit
       - name: Build
@@ -267,7 +251,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: [backend-tests, frontend-tests]
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     steps:
       - uses: actions/checkout@v7
       - name: Build backend image
@@ -276,4 +259,5 @@ jobs:
           docker tag wake-backend:${{ github.sha }} wake-backend:latest
       - name: Verify image
         run: |
-          docker run --rm wake-backend:${{ github.sha }} python -c "import app; print('OK')"
+          docker run --rm --network none wake-backend:${{ github.sha }} \
+            sh -c 'python -c "import app; print(\"OK\")" && alembic heads'

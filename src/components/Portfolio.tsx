@@ -33,10 +33,7 @@ export default function Portfolio({ following, setTab, togglePause, unfollow, si
   const [mirrorLogError, setMirrorLogError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (lighterAccountIndex == null) {
-      setAccount(null);
-      return;
-    }
+    if (lighterAccountIndex == null) return;
     let cancelled = false;
     async function load() {
       try {
@@ -58,10 +55,7 @@ export default function Portfolio({ following, setTab, togglePause, unfollow, si
   }, [lighterAccountIndex]);
 
   useEffect(() => {
-    if (!signedIn) {
-      setMirrorLog(null);
-      return;
-    }
+    if (!signedIn) return;
     let cancelled = false;
     async function load() {
       try {
@@ -101,14 +95,14 @@ export default function Portfolio({ following, setTab, togglePause, unfollow, si
       <section>
         <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: "12px" }}>
           <h2 style={{ fontSize: "16px", fontWeight: 600, color: "#fafafa", margin: 0 }}>Мои подписки</h2>
-          <span style={{ fontSize: "11px", color: "#666", fontFamily: "JetBrains Mono, monospace" }}>таблица follows</span>
+          <span style={{ fontSize: "11px", color: "var(--text-muted)", fontFamily: "JetBrains Mono, monospace" }}>таблица follows</span>
         </div>
         {following.length === 0 ? (
           <div className="empty-state">
             <p style={{ fontSize: "14px", color: "#a0a0a0", marginBottom: "4px" }}>
               {signedIn ? "Ты пока никого не копируешь" : "Войди через Telegram или кошелёк — подписки привязаны к подтверждённому входу"}
             </p>
-            <p style={{ fontSize: "12px", color: "#666", marginBottom: "16px", maxWidth: "400px" }}>
+            <p style={{ fontSize: "12px", color: "var(--text-muted)", marginBottom: "16px", maxWidth: "400px" }}>
               Подписка — это строка в <code style={{ color: "#a0a0a0" }}>follows</code> с аллокацией и потолком плеча. Её читает копи-движок из{" "}
               <code style={{ color: "#a0a0a0" }}>mirror_engine.py</code>.
             </p>
@@ -120,7 +114,7 @@ export default function Portfolio({ following, setTab, togglePause, unfollow, si
           <div className="table-scroll" style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", padding: "16px" }}>
             <table style={{ width: "100%", fontSize: "13px" }}>
               <thead>
-                <tr style={{ textAlign: "left", fontSize: "11px", color: "#666", borderBottom: "1px solid #1e1e1e" }}>
+                <tr style={{ textAlign: "left", fontSize: "11px", color: "var(--text-muted)", borderBottom: "1px solid #1e1e1e" }}>
                   <th style={{ paddingBottom: "8px", fontWeight: 400 }}>Лидер</th>
                   <th style={{ paddingBottom: "8px", fontWeight: 400 }}>Аллокация</th>
                   <th style={{ paddingBottom: "8px", fontWeight: 400 }}>Плечо</th>
@@ -159,7 +153,7 @@ export default function Portfolio({ following, setTab, togglePause, unfollow, si
                             unfollow(t.followId);
                           }
                         }}
-                        style={{ color: "#666", background: "none", border: "none", cursor: "pointer", padding: "14px", display: "flex", alignItems: "center", justifyContent: "center" }}
+                        style={{ color: "var(--text-muted)", background: "none", border: "none", cursor: "pointer", padding: "14px", display: "flex", alignItems: "center", justifyContent: "center" }}
                         title="Удалить подписку из follows"
                         aria-label="Удалить подписку"
                       >
@@ -177,22 +171,22 @@ export default function Portfolio({ following, setTab, togglePause, unfollow, si
       <section>
         <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: "12px" }}>
           <h2 style={{ fontSize: "16px", fontWeight: 600, color: "#fafafa", margin: 0 }}>Счёт на Lighter</h2>
-          <span style={{ fontSize: "11px", color: "#666", fontFamily: "JetBrains Mono, monospace" }}>GET /api/v1/account?by=index</span>
+          <span style={{ fontSize: "11px", color: "var(--text-muted)", fontFamily: "JetBrains Mono, monospace" }}>GET /api/v1/account?by=index</span>
         </div>
         {!hasWallet ? (
           <div className="empty-state">
             <div style={{ width: "28px", height: "28px", borderRadius: "50%", background: "#1a1a1a", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: "12px" }}>
-              <Wallet style={{ width: "20px", height: "20px", color: "#666" }} />
+              <Wallet style={{ width: "20px", height: "20px", color: "var(--text-muted)" }} />
             </div>
             <p style={{ fontSize: "14px", color: "#a0a0a0", margin: 0 }}>Кошелёк не подключён — позиции по адресу не видны</p>
-            <p style={{ fontSize: "12px", color: "#666", marginTop: "4px", maxWidth: "400px" }}>
+            <p style={{ fontSize: "12px", color: "var(--text-muted)", marginTop: "4px", maxWidth: "400px" }}>
               Вход через Telegram даёт подписки и журнал, но сам счёт на Lighter привязан к адресу. Подключи кошелёк в шапке.
             </p>
           </div>
         ) : lighterAccountIndex == null ? (
           <div className="empty-state">
             <p style={{ fontSize: "14px", color: "#a0a0a0", margin: 0 }}>Аккаунт на Lighter не найден</p>
-            <p style={{ fontSize: "12px", color: "#666", marginTop: "4px", maxWidth: "400px" }}>
+            <p style={{ fontSize: "12px", color: "var(--text-muted)", marginTop: "4px", maxWidth: "400px" }}>
               Регистрация — на app.lighter.xyz. Wake читает только публичные данные счёта и никогда не просит приватный ключ.
             </p>
           </div>
@@ -204,36 +198,36 @@ export default function Portfolio({ following, setTab, togglePause, unfollow, si
           <div style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", padding: "16px" }}>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "16px", marginBottom: "16px" }}>
               <div>
-                <div style={{ fontSize: "12px", color: "#666", marginBottom: "4px" }}>Капитал</div>
+                <div style={{ fontSize: "12px", color: "var(--text-muted)", marginBottom: "4px" }}>Капитал</div>
                 <div style={{ fontSize: "18px", fontFamily: "JetBrains Mono, monospace", color: "#fafafa" }}>{usd(account.equityUsd, 2)}</div>
               </div>
               <div>
-                <div style={{ fontSize: "12px", color: "#666", marginBottom: "4px" }}>Нереализованный PnL</div>
+                <div style={{ fontSize: "12px", color: "var(--text-muted)", marginBottom: "4px" }}>Нереализованный PnL</div>
                 <div style={{ fontSize: "18px", fontFamily: "JetBrains Mono, monospace", color: unrealized >= 0 ? "#10b981" : "#ef4444" }}>
                   {unrealized >= 0 ? "+" : ""}
                   {usd(unrealized, 2)}
                 </div>
               </div>
               <div>
-                <div style={{ fontSize: "12px", color: "#666", marginBottom: "4px" }}>Реализованный PnL</div>
+                <div style={{ fontSize: "12px", color: "var(--text-muted)", marginBottom: "4px" }}>Реализованный PnL</div>
                 <div style={{ fontSize: "18px", fontFamily: "JetBrains Mono, monospace", color: account.realizedPnlUsd >= 0 ? "#10b981" : "#ef4444" }}>
                   {account.realizedPnlUsd >= 0 ? "+" : ""}
                   {usd(account.realizedPnlUsd, 2)}
                 </div>
               </div>
               <div>
-                <div style={{ fontSize: "12px", color: "#666", marginBottom: "4px" }}>Открытых позиций</div>
+                <div style={{ fontSize: "12px", color: "var(--text-muted)", marginBottom: "4px" }}>Открытых позиций</div>
                 <div style={{ fontSize: "18px", fontFamily: "JetBrains Mono, monospace", color: "#fafafa" }}>{fmt(openPositions.length)}</div>
               </div>
             </div>
 
             {openPositions.length === 0 ? (
-              <p style={{ fontSize: "13px", color: "#666", margin: 0 }}>Открытых позиций нет — lighter возвращает строку на каждый рынок, который счёт когда-либо трогал.</p>
+              <p style={{ fontSize: "13px", color: "var(--text-muted)", margin: 0 }}>Открытых позиций нет — lighter возвращает строку на каждый рынок, который счёт когда-либо трогал.</p>
             ) : (
               <div className="table-scroll">
               <table style={{ width: "100%", fontSize: "13px", minWidth: "600px" }}>
                 <thead>
-                  <tr style={{ textAlign: "left", fontSize: "11px", color: "#666", borderBottom: "1px solid #1e1e1e" }}>
+                  <tr style={{ textAlign: "left", fontSize: "11px", color: "var(--text-muted)", borderBottom: "1px solid #1e1e1e" }}>
                     <th style={{ paddingBottom: "8px", fontWeight: 400 }}>Рынок</th>
                     <th style={{ paddingBottom: "8px", fontWeight: 400 }}>Размер</th>
                     <th style={{ paddingBottom: "8px", fontWeight: 400 }}>Средняя входа</th>
@@ -256,7 +250,7 @@ export default function Portfolio({ following, setTab, togglePause, unfollow, si
                         {p.unrealizedPnl >= 0 ? "+" : ""}
                         {usd(p.unrealizedPnl, 2)}
                       </td>
-                      <td style={{ padding: "10px 0", fontFamily: "JetBrains Mono, monospace", color: "#666" }}>{p.liquidationPrice > 0 ? `$${fmt(p.liquidationPrice, decimalsOf(p.marketId))}` : "—"}</td>
+                      <td style={{ padding: "10px 0", fontFamily: "JetBrains Mono, monospace", color: "var(--text-muted)" }}>{p.liquidationPrice > 0 ? `$${fmt(p.liquidationPrice, decimalsOf(p.marketId))}` : "—"}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -265,7 +259,7 @@ export default function Portfolio({ following, setTab, togglePause, unfollow, si
             )}
           </div>
         ) : (
-          <div style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", padding: "24px", fontSize: "13px", color: "#666" }}>Загружаю счёт…</div>
+          <div style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", padding: "24px", fontSize: "13px", color: "var(--text-muted)" }}>Загружаю счёт…</div>
         )}
       </section>
 
@@ -273,17 +267,17 @@ export default function Portfolio({ following, setTab, togglePause, unfollow, si
         <section>
           <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: "12px" }}>
             <h2 style={{ fontSize: "16px", fontWeight: 600, color: "#fafafa", margin: 0 }}>Журнал копи-движка</h2>
-            <span style={{ fontSize: "11px", color: "#666", fontFamily: "JetBrains Mono, monospace" }}>таблица mirror_log</span>
+            <span style={{ fontSize: "11px", color: "var(--text-muted)", fontFamily: "JetBrains Mono, monospace" }}>таблица mirror_log</span>
           </div>
           <div style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", padding: "16px" }}>
             {mirrorLog === null ? (
-              <p style={{ fontSize: "13px", color: "#666", margin: 0 }}>Читаю журнал…</p>
+              <p style={{ fontSize: "13px", color: "var(--text-muted)", margin: 0 }}>Читаю журнал…</p>
             ) : mirrorLogError ? (
               <p style={{ fontSize: "13px", color: "#ef4444", margin: 0 }}>
                 Не удалось загрузить журнал: {mirrorLogError}
               </p>
             ) : mirrorLog.length === 0 ? (
-              <p style={{ fontSize: "13px", color: "#666", lineHeight: 1.6, margin: 0 }}>
+              <p style={{ fontSize: "13px", color: "var(--text-muted)", lineHeight: 1.6, margin: 0 }}>
                 Пусто. Строки появляются, когда <code style={{ color: "#a0a0a0" }}>leader_listener.py</code> видит изменение позиции лидера по одной из
                 твоих подписок. С <code style={{ color: "#a0a0a0" }}>WAKE_DRY_RUN=true</code> (значение по умолчанию) исход пишется как{" "}
                 <code style={{ color: "#a0a0a0" }}>dry_run</code>, ордер на Lighter не уходит. Проверить расчёт без листенера можно запросом{" "}
@@ -293,7 +287,7 @@ export default function Portfolio({ following, setTab, togglePause, unfollow, si
               <div className="table-scroll">
                 <table style={{ width: "100%", fontSize: "13px" }}>
                   <thead>
-                    <tr style={{ textAlign: "left", fontSize: "11px", color: "#666", borderBottom: "1px solid #1e1e1e" }}>
+                    <tr style={{ textAlign: "left", fontSize: "11px", color: "var(--text-muted)", borderBottom: "1px solid #1e1e1e" }}>
                       <th style={{ paddingBottom: "8px", fontWeight: 400 }}>Время</th>
                       <th style={{ paddingBottom: "8px", fontWeight: 400 }}>Лидер</th>
                       <th style={{ paddingBottom: "8px", fontWeight: 400 }}>Рынок</th>
@@ -305,19 +299,19 @@ export default function Portfolio({ following, setTab, togglePause, unfollow, si
                   <tbody>
                     {mirrorLog.map((r) => (
                       <tr key={r.id} style={{ borderBottom: "1px solid #1e1e1e" }}>
-                        <td style={{ padding: "10px 0", color: "#666", fontFamily: "JetBrains Mono, monospace", fontSize: "12px", whiteSpace: "nowrap" }}>{new Date(r.created_at * 1000).toLocaleString("ru-RU")}</td>
+                        <td style={{ padding: "10px 0", color: "var(--text-muted)", fontFamily: "JetBrains Mono, monospace", fontSize: "12px", whiteSpace: "nowrap" }}>{new Date(r.created_at * 1000).toLocaleString("ru-RU")}</td>
                         <td style={{ padding: "10px 0", color: "#a0a0a0" }}>{r.leader_handle}</td>
                         <td style={{ padding: "10px 0", color: "#fafafa" }}>
                           {symbolOf(r.market_id)}
-                          {r.reduce_only === 1 && <span style={{ marginLeft: "6px", fontSize: "11px", color: "#666" }}>закрытие</span>}
+                          {r.reduce_only === 1 && <span style={{ marginLeft: "6px", fontSize: "11px", color: "var(--text-muted)" }}>закрытие</span>}
                         </td>
                         <td style={{ padding: "10px 0", fontFamily: "JetBrains Mono, monospace", fontSize: "12px", color: r.side === "long" ? "#10b981" : "#ef4444" }}>{r.side.toUpperCase()}</td>
                         <td style={{ padding: "10px 0", fontFamily: "JetBrains Mono, monospace", color: "#a0a0a0" }}>{fmt(r.base_amount, 4)}</td>
                         <td style={{ padding: "10px 0" }}>
                           <span style={{ fontSize: "11px", padding: "2px 8px", borderRadius: "3px", fontFamily: "JetBrains Mono, monospace", background: STATUS_STYLE[r.status].bg, color: STATUS_STYLE[r.status].color, border: STATUS_STYLE[r.status].border ? `1px solid ${STATUS_STYLE[r.status].border}` : "none" }}>{r.status}</span>
-                          {r.reason && <span style={{ marginLeft: "8px", fontSize: "12px", color: "#666" }}>{r.reason}</span>}
+                          {r.reason && <span style={{ marginLeft: "8px", fontSize: "12px", color: "var(--text-muted)" }}>{r.reason}</span>}
                           {r.tx_hash && (
-                            <span style={{ marginLeft: "8px", fontSize: "12px", color: "#666", fontFamily: "JetBrains Mono, monospace" }} title={r.tx_hash}>
+                            <span style={{ marginLeft: "8px", fontSize: "12px", color: "var(--text-muted)", fontFamily: "JetBrains Mono, monospace" }} title={r.tx_hash}>
                               {r.tx_hash.slice(0, 10)}…
                             </span>
                           )}

@@ -15,6 +15,10 @@ x-backend: &backend
     - WAKE_DATABASE_URL=postgresql+asyncpg://wake:wake@postgres:5432/wake
     - WAKE_REDIS_URL=redis://redis:6379/0
     - WAKE_SIGNING_SERVICE_URL=http://signing:8787
+    # Как добраться до API изнутри сети: у telegram_bot нет другого способа
+    # позвать /predict. Без этого бот в контейере стучится на свой localhost:8000,
+    # где ничего не слушает, и отвечает «бэкенд недоступен» на живом app.
+    - WAKE_BACKEND_URL=http://app:8000
     - WAKE_KEYSTORE_PATH=/app/data/keystore.enc
     - WAKE_LIGHTER_NETWORK=mainnet
     # Локальные значения-заглушки: без секрета сессии вход отвечает 503, и стек

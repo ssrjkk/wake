@@ -1,4 +1,4 @@
-// ESLint 9 (flat config). Type-checked правила — только для исходников src/:
+// Type-checked правила — только для исходников src/:
 // это самый строгий режим typescript-eslint, он ловит реальные баги (floating
 // promises, unsafe any), но требует projectService и замедляет прогон.
 import eslint from "@eslint/js";
