@@ -455,7 +455,7 @@ export default function App() {
                 <div className="w-7 h-7 rounded-[5px] bg-[var(--accent)] flex items-center justify-center">
                   <Zap className="w-4 h-4 text-[#0a0a0a]" strokeWidth={2.5} />
                 </div>
-                <span className="text-[17px] font-bold tracking-[-0.02em] text-[var(--fg)]">Wake</span>
+                <span className="wordmark">Wake</span>
               </div>
 
               <div className="seg" role="group" aria-label="Сеть Lighter и Arcus">

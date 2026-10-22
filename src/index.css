@@ -1,10 +1,14 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Azeret+Mono:wght@700;900&display=swap');
 @import "tailwindcss";
 
 /* Тема v4 живёт здесь: tailwind.config.js в четвёртой версии не подхватывается. */
 @theme {
   --font-sans: 'Inter', system-ui, -apple-system, sans-serif;
   --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+  /* Дисплейный моно — только для крупных чисел и вордмарка. Azeret Mono на
+     700/900 — это приборная цифра: широкая, табличная, с весом, который держит
+     44px. В таблицу на 12px он не идёт — там остаётся JetBrains Mono. */
+  --font-display: 'Azeret Mono', 'JetBrains Mono', ui-monospace, monospace;
 
   --animate-fade-in: fade-in 0.16s ease-out;
 
@@ -47,12 +51,21 @@
     --warn: #fbbf24;
 
     /* Шкала. 11 — подписи над значениями, 12 — все числа в таблице,
-       13 — интерфейс, 15 — заголовок панели, 26 — цена рынка. */
+       13 — интерфейс, 15 — заголовок панели. Цена рынка — fluid: на 1440 это
+       44px приборной цифры, на телефоне — 28px, которые влезут в строку вместе
+       с чипом изменения. */
     --fs-label: 10.5px;
     --fs-data: 12px;
     --fs-ui: 13px;
     --fs-title: 15px;
-    --fs-price: 26px;
+    --fs-price: clamp(26px, 2.6vw, 36px);
+
+    /* Направление в ленте тиков и в баре оборота: та же пара цветов, но слоями,
+       потому что сплошной столбик на весь ряд перетянул бы внимание с цифры. */
+    --up-soft: rgba(16, 185, 129, 0.5);
+    --down-soft: rgba(239, 68, 68, 0.5);
+    --up-faint: rgba(16, 185, 129, 0.14);
+    --down-faint: rgba(239, 68, 68, 0.14);
 
     --r: 4px;
 
@@ -197,13 +210,33 @@
   }
 
   /* ── Строка рынка ─────────────────────────────────────────────────────── */
+  /* Строка рынка — сетка с явными областями, а не flex-wrap: символ, число и
+     чип стоят одной строкой, цифры — своей, лента — последней. На flex-wrap
+     цифры втискивались в остаток и рвались на два ряда в случайном месте. */
   .terminal-asset-header {
-    display: flex;
-    align-items: flex-end;
-    gap: 28px;
+    display: grid;
+    grid-template-columns: auto auto minmax(0, 1fr);
+    grid-template-areas:
+      "sym quote ."
+      "stats stats stats"
+      "tape tape tape";
+    align-items: end;
+    column-gap: 18px;
+    row-gap: 10px;
     padding: 14px;
     background: var(--bg-1);
-    flex-wrap: wrap;
+  }
+
+  .terminal-asset-header > .desk-symbol { grid-area: sym; }
+  .terminal-asset-header > .desk-quote { grid-area: quote; }
+  .terminal-asset-header > .desk-stats { grid-area: stats; }
+  .terminal-asset-header > .desk-tape { grid-area: tape; }
+
+  .desk-quote {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    min-width: 0;
   }
 
   .desk-symbol {
@@ -227,29 +260,118 @@
     letter-spacing: -0.01em;
   }
 
-  .desk-price {
-    font-family: var(--font-mono);
-    font-variant-numeric: tabular-nums;
-    font-size: var(--fs-price);
-    font-weight: 600;
-    line-height: 1;
-    letter-spacing: -0.02em;
+  /* Вордмарк и крупная цена — одна дисплейная грань на весь прибор. */
+  .wordmark {
+    font-family: var(--font-display);
+    font-size: 17px;
+    font-weight: 900;
+    letter-spacing: -0.05em;
+    text-transform: uppercase;
     color: var(--fg);
   }
 
+  .desk-price {
+    font-family: var(--font-display);
+    font-variant-numeric: tabular-nums;
+    font-size: var(--fs-price);
+    font-weight: 700;
+    line-height: 0.95;
+    letter-spacing: -0.045em;
+    color: var(--fg);
+    /* Мигает только само число: подсветка строки или панели под changing value
+       выглядела бы как уведомление, а не как тик. */
+    padding: 2px 6px;
+    margin: -2px -6px;
+    border-radius: 3px;
+  }
+
+  .desk-price.tick-up { animation: tickUp 0.5s ease-out both; color: var(--up); }
+  .desk-price.tick-down { animation: tickDown 0.5s ease-out both; color: var(--down); }
+
+  @keyframes tickUp {
+    0%, 55% { background: var(--up-faint); }
+    100% { background: transparent; }
+  }
+
+  @keyframes tickDown {
+    0%, 55% { background: var(--down-faint); }
+    100% { background: transparent; }
+  }
+
+  /* ── Лента тиков ─────────────────────────────────────────────────────────
+     Ряд часовых баров под ценой: высота — |close − open| часа, нормированная по
+     максимальному ходу в окне, цвет — направление часа. Это тот же массив
+     свечей, что уже отдан под график, новых запросов лента не просит. Смысл —
+     увидеть, как шёл день, не читая четыре числа: прибор, а не украшение. */
+  /* Лента занимает всю ширину строки рынка: 48 часовых баров на всю полосу
+     читаются как «как прошёл день» одним движением глаза, а в колонке 300px они
+     превращались в шум. */
+  .desk-tape {
+    display: flex;
+    align-items: flex-end;
+    gap: 2px;
+    flex: 1 1 100%;
+    min-width: 0;
+    height: 44px;
+    overflow: hidden;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .tape-bar {
+    flex: 1 1 0;
+    min-width: 2px;
+    min-height: 3px;
+    border-radius: 1px 1px 0 0;
+    transform-origin: bottom;
+    animation: tapeRise 0.26s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  }
+
+  .tape-bar.up { background: var(--up-soft); }
+  .tape-bar.down { background: var(--down-soft); }
+
+  /* Последний бар — текущий, ещё формирующийся час: он помечен акцентом, чтобы
+     глаз не принимал незакрытый интервал за закрытый. */
+  .tape-bar.current { background: var(--accent); }
+
+  @keyframes tapeRise {
+    from { transform: scaleY(0); opacity: 0.35; }
+    to { transform: scaleY(1); opacity: 1; }
+  }
+
+  /* Проявление графика: кривая рисуется слева направо один раз на смену рынка.
+     clip-path по контейнеру, а не по SVG-пути — recharts перерисовывает путь сам,
+     и анимация штриха зависела бы от длины пути, которой у нас нет. */
+  .chart-wipe { animation: chartWipe 0.52s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
+
+  @keyframes chartWipe {
+    from { clip-path: inset(0 100% 0 0); }
+    to { clip-path: inset(0 0 0 0); }
+  }
+
+  /* Новая сделка в ленте въезжает на 4px: список обновляется каждые 4 секунды,
+     и без этого невозможно увидеть, какая строка свежая. */
+  @keyframes rowIn {
+    from { opacity: 0; transform: translateY(-4px); }
+    to { opacity: 1; transform: none; }
+  }
+
+  .trade-row { animation: rowIn 0.18s ease-out both; }
+
+  /* Цифры растянуты по всей ширине своей строки: четыре значения, разнесённые
+     поровну, читаются как шкала, а не как правый угол шапки. */
   .desk-stats {
     display: flex;
     align-items: flex-start;
-    gap: 24px;
-    margin-left: auto;
+    gap: 14px 18px;
     flex-wrap: wrap;
+    justify-content: space-between;
   }
 
   .desk-stat {
     display: flex;
     flex-direction: column;
     gap: 2px;
-    min-width: 72px;
+    min-width: 62px;
   }
 
   .desk-stat > b {
@@ -350,6 +472,7 @@
     display: grid;
     align-items: center;
     gap: 10px;
+    position: relative;
     width: 100%;
     text-align: left;
     padding: 7px 12px 7px 11px;
@@ -361,6 +484,25 @@
     font-size: var(--fs-data);
     cursor: pointer;
   }
+
+  /* Полоса оборота — тонкая линия внизу строки, а не заливка фона: за логарифмом
+     обороты видимых рынков лежат в одном-двух порядках, и заливка делала из
+     списка красное/зелёное пятно, где ранг не читается вовсе. 2px у нижнего края
+     дают тот же порядок без шума. */
+  .row-vol {
+    position: absolute;
+    left: 0;
+    bottom: 0;
+    height: 2px;
+    width: var(--w, 0%);
+    background: var(--line-strong);
+    pointer-events: none;
+    transition: width 0.24s cubic-bezier(0.2, 0.8, 0.2, 1), background 0.12s;
+  }
+
+  .desk-row:hover .row-vol { background: var(--accent); }
+  .desk-row[aria-current="true"] .row-vol { background: var(--accent); }
+  .desk-row > span { position: relative; }
 
   .desk-row:hover { background: var(--bg-2); color: var(--fg); }
 
@@ -405,25 +547,37 @@
   .scrollbar-hide { scrollbar-width: none; }
   .scrollbar-hide::-webkit-scrollbar { display: none; }
 
-  /* Вкладки: подчёркивание и вес, без подложки. Акцентная полоса — единственное,
-     что отвечает на вопрос «где я». */
+  /* Вкладки: подчёркивание рисуется слева направо, а не включается. Полоска —
+     единственное, что отвечает на вопрос «где я», поэтому она одна и без подложки. */
   .nav-tab {
     display: inline-flex;
     align-items: center;
     gap: 6px;
     position: relative;
-    padding: 9px 12px;
+    padding: 9px 12px 10px;
     font-size: var(--fs-ui);
     font-weight: 500;
     color: var(--fg-3);
     background: none;
     border: none;
-    border-bottom: 2px solid transparent;
     margin-bottom: -1px;
     white-space: nowrap;
     min-height: var(--touch);
     cursor: pointer;
-    transition: color 0.12s;
+    transition: color 0.14s;
+  }
+
+  .nav-tab::after {
+    content: "";
+    position: absolute;
+    left: 8px;
+    right: 8px;
+    bottom: 0;
+    height: 2px;
+    background: var(--accent);
+    transform: scaleX(0);
+    transform-origin: left center;
+    transition: transform 0.22s cubic-bezier(0.2, 0.8, 0.2, 1);
   }
 
   .nav-tab:hover { color: var(--fg-2); }
@@ -431,8 +585,9 @@
   .nav-tab-active {
     color: var(--fg);
     font-weight: 600;
-    border-bottom-color: var(--accent);
   }
+
+  .nav-tab-active::after { transform: scaleX(1); }
 
   .live-indicator {
     width: 5px;
@@ -677,12 +832,17 @@
 
   @media (max-width: 1024px) {
     .terminal-layout { grid-template-columns: minmax(0, 1fr); }
-    .terminal-header, .terminal-asset-header { gap: 12px; padding: 10px 12px; }
-    .desk-stats { margin-left: 0; width: 100%; }
+    .terminal-header, .terminal-asset-header { gap: 10px 12px; padding: 10px 12px; }
+    /* Одна колонка: символ, число, цифры, лента — в порядке чтения. */
+    .terminal-asset-header {
+      grid-template-columns: minmax(0, 1fr);
+      grid-template-areas: "sym" "quote" "stats" "tape";
+      align-items: start;
+    }
   }
 
   @media (max-width: 768px) {
-    .desk-price { font-size: 22px; }
+    /* Размер цены задаёт clamp из токена: на узком экране она и так 28px. */
     .desk-stats { gap: 14px 18px; }
     .btn-primary { padding: 12px 18px; min-height: 44px; }
     .btn-action { padding: 14px; }

@@ -72,6 +72,28 @@ from the commit history rather than from a release.
 
 ### Changed
 
+- The market row of the Terminal became an instrument instead of a header: a grid
+  with named areas (symbol, quote, stats, tape) rather than a flex-wrap that
+  dropped the numbers wherever there was room. The quote is set in a display
+  mono — Azeret Mono 700, tabular, tight-tracked — used only for the big number
+  and the wordmark; tables and labels keep JetBrains Mono and Inter.
+- New signature element: the hourly tick tape. One bar per candle of the same 48
+  candles the chart already uses (no extra requests), height is the hour's range
+  relative to the largest in the window on a 0.7 power, colour is that hour's
+  direction, and the forming hour is capped in the accent. It answers "how did
+  the day move" before you read a single number, and it is exposed to screen
+  readers as one labelled image.
+- Motion now marks data change, not page furniture: the quote flashes green/red
+  when the price actually ticks, the chart wipes in left-to-right once per market
+  switch, a new trade slides into the tape, the active tab's underline draws
+  itself, and each market row carries a 2px liquidity rank along its bottom edge.
+  All of it is switched off by `prefers-reduced-motion`, which the browser suite
+  asserts.
+- Playwright runs one worker locally too. On an 8 GB machine where several
+  browser agents work at once, four chromiums plus the dev server starved
+  navigation past the 30 s timeout and the whole suite failed on "not visible";
+  serially the same 14 tests finish in about twenty seconds.
+
 - The Telegram bot answers in HTML cards instead of plain lines: numbers sit in a
   monospace block so the volume columns line up, market and funding lists carry
   the tickers as buttons, a bare ticker typed in chat is the same as `/price`, and

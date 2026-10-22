@@ -13,7 +13,11 @@ export default defineConfig({
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   retries: process.env.CI ? 2 : 0,
-  workers: process.env.CI ? 1 : undefined,
+  // Один воркер всегда, а не только в CI: на машине с 8 ГБ, где параллельно
+  // работают несколько браузерных агентов, четыре chromium вместе с vite
+  // выжимают навигацию за 30 секунд таймаута, и весь suite падает «не видно
+  // элемент» на ровном месте. Последовательно — 14 тестов за ~20 секунд.
+  workers: 1,
   reporter: 'html',
   use: {
     baseURL: BASE_URL,

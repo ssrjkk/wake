@@ -18,7 +18,7 @@ Live backend: https://wake-backend-production-3483.up.railway.app — `/health` 
 | Panel | Where the data comes from | Works without the Wake backend |
 | --- | --- | --- |
 | Обзор (Overview) | Market ranking by real 24h quote volume (`/markets/overview`, 18 perp markets, cached 60 s) plus open Predict markets | no |
-| Терминал (Terminal) | Candles and recent trades from Lighter's public REST | reads yes; sending an order needs the signing service |
+| Терминал (Terminal) | Candles and recent trades from Lighter's public REST; the hourly tick tape under the quote is drawn from the same 48 candles the chart uses | reads yes; sending an order needs the signing service |
 | Discover | Leaders ranked by follower count and AUM, follow / pause / unfollow | no |
 | Портфель (Portfolio) | Your positions on Lighter looked up by L1 address (public REST); subscriptions and the copy-engine log from the backend | positions yes, copy state no |
 | Earn | Copy subscription state and trial activation | no |

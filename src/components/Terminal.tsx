@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Search } from "lucide-react";
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, ResponsiveContainer } from "recharts";
 import { getCandles, getRecentTrades, getFundingRates, getApiHost, placeOrderViaSigningService, type LighterNetwork, type OrderBook, type Candle, type Trade } from "../lib/lighter";
@@ -78,6 +78,11 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
   const [lastTradesUpdate, setLastTradesUpdate] = useState<Date | null>(null);
   const [tickers, setTickers] = useState<Record<number, Ticker | null>>({});
   const [nonce, setNonce] = useState(0);
+  /* Тик: куда и сколько раз изменилась цена. Нужен состоянием, а не выводом из
+     свечей при рендере — иначе анимация вспыхивала бы на каждой перерисовке
+     страницы, а не на смене числа. */
+  const [tick, setTick] = useState<{ dir: "up" | "down" | null; serial: number }>({ dir: null, serial: 0 });
+  const lastTick = useRef<{ id: number; price: number } | null>(null);
 
   const currentMarket = markets.find((m) => m.symbol === asset);
   const marketId = currentMarket?.market_id;
@@ -98,11 +103,24 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
 
   useEffect(() => {
     if (marketId == null) return;
+    const id = marketId;
     let live = true;
     function load() {
-      getCandles(marketId!, "1h", 48)
+      getCandles(id, "1h", 48)
         .then((data) => {
           if (!live) return;
+          const priceNow = data[data.length - 1]?.c;
+          const prev = lastTick.current;
+          /* Вспышка только на настоящем тике: первая загрузка рынка и ответ
+             провайдера, пришедший после смены рынка, не должны притворяться
+             изменением цены. */
+          if (priceNow != null) {
+            if (prev && prev.id === id && prev.price !== priceNow) {
+              const dir = priceNow > prev.price ? "up" : "down";
+              setTick((t) => ({ dir, serial: t.serial + 1 }));
+            }
+            lastTick.current = { id, price: priceNow };
+          }
           setCandles(data);
           setCandlesError(null);
           setLastCandlesUpdate(new Date());
@@ -111,8 +129,8 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
         .finally(() => { if (live) setCandlesPending(false); });
     }
     load();
-    const id = setInterval(load, 20000);
-    return () => { live = false; clearInterval(id); };
+    const timer = setInterval(load, 20000);
+    return () => { live = false; clearInterval(timer); };
   }, [marketId]);
 
   useEffect(() => {
@@ -209,6 +227,36 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
     };
   }, [candles]);
 
+  /* Лента тиков: величина часа относительно максимального хода в окне. Берётся
+     из тех же 48 свечей, что и график, — отдельных запросов лента не делает.
+     Степень 0.7, а не линейная доля: один час с ходом в 3% на линейной шкале
+     прижимает остальные к нулю, и «как шёл день» перестаёт читаться; в чистом
+     квадрате наоборот — тихие часы кричат так же, как громкие. */
+  const tape = useMemo(() => {
+    if (candles.length < 2) return [];
+    const mags = candles.map((c) => Math.abs(c.c - c.o));
+    const max = Math.max(...mags);
+    return mags.map((m, i) => ({
+      height: max > 0 ? Math.max(0.08, Math.pow(m / max, 0.7)) : 0.5,
+      up: candles[i].c >= candles[i].o,
+      current: i === mags.length - 1,
+    }));
+  }, [candles]);
+
+  const tapeLabel = useMemo(() => {
+    if (!tape.length || !lastCandle) return null;
+    const hour = lastCandle.c - lastCandle.o;
+    return `Ход цены по часам: ${tape.length} шт, последний час ${hour >= 0 ? "рост" : "падение"} на ${Math.abs(hour) ? fmt(Math.abs((hour / (lastCandle.o || 1)) * 100), 2) + "%" : "без изменения"}`;
+  }, [tape, lastCandle]);
+
+  const visibleMarkets = filteredMarkets.slice(0, TICKER_ROWS);
+  const maxVolume = visibleMarkets.reduce((acc, m) => Math.max(acc, tickers[m.market_id]?.volume24h ?? 0), 0);
+  /* Полоса оборота — логарифм, а не доля от максимума: обороты видимых рынков
+     расходятся на порядки, и на линейной шкале у половины списка полоса была бы
+     нулевой. Порядок сохраняется, пропорция нет — поэтому это ранг
+     ликвидности, а не «сколько процентов от лидера». */
+  const volRank = (v: number) => (v > 0 && maxVolume > 0 ? Math.log1p(v) / Math.log1p(maxVolume) : 0);
+
   const liqPrice = useMemo(() => {
     if (price == null) return null;
     const dist = price * (1 / Math.max(leverage, 1)) * 0.9;
@@ -273,18 +321,23 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
             <span className="chip">{currentMarket?.market_type ?? "—"}{currentMarket ? ` · #${currentMarket.market_id}` : ""}</span>
           </button>
 
-          <div style={{ display: "flex", alignItems: "baseline", gap: "10px" }}>
-            <span className="desk-price">{price == null ? "—" : `$${fmt(price, decimals)}`}</span>
+          <div className="desk-quote">
+            <span
+              key={tick.serial}
+              className={`desk-price${tick.dir ? ` tick-${tick.dir}` : ""}`}
+            >
+              {price == null ? "—" : `$${fmt(price, decimals)}`}
+            </span>
             <span className={`chip ${change == null ? "" : up ? "chip-up" : "chip-down"}`}>{pct(change)} / 24ч</span>
           </div>
 
           <div className="desk-stats">
             <div className="desk-stat">
-              <span className="label">Максимум 24ч</span>
+              <span className="label">Макс 24ч</span>
               <b>{stats24h ? fmt(stats24h.high, decimals) : "—"}</b>
             </div>
             <div className="desk-stat">
-              <span className="label">Минимум 24ч</span>
+              <span className="label">Мин 24ч</span>
               <b>{stats24h ? fmt(stats24h.low, decimals) : "—"}</b>
             </div>
             <div className="desk-stat">
@@ -296,6 +349,20 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
               <b>{fundingRate == null ? "нет ставки" : `${(fundingRate * 100).toFixed(4)}%/ч`}</b>
             </div>
           </div>
+
+          {/* Лента — последняя в потоке: на узком экране числа должны вестись
+              первыми, а полоса хода дорисковывается под них. */}
+          {tape.length > 1 && (
+            <div className="desk-tape" role="img" aria-label={tapeLabel ?? "Ход цены по часам"}>
+              {tape.map((b, i) => (
+                <span
+                  key={i}
+                  className={`tape-bar ${b.current ? "current" : b.up ? "up" : "down"}`}
+                  style={{ height: `${Math.round(b.height * 100)}%`, animationDelay: `${Math.min(i * 5, 220)}ms` }}
+                />
+              ))}
+            </div>
+          )}
         </div>
 
         {/* ── График ───────────────────────────────────────────────────── */}
@@ -313,7 +380,7 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
               <p style={{ color: "var(--fg-3)", fontSize: "12px", margin: 0 }}>{getApiHost()} — {chartError}</p>
             </div>
           ) : (
-            <div className="desk-chart">
+            <div className="desk-chart chart-wipe" key={`chart-${asset}`}>
             <ResponsiveContainer width="100%" height="100%" minWidth={200} minHeight={200}>
               {/* Отступ слева — под половину ширины первой подписи оси: метки
                   стоят по центру своей точки, и на 30px «21.10 01:00» обрезалось
@@ -394,7 +461,7 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
                 </thead>
                 <tbody>
                   {trades.map((t) => (
-                    <tr key={`${t.id}-${t.timestamp}`}>
+                    <tr key={`${t.id}-${t.timestamp}`} className="trade-row">
                       <td className="num right" style={{ color: t.isAsk ? "var(--down)" : "var(--up)", textAlign: "left" }}>
                         {fmt(t.price, decimals)}
                       </td>
@@ -500,9 +567,10 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
               Ничего не найдено по «{searchQuery}».
             </p>
           ) : (
-            filteredMarkets.slice(0, TICKER_ROWS).map((m) => {
+            visibleMarkets.map((m) => {
               const t = tickers[m.market_id];
               const rowUp = (t?.changePct ?? 0) >= 0;
+              const share = t ? volRank(t.volume24h) : 0;
               return (
                 <button
                   key={m.market_id}
@@ -511,6 +579,13 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
                   aria-current={m.symbol === asset}
                   onClick={() => setAsset(m.symbol)}
                 >
+                  {t && (
+                    <i
+                      className="row-vol"
+                      aria-hidden="true"
+                      style={{ "--w": `${(share * 100).toFixed(1)}%` } as CSSProperties}
+                    />
+                  )}
                   <span style={{ display: "flex", alignItems: "center", gap: "6px", minWidth: 0 }}>
                     <b className="num" style={{ color: "var(--fg)", fontWeight: 600 }}>{m.symbol}</b>
                     <span style={{ fontSize: "10px", color: "var(--fg-3)", textTransform: "uppercase" }}>{m.market_type}</span>
