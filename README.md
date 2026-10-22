@@ -150,7 +150,7 @@ Price markets close themselves at the deadline only while this process runs; oth
 | Variable | Default | Notes |
 | --- | --- | --- |
 | `VITE_LIGHTER_NETWORK` | `mainnet` | must match the backend's `WAKE_LIGHTER_NETWORK`, or the site and the bot show different market ids |
-| `VITE_BACKEND_URL` | Railway URL | baked into the bundle, not changeable at runtime; set `http://localhost:8000` in `.env` for local dev |
+| `VITE_BACKEND_URL` | Railway URL | baked into the bundle, not changeable at runtime; set `http://localhost:8000` in `.env` for local dev, and note that a production build refuses a loopback value |
 | `VITE_SIGNING_SERVICE_URL` | `http://localhost:8787` | |
 | `VITE_WALLETCONNECT_PROJECT_ID` | empty | empty means no QR connector; injected wallets still work |
 | `VITE_TELEGRAM_BOT_NAME` | empty | empty disables the Telegram login panel |
@@ -244,6 +244,10 @@ curl -s https://wake-7k6.pages.dev/assets/<that-name>.js | grep -c waketrade_bot
 ```
 
 - `public/_redirects` contains `/* /index.html 200` so deep links into the SPA resolve
+- A production build refuses `VITE_BACKEND_URL` pointing at localhost: `npm run build`
+  stops with the reason instead of uploading a bundle whose "backend" is each
+  visitor's own machine. `cp .env.example .env` is a development setup — to build
+  something deployable, drop the line or set the deployed address.
 
 One consequence worth knowing: because Pages answers *any* unknown path with `index.html` and status 200, an API request to a host with no backend returns HTML. `src/lib/backend.ts` turns that into a readable "there is no backend at this address" message instead of a JSON parse error, and the panels print which three still work.
 

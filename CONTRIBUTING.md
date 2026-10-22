@@ -67,7 +67,7 @@ cp .env.example .env    # defaults: mainnet Lighter + backend on :8000
 npm run dev             # http://localhost:5173
 ```
 
-`VITE_*` variables are compiled into the bundle by Vite — they are read from the root `.env`, not from `backend/.env`, and changing one needs a rebuild.
+`VITE_*` variables are compiled into the bundle by Vite — they are read from the root `.env`, not from `backend/.env`, and changing one needs a rebuild. Because the Pages project has no build configuration of its own, that file is what decides where a deployed bundle sends its requests; `npm run build` therefore refuses a `VITE_BACKEND_URL` on localhost and says why. Dev server (`npm run dev`) is unaffected.
 
 ## Migrations
 
@@ -271,7 +271,7 @@ cp .env.example .env    # дефолты: mainnet Lighter + бэкенд на :8
 npm run dev             # http://localhost:5173
 ```
 
-Переменные `VITE_*` Vite зашивает в бандл: читаются из корневого `.env`, а не из `backend/.env`, и смена одной из них требует пересборки.
+Переменные `VITE_*` Vite зашивает в бандл: читаются из корневого `.env`, а не из `backend/.env`, и смена одной из них требует пересборки. Поскольку у Pages-проекта своей конфигурации сборки нет, именно этот файл решает, куда развёрнутый бандл шлёт запросы; поэтому `npm run build` отклоняет `VITE_BACKEND_URL` на localhost и объясняет причину. На dev-сервер (`npm run dev`) это не влияет.
 
 ## Миграции
 

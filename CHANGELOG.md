@@ -24,6 +24,11 @@ from the commit history rather than from a release.
   with an http and an https Mini App address, the command menu against the
   handlers that answer it, and payload builders on fixtures shaped like live
   Lighter responses.
+- `npm run build` refuses to produce a deployable bundle whose
+  `VITE_BACKEND_URL` points at localhost; the dev server is unaffected. The Pages
+  project has no build configuration, so the `.env` on the building machine is
+  the only thing that decides where a live site sends its requests — and it had
+  just shipped `http://localhost:8000` to production.
 - `SECURITY.md` documents the bot's own trust boundary: no write path, escaped
   output, validated `callback_data`, and the https rule for the web-app button.
 
