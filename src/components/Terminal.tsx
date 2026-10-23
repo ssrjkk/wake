@@ -224,6 +224,9 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
       high: Math.max(...last24.map((c) => c.h)),
       low: Math.min(...last24.map((c) => c.l)),
       volume: last24.reduce((s, c) => s + c.V, 0),
+      // Сколько часов реально покрыто. Новый рынок отдаёт меньше 24 свечей, и
+      // подпись «24ч» над суммой за 6 часов — это не округление, а другая цифра.
+      hours: last24.length,
     };
   }, [candles]);
 
@@ -246,7 +249,14 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
   const tapeLabel = useMemo(() => {
     if (!tape.length || !lastCandle) return null;
     const hour = lastCandle.c - lastCandle.o;
-    return `Ход цены по часам: ${tape.length} шт, последний час ${hour >= 0 ? "рост" : "падение"} на ${Math.abs(hour) ? fmt(Math.abs((hour / (lastCandle.o || 1)) * 100), 2) + "%" : "без изменения"}`;
+    // Делить на открытие часа можно, только если открытие есть: на (o || 1)
+    // рынок с ценой в доли доллара получал выдуманное «+0.16%» вместо правдивого
+    // «неизвестно» — и отличить это от настоящего числа было нельзя.
+    const pctHour = lastCandle.o > 0 ? Math.abs((hour / lastCandle.o) * 100) : null;
+
+    return `Ход цены по часам: ${tape.length} шт, последний час ${
+      hour >= 0 ? "рост" : "падение"
+    } на ${pctHour == null ? "неизвестно (нет открытия часа)" : `${fmt(pctHour, 2)}%`}`;
   }, [tape, lastCandle]);
 
   const visibleMarkets = filteredMarkets.slice(0, TICKER_ROWS);
@@ -270,12 +280,24 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
       setToast("Рынок ещё не загружен");
       return;
     }
-    if (accountEquityUsd !== undefined && size > accountEquityUsd) {
-      setToast(`Размер ордера ($${size}) превышает баланс счёта ($${accountEquityUsd.toFixed(2)})`);
+    if (!(size > 0)) {
+      setToast("Размер ордера должен быть больше нуля");
       return;
     }
-    if (size <= 0) {
-      setToast("Размер ордера должен быть больше нуля");
+    // Под плечом залог не size, а size/плечо — ровно то, что показывает строка
+    // «Маржа» ниже. Прежняя проверка size > equity отвергала законные ордера:
+    // $3000 нотионала при $1000 баланса на 5x — это $600 маржи, и она проходит,
+    // а отказ выглядел как сломанный терминал.
+    const margin = size / Math.max(leverage, 1);
+    if (accountEquityUsd !== undefined && margin > accountEquityUsd) {
+      setToast(
+        `Маржа $${margin.toFixed(0)} не влезает в баланс счёта $${accountEquityUsd.toFixed(0)} — уменьши размер или плечо`
+      );
+      return;
+    }
+    const minQuote = Number(currentMarket.min_quote_amount);
+    if (minQuote > 0 && size < minQuote) {
+      setToast(`Минимальный ордер по этому рынку — ${minQuote} USDC`);
       return;
     }
     setShowOrderConfirm(true);
@@ -333,15 +355,15 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
 
           <div className="desk-stats">
             <div className="desk-stat">
-              <span className="label">Макс 24ч</span>
+              <span className="label">Макс {stats24h ? `${stats24h.hours}ч` : "24ч"}</span>
               <b>{stats24h ? fmt(stats24h.high, decimals) : "—"}</b>
             </div>
             <div className="desk-stat">
-              <span className="label">Мин 24ч</span>
+              <span className="label">Мин {stats24h ? `${stats24h.hours}ч` : "24ч"}</span>
               <b>{stats24h ? fmt(stats24h.low, decimals) : "—"}</b>
             </div>
             <div className="desk-stat">
-              <span className="label">Оборот 24ч</span>
+              <span className="label">Оборот {stats24h ? `${stats24h.hours}ч` : "24ч"}</span>
               <b>{stats24h ? usd(stats24h.volume, 0) : "—"}</b>
             </div>
             <div className="desk-stat">
@@ -493,7 +515,12 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
             type="number"
             min={currentMarket ? Number(currentMarket.min_quote_amount) : 1}
             value={size}
-            onChange={(e) => setSize(Math.max(0, Number(e.target.value)))}
+            onChange={(e) => {
+              // valueAsNumber, а не Number(e.target.value): Math.max(0, NaN)
+              // это NaN, и поле с NaN уходило в расчёт маржи и в ордер.
+              const v = e.target.valueAsNumber;
+              setSize(Number.isFinite(v) ? Math.max(0, v) : 0);
+            }}
             style={{ width: "100%" }}
           />
 

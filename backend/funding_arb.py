@@ -30,6 +30,8 @@ positive funding (лонги платят шортам) -> шорт перпа +
 
 from dataclasses import dataclass
 
+from quant import round_down
+
 HOURS_PER_YEAR = 24 * 365  # эпох funding в год у Lighter — 1-часовой эпох, не 8-часовой
 VENUES = ("lighter", "binance", "bybit", "hyperliquid")
 
@@ -39,7 +41,7 @@ class FundingSnapshot:
     market_id: int
     symbol: str
     hourly_rate: float  # беззнаковая величина за час, доля (0.0001 = 0.01%/час)
-    direction: str  # "long" | "short" — кто платит: "long" значит лонги платят шортам
+    direction: str  # "long" | "short" | "none" — кто платит; "none" при ставке 0
 
 
 @dataclass(frozen=True)
@@ -65,12 +67,18 @@ def snapshot_from_signed_rate(
     Приводим к беззнаковой ставке + direction, которые ожидает остальной модуль:
     rate > 0 — платят лонги (direction="long"), rate < 0 — платят шорты.
     Молча передать отрицательную ставку как direction="long" означало бы
-    предложить шортить перп там, где шорты сами платят."""
+    предложить шортить перп там, где шорты сами платят.
+
+    Ставка ровно 0 — это «никто не платит», а не «платят шорты»: на замере
+    2026-10-23 из 735 строк живого ответа 109 были нулевые. Для cash-and-carry
+    они не отличаются от отсутствующего рынка, а для списка ставок это строка с
+    доходом 0%, и выдавать её за возможность — то же классе ошибка, что и
+    перевёрнутый знак."""
     return FundingSnapshot(
         market_id=market_id,
         symbol=symbol,
         hourly_rate=abs(rate),
-        direction="long" if rate > 0 else "short",
+        direction="long" if rate > 0 else ("short" if rate < 0 else "none"),
     )
 
 
@@ -126,7 +134,12 @@ def funding_rate_rows(rows: list) -> list[dict]:
                 "annualized": annualized_yield(snapshot),
             }
         )
-    out.sort(key=lambda r: r["annualized"], reverse=True)
+    # Ранжирование по правилу, а не по модулю ставки: первыми идут рынки, где
+    # funding забирают шорты перпа (direction="long") — только они строятся
+    # cash-and-carry без займа; внутри группы — по убыванию годовой. По модулю
+    # список открывался рынком, где платят шортам и где вторая нога вообще
+    # не строится, а человек считал бы это лучшей возможностью.
+    out.sort(key=lambda r: (0 if r["direction"] == "long" else 1, -r["annualized"]))
     return out
 
 
@@ -155,7 +168,10 @@ def base_asset(symbol: str) -> str:
     строки, и совпадение смотрятся по нему тоже."""
     s = str(symbol).upper().strip()
     for sep in ("/", "-", ":", "_", ".", " "):
-        s = s.split(sep)[0]
+        # strip() после каждого разделителя: "BTC -USDC" иначе оставлял бы
+        # "BTC " с хвостовым пробелом, а base_asset используется как ключ
+        # сопоставления строк API — рынок молча не находился бы.
+        s = s.split(sep)[0].strip()
     if not s or s in QUOTES:
         # Голый стейбл — тоже актив: превращать "USDC" в "" нельзя.
         return s
@@ -261,8 +277,9 @@ def size_delta_neutral_position(
 
 
 def _round_down(value: float, decimals: int) -> float:
-    factor = 10**decimals
-    return int(value * factor) / factor
+    """Вниз и ровно. На float-арифметике int(0.29 * 100) = 28 — нога
+    дельта-нейтральной позиции резалась на шаг меньше посчитанного."""
+    return round_down(value, decimals)
 
 
 @dataclass(frozen=True)

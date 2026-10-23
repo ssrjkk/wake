@@ -17,7 +17,6 @@ asyncpg привязано к циклу, в котором открыто, — 
         python -m unittest test_api_smoke -v
 """
 
-import os
 import hashlib
 import hmac
 import json
@@ -27,24 +26,15 @@ import unittest
 import uuid
 from urllib.parse import urlencode
 
-# config читает env при импорте, поэтому все подмены — до импорта testsupport
-# (он импортирует config и database) и до импорта app.
-os.environ["WAKE_CURATOR_TOKEN"] = "smoke-test-token"
-os.environ["WAKE_SESSION_SECRET"] = "smoke-test-session-secret-0123456789abcdef"
-os.environ["TELEGRAM_BOT_TOKEN"] = "123456:smoke-test-bot-token"
-# llm_agent читает ключ при импорте и без него решает по правилу. Пустая строка
-# тут не «выключить фичу», а закрыть зависимость результата теста от того, что
-# случайно окажется в окружении запускающего.
-os.environ["ANTHROPIC_API_KEY"] = ""
-# Все запросы идут с одного client IP, поэтому несколько классов подряд
-# выбивают дефолтное ведро (40) и роуты начинают отдавать 429 вместо своих
-# 200/401/404. Сам лимитер проверен в test_rate_limiter.py — здесь он не предмет
-# теста, а помеха.
-os.environ["WAKE_RATE_LIMIT_CAPACITY"] = "100000"
-os.environ["WAKE_RATE_LIMIT_REFILL"] = "100000"
+# Тестовое окружение (секрет сессии, фиктивный токен бота, ведро rate limit)
+# задаёт testsupport — он должен быть импортирован раньше app и config, потому
+# что config читает env один раз при импорте. Раньше эти строки дублировались
+# здесь, и прогон `pytest test_db.py test_api_smoke.py` падал уже из-за порядка
+# импортов: config успевает импортироваться тестом базы раньше, чем этот модуль
+# успевает их подменить.
+import testsupport  # noqa: E402  (импортируется первым из проектных модулей)
 
 import httpx  # noqa: E402
-import testsupport  # noqa: E402
 import agent_db  # noqa: E402
 import app  # noqa: E402
 import api.auth as api_auth  # noqa: E402
@@ -203,7 +193,7 @@ def telegram_login_payload(
         "auth_date": auth_date if auth_date is not None else int(time.time()),
     }
     check_string = "\n".join(f"{k}={payload[k]}" for k in sorted(payload))
-    secret = hashlib.sha256(os.environ["TELEGRAM_BOT_TOKEN"].encode()).digest()
+    secret = hashlib.sha256(testsupport.BOT_TOKEN.encode()).digest()
     payload["hash"] = hmac.new(
         secret, check_string.encode(), hashlib.sha256
     ).hexdigest()
@@ -219,7 +209,7 @@ def mini_app_init_data(
     """Строка initData ровно так, как её подписывает Telegram внутри мини-аппа:
     HMAC-SHA256 по отсортированным k=v, ключ — HMAC-SHA256("WebAppData", токен бота).
     Ключ выводится иначе, чем у Login Widget, поэтому это отдельный хелпер."""
-    token = token or os.environ["TELEGRAM_BOT_TOKEN"]
+    token = token or testsupport.BOT_TOKEN
     params = {
         "auth_date": str(auth_date if auth_date is not None else int(time.time())),
         "query_id": "AAH-smoke",
@@ -364,12 +354,73 @@ class TestApiSmoke(HttpCase):
                 "is_increase": True,
                 "size_delta": 0.5,
                 "price": 100000,
+                "price_decimals": 2,
                 "leader_equity_usd": 50000,
             },
-            headers={"X-Curator-Token": "smoke-test-token"},
+            headers={"X-Curator-Token": testsupport.CURATOR_TOKEN},
         )
         self.assertEqual(r.status_code, 200, r.text)
         self.assertEqual(len(r.json()["orders"]), 1)
+
+        # side — Literal, а не «== "long", иначе short»: с опечаткой прогон
+        # показывал план для противоположной ноги, и оператор проверял не то.
+        for bad_side in ("Long", "buy", ""):
+            r = await self.client.post(
+                "/simulate-mirror",
+                json={
+                    "leader_id": leader_id,
+                    "market_id": 1,
+                    "side": bad_side,
+                    "is_increase": True,
+                    "size_delta": 0.5,
+                    "price": 100000,
+                    "price_decimals": 2,
+                    "leader_equity_usd": 50000,
+                },
+                headers={"X-Curator-Token": testsupport.CURATOR_TOKEN},
+            )
+            self.assertEqual(
+                r.status_code, 422, f"сторона {bad_side!r} не должна молча стать short"
+            )
+
+        # price_decimals обязателен: дефолт 0 означал бы ордер с ценой на два
+        # порядка меньше рынка.
+        r = await self.client.post(
+            "/simulate-mirror",
+            json={
+                "leader_id": leader_id,
+                "market_id": 1,
+                "side": "long",
+                "is_increase": True,
+                "size_delta": 0.5,
+                "price": 100000,
+                "leader_equity_usd": 50000,
+            },
+            headers={"X-Curator-Token": testsupport.CURATOR_TOKEN},
+        )
+        self.assertEqual(r.status_code, 422, "цена без масштаба рынка — не план, а 500")
+
+        # Границы по знаку и порядку: mirror_engine делит на price и на equity,
+        # а NaN/inf до этой правки доходили до JSON и роняли 500 уже на
+        # сериализации ответа. Значения ниже заведомо конечные — httpx сам
+        # отказывается кодировать inf в запрос.
+        for bad in ({"price": 0}, {"price": 1e12}, {"size_delta": -1}):
+            r = await self.client.post(
+                "/simulate-mirror",
+                json={
+                    "leader_id": leader_id,
+                    "market_id": 1,
+                    "side": "long",
+                    "is_increase": True,
+                    "size_delta": 0.5,
+                    "price": 100000,
+                    "price_decimals": 2,
+                    "leader_equity_usd": 50000,
+                    **bad,
+                },
+                headers={"X-Curator-Token": testsupport.CURATOR_TOKEN},
+            )
+            self.assertEqual(r.status_code, 422, f"вход {bad} обязан быть 422")
 
         r = await self.client.post(
             "/simulate-mirror",
@@ -380,6 +431,7 @@ class TestApiSmoke(HttpCase):
                 "is_increase": True,
                 "size_delta": 0.5,
                 "price": 100000,
+                "price_decimals": 2,
                 "leader_equity_usd": 50000,
             },
         )
@@ -392,8 +444,19 @@ class TestApiSmoke(HttpCase):
         r = await self.client.delete(f"/follows/{follow_id}", headers=follower_headers)
         self.assertEqual(r.status_code, 200)
 
+        # Отписка — tombstone, а не DELETE строки: на подписке висит FK
+        # mirror_log, и жёсткое удаление давало бы 500 на обычной кнопке.
+        # Список своего подписчика её больше не отдаёт, публичный AUM — тоже.
+        r = await self.client.get("/follows", headers=follower_headers)
+        self.assertEqual(
+            r.json(), [], "отменённая подписка не должна оставаться в списке"
+        )
+        r = await self.client.get(f"/follows/by-leader/{leader_id}")
+        self.assertEqual(r.json()["follower_count"], 0)
+        self.assertEqual(r.json()["total_aum_usd"], 0)
+
     async def test_predict_cycle(self):
-        curator = {"X-Curator-Token": "smoke-test-token"}
+        curator = {"X-Curator-Token": testsupport.CURATOR_TOKEN}
         trader = await self.sign_in_telegram(6001)
 
         r = await self.client.post(
@@ -437,12 +500,110 @@ class TestApiSmoke(HttpCase):
         self.assertEqual(
             r.status_code,
             403,
-            "цена берётся в момент вызова — иначе держатель позиции сам выбирает момент резолюции",
+            "исход по внешней цене решают не деньгами позиции, а оператор",
         )
         r = await self.client.post(
             f"/predict/markets/{market_id}/resolve-price", json={}, headers=curator
         )
         self.assertEqual(r.status_code, 409, "до resolve_at закрывать рынок нельзя")
+
+        # Цена берётся на дедлайне рынка, а не в момент вызова: подменяя
+        # get_price_at, проверяем, что именно resolve_at доходит до оракула.
+        # Рынок с прошедшим дедлайном заводится через слой данных: HTTP-создание
+        # дедлайн в прошлом честно отклоняет, а резолвить такой рынок нужно.
+        import lighter_rest
+        import predict_db as pdb
+
+        seen: list = []
+
+        def fake_price_at(market_index, when_s, network=None):
+            seen.append((market_index, when_s, network))
+            return 130_000
+
+        deadline = int(time.time()) - 600
+        past_id = "smoke-resolve-past"
+        await pdb.create_market(
+            past_id,
+            "price",
+            "ETH above 2000?",
+            deadline,
+            100,
+            lighter_market_id=0,
+            threshold=2000,
+            comparator=">",
+        )
+        original = lighter_rest.get_price_at
+        lighter_rest.get_price_at = fake_price_at
+        try:
+            r = await self.client.post(
+                f"/predict/markets/{past_id}/resolve-price", json={}, headers=curator
+            )
+        finally:
+            lighter_rest.get_price_at = original
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["outcome"], "yes")
+        self.assertEqual(seen[0][0], 0, "оракулу передан market_id рынка")
+        self.assertEqual(
+            seen[0][1],
+            r.json()["resolve_at"],
+            "цена запрошена на дедлайн рынка, а не на момент вызова",
+        )
+        audit = await al.recent_actions(action="market_resolution", limit=10)
+        self.assertIn(
+            past_id,
+            [a["resource"] for a in audit],
+            "автоматическая резолюция без записи в аудит — это исход без ответа «почему»",
+        )
+
+        def dead(market_index, when_s, network=None):
+            raise RuntimeError("Lighter API недоступен")
+
+        dead_id = "smoke-resolve-dead"
+        await pdb.create_market(
+            dead_id,
+            "price",
+            "ETH above 2000?",
+            int(time.time()) - 60,
+            100,
+            lighter_market_id=0,
+            threshold=2000,
+            comparator=">",
+        )
+        lighter_rest.get_price_at = dead
+        try:
+            r = await self.client.post(
+                f"/predict/markets/{dead_id}/resolve-price", json={}, headers=curator
+            )
+        finally:
+            lighter_rest.get_price_at = original
+        self.assertEqual(r.status_code, 502, "без цены рынок остаётся открытым")
+        self.assertEqual(
+            (await self.client.get(f"/predict/markets/{dead_id}")).json()["status"],
+            "open",
+        )
+
+        # javascript: в качестве «источника» превращается в ссылку в интерфейсе.
+        r = await self.client.post(
+            "/predict/markets/event",
+            json={"question": "Схема ссылки?", "resolve_at": 1999999999, "b": 100},
+            headers=curator,
+        )
+        scheme_id = r.json()["market_id"]
+        r = await self.client.post(
+            f"/predict/markets/{scheme_id}/resolve-event",
+            json={
+                "outcome": "yes",
+                "resolved_by": "curator@test",
+                "evidence_url": "javascript:alert(1)",
+            },
+            headers=curator,
+        )
+        self.assertEqual(r.status_code, 400, "не http(s) схема в evidence_url не исход")
+        self.assertEqual(
+            (await self.client.get(f"/predict/markets/{scheme_id}")).json()["status"],
+            "open",
+            "отклонённая резолюция не имеет права закрыть рынок",
+        )
 
         r = await self.client.post(
             "/predict/markets/event",
@@ -746,26 +907,27 @@ class TestFundingLiveRoutes(HttpCase):
         self.addCleanup(setattr, lighter_rest, "get_funding_rates", self._rates)
         self.addCleanup(setattr, lighter_rest, "get_order_books", self._books)
 
-    async def test_rates_ranked_by_annualized(self):
+    async def test_rates_ranked_longs_first_then_by_size(self):
         body = (await self.client.get("/funding/rates")).json()
         self.assertEqual(
             body["epoch_hours"], 1, "годовая считается на часовой эпох, не на 8-часовой"
         )
         got = body["rates"]
+        # ETH с -0.0003 по модулю больше BTC с 0.00008, но стоит ниже: там
+        # платят шорты, и cash-and-carry без займа на нём не строится. Ранжировать
+        # по модулю означало бы открывать список невозможной возможностью.
         self.assertEqual(
-            [x["market_id"] for x in got], [0, 1], "по модулю 0.0003 > 0.00008"
+            [x["market_id"] for x in got], [1, 0], "сначала те, где платят лонги"
         )
-        self.assertAlmostEqual(got[0]["annualized"], 0.0003 * 24 * 365, places=9)
-        self.assertEqual(
-            got[0]["direction"], "short", "отрицательная ставка — платят шорты"
-        )
-        self.assertEqual(got[0]["signed_rate"], -0.0003)
-        self.assertEqual(got[1]["signed_rate"], 0.00008)
+        self.assertEqual([x["direction"] for x in got], ["long", "short"])
+        self.assertAlmostEqual(got[0]["annualized"], 0.00008 * 24 * 365, places=9)
+        self.assertEqual(got[0]["signed_rate"], 0.00008)
+        self.assertEqual(got[1]["signed_rate"], -0.0003)
         # Имя рынка берётся из строки той же площадки: поле symbol — то, что
         # реально отдаёт Lighter (голый базовый актив), base — нормализованный
         # тикер для сопоставлений на фронте.
-        self.assertEqual([x["symbol"] for x in got], ["ETH", "BTC"])
-        self.assertEqual([x["base"] for x in got], ["ETH", "BTC"])
+        self.assertEqual([x["symbol"] for x in got], ["BTC", "ETH"])
+        self.assertEqual([x["base"] for x in got], ["BTC", "ETH"])
         # В ответе только строки Lighter: две из четырёх фикстурых строк принадлежат
         # чужим площадкам, и примесь их ставок дала бы total=4.
         self.assertEqual(body["total"], 2)
@@ -1026,15 +1188,44 @@ class TestMarketsOverview(HttpCase):
 
 class TestPortfolioAndAgent(HttpCase):
     """Агент и подписка: тир читается из базы, субъект — из токена, а трайл и
-    дневной объём переживают рестарт процесса, потому что живут в PostgreSQL."""
+    дневной объём переживают рестарт процесса, потому что живут в PostgreSQL.
+
+    Ряд цен и шаг рынка агент теперь берёт из Lighter сам, поэтому тест
+    подменяет lighter_rest.get_candles / get_order_books — ровно те два вызова,
+    которые появились в роуте вместо recent_prices из тела запроса."""
 
     STEP = {
         "market_id": 1,
-        "recent_prices": [99000, 99500, 100000, 100500, 101000],
-        "size_decimals": 4,
-        "price_decimals": 0,
+        "resolution": "1h",
+        "candles": 5,
         "base_size_usd": 100,
     }
+
+    CLOSES = [99000, 99500, 100000, 100500, 101000]
+
+    def setUp(self):
+        super().setUp()
+        import lighter_rest
+
+        original_books = lighter_rest.get_order_books
+        original_candles = lighter_rest.get_candles
+
+        lighter_rest.get_order_books = lambda network=None: [
+            {
+                "market_id": "1",
+                "symbol": "ETH",
+                "status": "active",
+                "market_type": "perp",
+                "supported_size_decimals": 4,
+                "supported_price_decimals": 2,
+            }
+        ]
+        lighter_rest.get_candles = lambda mid, resolution="1h", count=24, network=None: [
+            {"c": c, "o": c, "h": c, "l": c, "V": 1, "t": i}
+            for i, c in enumerate(self.CLOSES[:count])
+        ]
+        self.addCleanup(setattr, lighter_rest, "get_order_books", original_books)
+        self.addCleanup(setattr, lighter_rest, "get_candles", original_candles)
 
     async def test_subscription_trial_and_agent_step(self):
         user = await self.sign_in_telegram(7001)
@@ -1100,12 +1291,37 @@ class TestPortfolioAndAgent(HttpCase):
         after_hold = await agent_db.load_memory(user_id)
         self.assertEqual(len(after_hold.trades), 1, "hold не записывает вторую сделку")
 
-        r = await self.client.post(
-            "/agent/step", json={**self.STEP, "recent_prices": []}, headers=user
-        )
+        # Response говорит, каким рядом считать приходилось: без этого нельзя
+        # сверить решение агента с тем, что человек видит на графике.
         self.assertEqual(
-            r.status_code, 422, "пустой ряд цен — ошибка запроса, а не «hold»"
+            body.get("data", {}).get("candles_used"),
+            5,
+            "ответ обязан показывать окно, которое бэкенд реально взял из Lighter",
         )
+        self.assertEqual(body["data"]["symbol"], "ETH")
+
+        # Битый ряд от Lighter — 502, а не «hold» и не решение по нулям.
+        import lighter_rest
+
+        lighter_rest.get_candles = lambda mid, resolution="1h", count=24, network=None: [
+            {"c": 0, "o": 0, "h": 0, "l": 0, "V": 0, "t": 0}
+        ]
+        r = await self.client.post("/agent/step", json=self.STEP, headers=user)
+        self.assertEqual(r.status_code, 502, "по пустому или битому ряду не решают")
+        self.assertEqual(r.json()["error"]["code"], "MARKET_DATA_UNUSABLE")
+
+        # Рынка нет в книге — 404, а не ордер с угаданными decimals.
+        r = await self.client.post(
+            "/agent/step", json={**self.STEP, "market_id": 999}, headers=user
+        )
+        self.assertEqual(r.status_code, 404)
+        self.assertEqual(r.json()["error"]["code"], "MARKET_NOT_FOUND")
+
+        # Невалидный горизонт — 422 на границе, а не тихий 1m-ряд.
+        r = await self.client.post(
+            "/agent/step", json={**self.STEP, "resolution": "7m"}, headers=user
+        )
+        self.assertEqual(r.status_code, 422)
 
     async def test_upgrade_requires_curator(self):
         user = await self.sign_in_telegram(7002)
@@ -1118,14 +1334,14 @@ class TestPortfolioAndAgent(HttpCase):
         # подписки ещё нет — апгрейд её не создаёт, точка входа в подписку одна
         r = await self.client.post(
             "/subscription/tg_7002/upgrade",
-            headers={"X-Curator-Token": "smoke-test-token"},
+            headers={"X-Curator-Token": testsupport.CURATOR_TOKEN},
         )
         self.assertEqual(r.status_code, 404)
 
         await self.client.post("/subscription/trial", headers=user)
         r = await self.client.post(
             "/subscription/tg_7002/upgrade",
-            headers={"X-Curator-Token": "smoke-test-token"},
+            headers={"X-Curator-Token": testsupport.CURATOR_TOKEN},
         )
         self.assertEqual(r.status_code, 200, r.text)
         self.assertEqual(r.json()["tier"], "pro")

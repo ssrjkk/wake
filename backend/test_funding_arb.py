@@ -222,20 +222,44 @@ class TestFundingRateRows(unittest.TestCase):
         {"exchange": "bybit", "market_id": 1, "rate": 0.0009, "symbol": "BTC"},
     ]
 
-    def test_sorted_by_annualized_and_annotated(self):
+    def test_longs_payers_rank_first_then_by_size(self):
         rows = funding_rate_rows(self.ROWS)
-        # Порядок по величине годовой, как его отдаёт и REST: ставка 0.0002 у ETH
-        # больше, чем 0.0001 у BTC, независимо от знака.
-        self.assertEqual([r["symbol"] for r in rows], ["market 7", "ETH", "BTC"])
+        # Ранжирование по правилу стратегии, а не по модулю ставки: первыми —
+        # рынки, где funding платят лонги (их можно забрать шортом перпа без
+        # займа), внутри — по убыванию годовой. По модулю список открывался бы
+        # ETH с -0.0002: там платят шорты, и вторая нога не строится вовсе.
+        self.assertEqual([r["symbol"] for r in rows], ["market 7", "BTC", "ETH"])
+        self.assertEqual([r["direction"] for r in rows], ["long", "long", "short"])
         self.assertEqual(rows[0]["annualized"], 0.0005 * HOURS_PER_YEAR)
-        self.assertEqual(rows[0]["direction"], "long")
-        self.assertEqual(
-            rows[1]["direction"], "short", "отрицательная ставка — платят шорты"
+        self.assertGreater(
+            rows[0]["annualized"], rows[1]["annualized"], "внутри группы — по убыванию"
         )
-        self.assertEqual(rows[1]["signed_rate"], -0.0002)
         self.assertEqual(
-            rows[1]["hourly_rate"], 0.0002, "ставка без знака, знак — в direction"
+            rows[2]["direction"], "short", "отрицательная ставка — платят шорты"
         )
+        self.assertEqual(rows[2]["signed_rate"], -0.0002)
+        self.assertEqual(
+            rows[2]["hourly_rate"], 0.0002, "ставка без знака, знак — в direction"
+        )
+
+    def test_zero_rate_market_is_not_offered_as_income(self):
+        """109 из 735 строк живого /funding-rates — ставка ровно 0. Подставить
+        такой рынок в группу «платят лонги» означало бы показать доход 0% как
+        возможность: nobody платит, nobody получает."""
+        rows = funding_rate_rows(
+            [
+                {"exchange": "lighter", "market_id": 1, "rate": 0.0, "symbol": "FLAT"},
+                {
+                    "exchange": "lighter",
+                    "market_id": 2,
+                    "rate": 0.0001,
+                    "symbol": "BTC",
+                },
+            ]
+        )
+        self.assertEqual([r["symbol"] for r in rows], ["BTC", "FLAT"])
+        self.assertEqual(rows[1]["annualized"], 0.0)
+        self.assertEqual(rows[1]["direction"], "none", "ставка 0 — никто не платит")
 
     def test_base_asset_is_next_to_the_original_symbol(self):
         rows = funding_rate_rows(
@@ -262,7 +286,11 @@ class TestFundingRateRows(unittest.TestCase):
             {"exchange": "lighter", "market_id": "abc", "rate": 0.1},
             {"exchange": "lighter", "market_id": 9},  # нет rate
         ]
-        self.assertEqual([r["market_id"] for r in funding_rate_rows(rows)], [7, 0, 1])
+        self.assertEqual(
+            [r["market_id"] for r in funding_rate_rows(rows)],
+            [7, 1, 0],
+            "битые строки пропускаются; сначала платящие лонги (7, 1), потом ETH с -0.0002",
+        )
 
 
 class TestBaseAsset(unittest.TestCase):

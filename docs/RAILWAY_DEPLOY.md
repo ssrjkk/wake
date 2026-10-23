@@ -20,7 +20,7 @@ Required — without them part of the product does not work at all:
 
 ```
 WAKE_SESSION_SECRET    signs session tokens; empty means every sign-in answers 503
-WAKE_CURATOR_TOKEN     operator endpoints (markets, resolution, simulate-mirror); empty means 500
+WAKE_CURATOR_TOKEN     operator endpoints (markets, resolution, simulate-mirror); empty means 503
 WAKE_DATABASE_URL      the PostgreSQL string from the attached service
 WAKE_REDIS_URL         the Redis string from the attached service
 WAKE_CORS_ORIGINS      the frontend origin, comma-separated, e.g. https://wake-7k6.pages.dev
@@ -107,6 +107,6 @@ On mainnet the process refuses to start without `WAKE_MAINNET_LIVE=true` and say
 | Sign-in → 503 `SESSION_NOT_CONFIGURED` | `WAKE_SESSION_SECRET` is empty |
 | Sign-in → 503 `CHALLENGE_STORE_UNAVAILABLE` | Redis is unreachable, so a challenge cannot be stored — verifying a signature "on trust" is not an option |
 | `POST /leaders` → 403 `LIGHTER_ACCOUNT_NOT_LINKED` | the session came from Telegram; a leader is published by the Lighter account index a wallet sign-in confirmed |
-| Operator endpoint → 500 `CURATOR_NOT_CONFIGURED` | `WAKE_CURATOR_TOKEN` is not set on the server |
+| Operator endpoint → 503 `CURATOR_NOT_CONFIGURED` | `WAKE_CURATOR_TOKEN` is not set on the server |
 | Frontend says "there is no backend at this address" | `VITE_BACKEND_URL` was built with a different address, or Pages answered an unknown path with `index.html` — see `src/lib/backend.ts` |
 | CORS error in the browser console | the frontend origin is missing from `WAKE_CORS_ORIGINS`; the browser blocks the response, the backend is not failing to send it |

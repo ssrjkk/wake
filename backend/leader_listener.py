@@ -36,6 +36,7 @@ apidocs.lighter.xyz/docs/websocket-reference — включая разворот
 
 import argparse
 import asyncio
+import json
 import uuid
 import logging
 
@@ -46,9 +47,11 @@ from mirror_engine import (
     LeaderEvent,
     FollowerConfig,
     MarketConstraints,
+    MirrorOrder,
     Side,
     compute_mirror_plan,
 )
+from quant import scale_to_int
 from config import DRY_RUN, LIGHTER_BASE_URL, LIGHTER_WS_URL
 
 logger = logging.getLogger("wake.leader_listener")
@@ -57,6 +60,44 @@ logger = logging.getLogger("wake.leader_listener")
 # листенер, который слушает тестнет-стрим, читая ограничения из mainnet-книги.
 LIGHTER_HTTP_URL = LIGHTER_BASE_URL
 WS_URL = LIGHTER_WS_URL
+
+
+def build_order_args(
+    order: MirrorOrder,
+    event_price: float,
+    constraints: MarketConstraints,
+    follower_account_index: int,
+    order_uid: str,
+) -> dict:
+    """Как зеркальный ордер превращается в аргументы create_order — отдельно от
+    сети и от ключа, потому что именно здесь раньше терялись деньги.
+
+    Три вещи, каждая из которых была багом, а не стилем:
+
+      Цена. Lighter ждёт целое в тиках рынка (price * 10**supported_price_decimals —
+      см. place_order_example.py и src/lib/lighter.ts). `int(event.price)` давал
+      DOGE 0.16 -> 0 и BTC 110432.55 -> 110432, то есть лимитку в $110 на рынок
+      по $110k: IOC-бай не исполнялся никогда.
+
+      Сторона. order.side — это СТОРОНА ПОЗЫЦИИ (её берёт из снапшота лидера),
+      а не направление сделки. Открыть лонг = buy, закрыть лонг = sell. Без
+      XOR с reduce_only закрытие лонга уходило как buy+reduce_only, то есть
+      позиция подписчика не закрывалась никогда.
+
+      client_order_index. Уникален на каждый реальный замысел и выводим из id
+      строки mirror_log: по нему ордер потом ищется в Lighter, а две разные
+      сделки лидера не делят один индекс (в отличие от time-ms % 1e6, где
+      коллизия на горизонте часа — норма).
+    """
+    return {
+        "market_index": order.market_id,
+        "client_order_index": int(uuid.UUID(order_uid).int % 2**31),
+        "base_amount": scale_to_int(order.base_amount, constraints.size_decimals),
+        "price": scale_to_int(event_price, constraints.price_decimals),
+        "is_ask": (order.side == Side.SHORT) != order.reduce_only,
+        "reduce_only": order.reduce_only,
+        "account_index": follower_account_index,
+    }
 
 
 async def handle_leader_event(
@@ -133,10 +174,11 @@ async def handle_leader_event(
 
     for order in plan.orders:
         follow_row = by_follower[order.follower_id]
+        log_id = str(uuid.uuid4())
         if DRY_RUN:
             logger.info("dry_run would place %s", order)
             await db.log_mirror_result(
-                str(uuid.uuid4()),
+                log_id,
                 follow_row["follow_id"],
                 order.market_id,
                 order.side.value,
@@ -156,7 +198,7 @@ async def handle_leader_event(
                 order.follower_id,
             )
             await db.log_mirror_result(
-                str(uuid.uuid4()),
+                log_id,
                 follow_row["follow_id"],
                 order.market_id,
                 order.side.value,
@@ -176,44 +218,84 @@ async def handle_leader_event(
             )
             continue
 
+        args = build_order_args(
+            order,
+            event.price,
+            constraints,
+            follow_row["follower_account_index"],
+            log_id,
+        )
+
         # Тот же паттерн, что в place_order_example.py / signing_service.py —
         # намеренно не дублирую здесь другую реализацию.
         import lighter  # локальный импорт: только когда реально доходим до исполнения
 
-        client = lighter.SignerClient(
-            url=LIGHTER_HTTP_URL,
-            api_private_keys={key["api_key_index"]: key["private_key"]},
-            account_index=follow_row["follower_account_index"],
-        )
-        tx, tx_hash, err = await client.create_order(
-            market_index=order.market_id,
-            client_order_index=int(uuid.uuid4().int % 1_000_000),
-            base_amount=int(order.base_amount * 10**constraints.size_decimals),
-            price=int(event.price),
-            is_ask=(order.side == Side.SHORT),
-            order_type=client.ORDER_TYPE_MARKET,
-            time_in_force=client.ORDER_TIME_IN_FORCE_IMMEDIATE_OR_CANCEL,
-            reduce_only=order.reduce_only,
-            order_expiry=client.DEFAULT_IOC_EXPIRY,
-        )
-        await client.close()
+        try:
+            client = lighter.SignerClient(
+                url=LIGHTER_HTTP_URL,
+                api_private_keys={key["api_key_index"]: key["private_key"]},
+                account_index=args.pop("account_index"),
+            )
+            try:
+                tx, tx_hash, err = await client.create_order(
+                    **args,
+                    order_type=client.ORDER_TYPE_MARKET,
+                    time_in_force=client.ORDER_TIME_IN_FORCE_IMMEDIATE_OR_CANCEL,
+                    order_expiry=client.DEFAULT_IOC_EXPIRY,
+                )
+            finally:
+                await client.close()
+        except Exception as e:
+            # Сбой одного ордера не имеет права ронять цикл: вместе с процессом
+            # умерло бы и зеркаление всех остальных подписчиков, молча.
+            logger.exception("исполнение не дошло до Lighter: %s", e)
+            await db.log_mirror_result(
+                log_id,
+                follow_row["follow_id"],
+                order.market_id,
+                order.side.value,
+                order.base_amount,
+                order.reduce_only,
+                "failed",
+                f"execute_error: {e}",
+            )
+            continue
 
-        status = "sent" if not err else "failed"
+        if err:
+            # Размер позиции подписчика НЕ двигается: ордера нет, а вера в него
+            # дороже самого пропуска. Один раз записав закрытие, которого не было,
+            # листенер навсегда разъедется с реальностью на аккаунте подписчика.
+            logger.error(
+                "Lighter отклонил ордер follower=%s: %s", order.follower_id, err
+            )
+            await db.log_mirror_result(
+                log_id,
+                follow_row["follow_id"],
+                order.market_id,
+                order.side.value,
+                order.base_amount,
+                order.reduce_only,
+                "failed",
+                str(err),
+                tx_hash,
+            )
+            continue
+
         await db.log_mirror_result(
-            str(uuid.uuid4()),
+            log_id,
             follow_row["follow_id"],
             order.market_id,
             order.side.value,
             order.base_amount,
             order.reduce_only,
-            status,
-            str(err) if err else None,
+            "sent",
+            None,
             tx_hash,
         )
+        delta = order.base_amount if not order.reduce_only else -order.base_amount
         await db.update_mirrored_size(
             follow_row["follow_id"],
-            follow_row["current_mirrored_size"]
-            + (order.base_amount if not order.reduce_only else -order.base_amount),
+            max(0.0, follow_row["current_mirrored_size"] + delta),
         )
 
 
@@ -221,9 +303,14 @@ def build_constraints(books: list) -> dict:
     """market_id -> MarketConstraints из реальной книги Lighter.
 
     Ключ — market_id, а не «BTC-шаблон на весь тикер»: у рынков разные
-    supported_size_decimals и min_base_amount, один шаблон дал бы неверный
-    base_amount на всём, кроме BTC. Значения в ответе API — строки
-    (min_base_amount="0.00007"), поэтому явные float()/int()."""
+    supported_size_decimals, supported_price_decimals и min_base_amount, один
+    шаблон дал бы неверный base_amount и неверную цену на всём, кроме BTC.
+    Значения размеров в ответе API — строки (min_base_amount="0.00007"),
+    поэтому явные float(); decimals приходят числами.
+
+    Рынок без любого из трёх полей исключается, а не получает дефолт: дефолт
+    price_decimals=0 — это молча отправленный ордер с ценой в десять-сто тысяч
+    раз меньше рынка."""
     out = {}
     for b in books:
         if b.get("status") != "active":
@@ -232,15 +319,84 @@ def build_constraints(books: list) -> dict:
             out[int(b["market_id"])] = MarketConstraints(
                 min_base_amount=float(b["min_base_amount"]),
                 size_decimals=int(b["supported_size_decimals"]),
+                price_decimals=int(b["supported_price_decimals"]),
             )
         except (KeyError, TypeError, ValueError):
             continue  # рынок без полей ограничения не должен ронять весь список
     return out
 
 
-async def main(leader_id: str, leader_account_index: int):
-    import json
+async def _stream(
+    leader_id: str, leader_account_index: int, tracker, constraints_by_market: dict
+):
+    """Одно подключение к стриму Lighter. Возвращается при обрыве, падает только
+    если не смог подключиться — перезаподключением рулит run_forever."""
     import websockets  # pip install websockets
+
+    async with websockets.connect(WS_URL) as ws:
+        await ws.send(
+            json.dumps(
+                {
+                    "type": "subscribe",
+                    "channel": f"account_all_positions/{leader_account_index}",
+                }
+            )
+        )
+        await ws.send(
+            json.dumps(
+                {"type": "subscribe", "channel": f"user_stats/{leader_account_index}"}
+            )
+        )
+
+        async for raw in ws:
+            try:
+                msg = json.loads(raw)
+            except (ValueError, TypeError):
+                logger.warning("не-JSON в стриме — пропускаю: %.120r", raw)
+                continue
+
+            msg_type = msg.get("type", "")
+
+            if msg_type == "update/user_stats":
+                tracker.apply_user_stats(msg)
+                continue
+
+            if msg_type in (
+                "update/account_all_positions",
+                "subscribed/account_all_positions",
+            ):
+                try:
+                    events = tracker.apply_position_update(msg)
+                except (KeyError, TypeError, ValueError) as e:
+                    # Сообщения Lighter бывают и по другой схеме, чем позиции
+                    # (например, пустой market id). Умирать из-за одного такого —
+                    # значит оставить всех подписчиков без зеркаления.
+                    logger.warning("снапшот позиций не разобран: %s — пропускаю", e)
+                    continue
+                for raw_event in events:
+                    try:
+                        await handle_leader_event(
+                            leader_id,
+                            raw_event,
+                            constraints_by_market.get(raw_event["market_id"]),
+                        )
+                    except Exception:
+                        logger.exception(
+                            "событие лидера %s не обработано до конца", raw_event
+                        )
+                continue
+
+            # Прочие типы сообщений (heartbeat и т.п.) — игнорируем осознанно, не молча.
+
+
+async def run_forever(
+    leader_id: str, leader_account_index: int, retry_delay: float = 5.0
+):
+    """Стрим должен переживать обрывы. Одиночное `async with connect()` умирало
+    на первом же ProtocolError или на разрыве от Lighter — процесс запускали,
+    он молча стоял полдня и зеркалить переставал, а подписчики считали, что
+    копи-трейд работает."""
+    import websockets  # noqa: F401  (pip install websockets) — connect() внутри _stream
     from leader_position_tracker import LeaderPositionTracker
     from lighter_rest import get_order_books
 
@@ -265,42 +421,23 @@ async def main(leader_id: str, leader_account_index: int):
     )
     logger.info("Слушаю лидера account_index=%s на %s", leader_account_index, WS_URL)
 
-    async with websockets.connect(WS_URL) as ws:
-        await ws.send(
-            json.dumps(
-                {
-                    "type": "subscribe",
-                    "channel": f"account_all_positions/{leader_account_index}",
-                }
+    delay = retry_delay
+    while True:
+        try:
+            await _stream(
+                leader_id, leader_account_index, tracker, constraints_by_market
             )
-        )
-        await ws.send(
-            json.dumps(
-                {"type": "subscribe", "channel": f"user_stats/{leader_account_index}"}
+            delay = retry_delay  # стрим жил нормально — сбрасываем паузу
+        except Exception as e:
+            logger.warning(
+                "стрим оборвался (%s) — переподключение через %.0fс", e, delay
             )
-        )
+        await asyncio.sleep(delay)
+        delay = min(delay * 2, 60.0)
 
-        async for raw in ws:
-            msg = json.loads(raw)
-            msg_type = msg.get("type", "")
 
-            if msg_type == "update/user_stats":
-                tracker.apply_user_stats(msg)
-                continue
-
-            if msg_type in (
-                "update/account_all_positions",
-                "subscribed/account_all_positions",
-            ):
-                for raw_event in tracker.apply_position_update(msg):
-                    await handle_leader_event(
-                        leader_id,
-                        raw_event,
-                        constraints_by_market.get(raw_event["market_id"]),
-                    )
-                continue
-
-            # Прочие типы сообщений (heartbeat и т.п.) — игнорируем осознанно, не молча.
+async def main(leader_id: str, leader_account_index: int):
+    await run_forever(leader_id, leader_account_index)
 
 
 if __name__ == "__main__":

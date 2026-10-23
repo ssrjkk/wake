@@ -54,7 +54,14 @@ jobs:
         run: pip install pip-audit --quiet
       - name: Scan dependencies for vulnerabilities
         working-directory: backend
-        # Individual urllib3 advisories blocked by lighter-sdk; risk review is in SECURITY.md.
+        # urllib3 остаётся на 2.0.7, потому что lighter-sdk жёстко требует
+        # urllib3<2.1.0 (проверяется: pip show lighter-sdk → Requires … urllib3).
+        # Каждая запись ниже — адвизория urllib3, у которой фикс лежит выше этого
+        # предела, то есть в этом проекте она неустранима иначе, чем снятием пина
+        # upstream. Список ведётся по обоим идентификаторам (CVE и PYSEC), потому
+        # что pip-audit отдаёт новые advisory под PYSEC-именами, и гейт иначе
+        # краснеет без изменения в коде. Обзор риска и условие, при котором
+        # исключения снимаются, — SECURITY.md; задача снятия пина — в трекинге.
         run: |
           pip-audit -r requirements.txt --strict \
             --ignore-vuln CVE-2024-37891 \
@@ -64,7 +71,15 @@ jobs:
             --ignore-vuln CVE-2026-21441 \
             --ignore-vuln CVE-2026-44431 \
             --ignore-vuln CVE-2026-97687 \
-            --ignore-vuln CVE-2026-97689
+            --ignore-vuln CVE-2026-97689 \
+            --ignore-vuln PYSEC-2026-141 \
+            --ignore-vuln PYSEC-2026-1994 \
+            --ignore-vuln PYSEC-2026-1995 \
+            --ignore-vuln PYSEC-2026-1996 \
+            --ignore-vuln PYSEC-2026-1998 \
+            --ignore-vuln PYSEC-2026-1999 \
+            --ignore-vuln PYSEC-2026-4175 \
+            --ignore-vuln PYSEC-2026-4177
 
   # ── Backend tests (pytest + Allure) ──────────────────────────────────────
   backend-tests:

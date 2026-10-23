@@ -10,6 +10,27 @@ from the commit history rather than from a release.
 ## [Unreleased]
 
 ### Added
+- `backend/quant.py`: one rounding implementation for the whole backend. There
+  were two private `_round_down` functions, and the arithmetic in
+  `funding_arb.py` cut 0.29 of a coin to 0.28 because `int(0.29 * 100)` is
+  `int(28.999999999999996)` — measured, not theorised. `round_down` (order size,
+  never up) and `scale_to_int` (price in market ticks, nearest tick) are Decimal
+  based now and shared by the funding calculator, the copy engine and the agent
+  runner.
+- `lighter_rest.get_price_at(market_id, when_s)`: the close of the minute that
+  contained a given moment, read from historical candles. Price markets resolve
+  on this instead of "the price right now", so a resolver that woke up a week
+  late cannot settle "BTC above 100k on 1 October" with October's price.
+- `GET /leaders/{id}/followers` — the leader's own console over follower rows,
+  gated on ownership of the leader. `GET /follows/by-leader/{id}` stays public
+  but returns aggregates only.
+- Tests for the copy engine's order payload (all four side/reduce combinations,
+  tick scaling, index uniqueness), for `quant`, for `net.client_ip` proxy chains,
+  for portfolio data garbage (zero closes, NaN, unequal series, missing market),
+  and a source-hygiene test that fails when characters from CJK scripts appear in
+  the repository — that happened three times in Russian text and no review caught
+  it.
+
 
 - Screens in both READMEs, captured from this build against live data: the
   Terminal, Overview and Funding at 1440 px, the Terminal and Overview at 390 px,
@@ -90,6 +111,31 @@ from the commit history rather than from a release.
   trust boundaries, the local gates and the deployment contract.
 
 ### Changed
+- `WAKE_SESSION_TTL_DAYS` defaults to 7, and 30 is now the ceiling. The token has
+  no revocation list and never will — `session.py` says the short lifetime is
+  what makes that acceptable, and 30 days did not match the claim. Re-login is a
+  wallet signature or a Telegram tap.
+- Resolving a price market is anchored in time: the resolver and the curator's
+  manual trigger both ask for the price at the market's `resolve_at`, not at the
+  moment they happen to run, and both write a `market_resolution` audit row. The
+  manual trigger answers the price it used and when it was taken from.
+- `GET /funding/rates` ranks by who pays first rather than by absolute rate, and
+  `funding_annualized` / `annualized` in the REST answers come from
+  `funding_arb.annualized_yield` instead of a second copy of `× 24 × 365` in the
+  routers — one formula per project, so the page and the bot cannot drift.
+- Unfollowing no longer removes the `follows` row. Rows with `deleted_at` are
+  excluded from every list, from the public AUM and from what the mirror engine
+  will act on; the journal of what already happened stays attached to them.
+- `/agent/step` body is `{market_id, resolution, candles, base_size_usd}`:
+  `recent_prices`, `size_decimals` and `price_decimals` are no longer accepted
+  from the caller. The answer carries `data` — symbol, resolution, number of
+  candles, last price and network — so a decision can be checked against the same
+  window the panel shows.
+- The Funding table labels each venue column as a rate per that venue's epoch and
+  states that epochs differ (Lighter's is one hour, confirmed from the live API);
+  previously Binance and Bybit numbers sat next to an hourly rate with no unit,
+  which invited exactly one wrong conclusion.
+
 
 - The market row of the Terminal became an instrument instead of a header: a grid
   with named areas (symbol, quote, stats, tape) rather than a flex-wrap that
@@ -202,6 +248,98 @@ from the commit history rather than from a release.
   claim of an "optional KMS mode", which the removed file could not deliver.
 
 ### Fixed
+- Copy-trading execution, three faults that each cost money on their own.
+  `leader_listener.py` sent `price=int(event.price)` un-scaled by the market's
+  `supported_price_decimals` (live check: all 246 order-book rows carry the
+  field) — a DOGE order left at price 0, a BTC order with a limit two orders of
+  magnitude below the market, so IOC buys never filled. Closing a position sent
+  the position's own side instead of the opposite one, so closing a long was a
+  buy: the follower's position stayed open while the engine's belief in its size
+  moved anyway. And `current_mirrored_size` was updated whether Lighter accepted
+  the order or rejected it, so one rejection desynchronised the tracked position
+  from the account for good. `test_leader_listener.py` pins all three.
+- The mirror listener died on any single bad event — one malformed WebSocket
+  message, one failed order, one dropped connection and the process was gone,
+  silently, while followers believed copy trading was running. Handling is
+  isolated per event and the stream reconnects with capped backoff.
+- `predict_amm.LMSRMarket.price_yes()` raised `OverflowError` when the NO side
+  was heavy (`math.exp(1000)`), which took down `GET /predict/markets` because
+  the price is computed for every row of the list. The stable form handled one
+  direction; both are handled now.
+- `DELETE /follows/{id}` answered 500 for anyone the engine had ever mirrored:
+  `mirror_log.follow_id` has no ON DELETE rule, so the foreign key blocked the
+  delete. Unfollowing sets `deleted_at` (revision `003_follow_tombstone_unique`)
+  and keeps the journal, which is the only answer to "what did the engine do with
+  my money".
+- Audit writes can no longer fail a request that already moved money.
+  `audit_log.log_action` ran after `record_trade` committed, so a database
+  hiccup produced a 500 on a successful trade and a client that retried got a
+  second one. A failed audit row now surfaces at ERROR level with the event
+  serialised, and the response stays the truth.
+- `session.verify()` answered 401 when `WAKE_SESSION_SECRET` was missing — the
+  same config fault `issue()` reports as 503 — pushing clients into a re-login
+  loop that cannot succeed. A token whose signature part contains non-ASCII
+  characters crashed it with `TypeError` from `hmac.compare_digest` (500); the
+  ASCII check is explicit.
+- `/agent/step` decided, priced and applied risk limits from `recent_prices`
+  supplied by the caller, with `price_decimals` defaulting to 0. The endpoint
+  fetches candles and market constraints from Lighter now and reports the window
+  it used. Related: the agent's position limits counted `dry_run` trades as
+  positions, so a series of simulations could block the first real order with
+  "position limit reached" for positions that do not exist.
+- `client_order_index` came from the clock in both execution paths
+  (`time_ms % 1e6`, `Date.now() % 1e6`). It repeats every ~16.7 minutes and
+  collides within one millisecond; the signing service remembers an index for an
+  hour and answers a collision with the previous tx_hash without placing the
+  order — a success response for an order that never existed. Indexes derive from
+  the trade's own UUID now, and the browser path uses `crypto.getRandomValues`.
+- Rate limiting charged `/health` and `/ready`. Behind a proxy every orchestrator
+  probe lands in one bucket, so the health checker could exhaust it, get 429 on
+  `/ready` and cause restart loops with no code at fault. Probes and CORS
+  preflights are excluded, and `X-Curator-Token` is in `allow_headers` — the
+  operator endpoints require it, and preflight blocked any browser caller.
+- `portfolio_risk`: `price_returns` divided by a zero close (a real shape for an
+  illiquid hourly candle), and NaN travelled through `max(0.0, variance)` into a
+  diversification score of exactly 1.0 — "fully hedged" read out of garbage.
+  Unequal-length series raised a message no user could act on; correlation now
+  compares the common tail, and a hedge candidate that does not lower risk is not
+  offered at all. Answers carry the unhedged volume so "after" can be read.
+- `lighter_rest._get` retried 4xx three times with sleeps, so a forbidden or
+  missing endpoint cost 3.5 seconds and extra quota on every call; only network
+  faults and 5xx retry now. `get_funding_rate` raised on a non-numeric
+  `market_id` in any row, one bad row breaking the whole page, and one market
+  without candles took the entire `/markets/overview` down instead of landing in
+  `no_data`.
+- `base_asset("BTC -USDC")` kept a trailing space, and that function is the
+  matching key between venues — a symbol with stray whitespace silently found no
+  rates. Funding ranking changed from absolute value to "who actually pays
+  first": by magnitude the list opened with a market where shorts pay, which
+  cash-and-carry cannot be built on without a borrow. Zero-rate markets report
+  `direction: "none"` rather than claiming shorts pay (109 of 735 live rows).
+- `POST /follows` accepted a leader following himself, which is how
+  `total_aum_usd` — the number Discover ranks on — becomes self-printed money;
+  and `side` in `/simulate-mirror` treated anything not exactly `"long"` as a
+  short, so an operator reviewing a typo saw a plan for the other direction.
+  Money fields on the funding, portfolio and mirror endpoints now reject NaN and
+  infinity at the boundary: they used to reach the response, and Starlette
+  refuses to serialise Infinity, so the answer was a 500.
+- Telegram widget login: a profile name containing a newline could shift the
+  field boundaries of the string being verified, and a missing bot token answered
+  401 where the Mini App path uses 503. Two concurrent first logins of one
+  account hit the UNIQUE on `l1_address` and returned 500; the insert runs inside
+  a savepoint now.
+- The Terminal refused valid leveraged orders: the balance check compared the
+  order notional to equity while the row above it displayed margin as
+  notional/leverage, so $3000 at 5x on a $1000 account was rejected as too big.
+  The browser's own order path had the same float truncation as the backend
+  (`Math.floor(0.29 * 100)` = 28) and no minimum-order check, so a too-small
+  order produced the exchange's error text instead of the market's own minimum.
+- Emptying a numeric field in the Funding threshold or the Risk basket produced
+  `NaN` from `Number("")`-style parsing: the funding table silently emptied, and
+  NaN travelled into the risk calculation. Both read `valueAsNumber` and fall
+  back to a usable value; the Funding refresh button also clears a stale error
+  banner it had previously kept next to freshly loaded numbers.
+
 
 - `base_asset` normalises dash- and dot-separated spellings ("BTC-USDC",
   "BTC.PERP") instead of leaving a trailing separator that matched nothing: the

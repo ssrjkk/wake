@@ -184,7 +184,8 @@ def price_report(symbol: str, book: dict, stats: dict, funding: dict | None) -> 
     else:
         # direction — это КТО платит: "long" означает, что ставку получают шорты
         # перпа (и именно так строится cash-and-carry: шорт перпа + лонг спота).
-        pays = "лонги" if funding["direction"] == "long" else "шорты"
+        payer = funding["direction"]
+        pays = {"long": "лонги", "short": "шорты"}.get(payer, "никто")
         lines.append(
             f"Funding: {funding['rate'] * 100:.4f}%/ч (годовая ≈ "
             f"{funding['rate'] * 24 * 365 * 100:.1f}%), платят {pays}"

@@ -13,6 +13,7 @@
 """
 
 import json
+import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -20,6 +21,8 @@ from sqlalchemy import select
 
 from database import async_session_factory
 from pg_models import AuditLog
+
+logger = logging.getLogger("wake.audit")
 
 
 @dataclass(frozen=True)
@@ -44,18 +47,46 @@ def _row(a: AuditLog) -> dict:
 
 
 async def log_action(entry: AuditEntry) -> None:
-    async with async_session_factory() as session:
-        session.add(
-            AuditLog(
-                created_at=datetime.now(UTC),
-                actor=entry.actor,
-                action=entry.action,
-                resource=entry.resource,
-                details=json.dumps(entry.details) if entry.details else None,
-                success=entry.success,
-            )
+    """Записать событие аудита. Сбой записи НЕ превращается в 500 запроса.
+
+    Причина не в удобстве: этот вызов стоит ПОСЛЕ того, как деньги уже
+    изменились — record_trade закоммичен, токен выдан, ордера отправлены. Если
+    база в этот момент моргнёт, клиент получил бы 500 на успешно исполненную
+    сделку и разумно повторил бы запрос, то есть вторую сделку вместо одной.
+    Молча потерять событие тоже нельзя: оно уходит в лог уровнем ERROR, целиком и
+    в той же форме, в какой легло бы в таблицу, — разбор «что произошло» тогда
+    ведут по логам, а не по догадкам.
+    """
+    row = AuditLog(
+        created_at=datetime.now(UTC),
+        actor=entry.actor,
+        action=entry.action,
+        resource=entry.resource,
+        details=json.dumps(entry.details) if entry.details else None,
+        success=entry.success,
+    )
+    try:
+        async with async_session_factory() as session:
+            session.add(row)
+            await session.commit()
+    except Exception as e:
+        logger.error(
+            "аудит не записан (%s): %s",
+            e,
+            json.dumps(
+                {
+                    "actor": entry.actor,
+                    "action": entry.action,
+                    "resource": entry.resource,
+                    "details": entry.details,
+                    "success": entry.success,
+                    "created_at": row.created_at.isoformat(),
+                },
+                ensure_ascii=False,
+                default=str,
+            ),
+            exc_info=True,
         )
-        await session.commit()
 
 
 async def recent_actions(

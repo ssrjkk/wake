@@ -1,7 +1,45 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { BACKEND_URL } from './config'
 import { jsonBody } from '../test/request'
-import { setNetwork, getNetwork, getOrderBooks, getCandles, getRecentTrades, getAccountByL1Address, getMarketOverview, listOwnFollows, createFollow, setFollowPaused, deleteFollow, getMirrorLog, registerLeader } from './lighter'
+import { setNetwork, getNetwork, getOrderBooks, getCandles, getRecentTrades, getAccountByL1Address, getMarketOverview, listOwnFollows, createFollow, setFollowPaused, deleteFollow, getMirrorLog, registerLeader, toBaseUnits, toPriceTicks, randomClientOrderIndex } from './lighter'
+
+describe('масштабирование ордера под рынок', () => {
+  it('не теряет шаг цены на float-шуме', () => {
+    // Math.floor(0.29 * 100) = 28: 0.29*100 в float64 это 28.999999999999996.
+    expect(toBaseUnits(0.29, 2)).toBe(29)
+    expect(toBaseUnits(0.57, 2)).toBe(57)
+    expect(toBaseUnits(4.35, 2)).toBe(435)
+    expect(toBaseUnits(0.029, 3)).toBe(29)
+  })
+
+  it('округляет размер вниз, если он реально между тиками', () => {
+    expect(toBaseUnits(0.0289, 2)).toBe(2)
+    expect(toBaseUnits(0.025, 2)).toBe(2)
+    expect(toBaseUnits(1 / 3, 4)).toBe(3333)
+  })
+
+  it('цену приводит к ближайшему тику, а не к нижнему', () => {
+    expect(toPriceTicks(110432.55, 2)).toBe(11043255)
+    expect(toPriceTicks(0.1634, 4)).toBe(1634)
+    expect(toPriceTicks(100.999, 2)).toBe(10100)
+    // Decimals=0 — это не «цена 0», а попытка выразить $0.16 целым долларом:
+    // ближайший тик 1. Именно поэтому масштаб берётся из книги рынка, а не
+    // подставляется значением по умолчанию.
+    expect(toPriceTicks(0.1634, 0)).toBe(1)
+  })
+
+  it('client_order_index в границах int32 и не повторяется подряд', () => {
+    const seen = new Set<number>()
+    for (let i = 0; i < 500; i++) {
+      const v = randomClientOrderIndex()
+      expect(v).toBeGreaterThan(0)
+      expect(v).toBeLessThanOrEqual(0x7fffffff)
+      seen.add(v)
+    }
+    expect(seen.size).toBeGreaterThan(490)
+  })
+})
+
 
 declare global {
   interface Window {

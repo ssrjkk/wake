@@ -56,6 +56,23 @@ class TestNumericalStability(unittest.TestCase):
             self.fail("LMSR переполнился на больших q — naive-формула, не log-sum-exp")
         self.assertTrue(0.0 < price <= 1.0)
 
+    def test_no_overflow_when_no_side_is_heavy(self):
+        """Обратное направление перекоса — то, которое роняло движок.
+
+        Стабильная форма писалась против exp(q_yes/b), и тест закрывал только
+        её: при q_no >> q_yes наивная запись 1/(1+exp((q_no-q_yes)/b)) даёт
+        exp(+1000), а math.exp бросает OverflowError (в отличие от inf в numpy).
+        Практика: рынок, на котором скупели NO, ронял GET /predict/markets и
+        GET /predict/markets/{id} — цену считают для каждой строки списка."""
+        m = LMSRMarket(b=50)
+        try:
+            m.trade("no", 50_000)
+            price = m.price_yes()
+        except OverflowError:
+            self.fail("price_yes() переполнился на больших q_no — неустойчивая ветка")
+        self.assertEqual(price, 0.0)
+        self.assertEqual(m.price_no(), 1.0)
+
     def test_extreme_imbalance_saturates_to_exactly_one_not_nan_or_error(self):
         """Документирует, а не прячет: при достаточном перекосе float64 легитимно
         округляет вероятность ровно до 1.0. Важно не то, что этого не происходит

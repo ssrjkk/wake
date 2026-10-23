@@ -28,6 +28,15 @@ type Decision = {
   reasoning: string;
   execution: { status: string; reason?: string; error?: string; tx_hash?: string } | null;
   volume_today_usd: number;
+  // Что бэкенд реально положил в основу решения: ряд цен и шаг рынка он берёт из
+  // Lighter сам, поэтому сверять надо с этим, а не с тем, что насчитала панель.
+  data?: {
+    symbol: string;
+    resolution: string;
+    candles_used: number;
+    last_price: number;
+    network: string;
+  };
 };
 
 const RESOLUTIONS: Resolution[] = ["5m", "15m", "1h", "4h", "1d"];
@@ -115,14 +124,16 @@ export default function Agent({ signedIn, subscription, currentMarket, setToast,
     }
     setBusy(true);
     try {
+      // Ряд цен и шаг рынка бэкенд берёт сам: решение, цена исполнения и
+      // дневные лимиты считаются по одним и тем же свечам Lighter, а не по тем,
+      // что прислал браузер. От панели уходит только выбор рынка и горизонта.
       const data = await backendJson<Decision>("/agent/step", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           market_id: currentMarket.market_id,
-          recent_prices: prices.slice(-POINTS_SENT),
-          size_decimals: currentMarket.supported_size_decimals,
-          price_decimals: currentMarket.supported_price_decimals,
+          resolution,
+          candles: POINTS_SENT,
           base_size_usd: baseSizeUsd,
         }),
       });
@@ -221,7 +232,9 @@ export default function Agent({ signedIn, subscription, currentMarket, setToast,
               <p style={{ fontSize: "13px", color: "var(--text-muted)", margin: 0 }}>Читаю {POINTS_SENT} свечей по {resolution}…</p>
             ) : (
               <p style={{ fontSize: "12px", color: "var(--text-muted)", margin: 0 }}>
-                {prices.length} закрытий по {resolution}, последние {Math.min(10, prices.length)} — окно, по которому считается момент.
+                {lastDecision?.data
+                  ? `${lastDecision.data.candles_used} закрытий ${lastDecision.data.resolution} с ${lastDecision.data.network} — ряд забрал бэкенд, последнее ${fmt(lastDecision.data.last_price, currentMarket?.supported_price_decimals ?? 2)}.`
+                  : `${prices.length} закрытий по ${resolution}, последние ${Math.min(10, prices.length)} — окно, по которому считается момент; ряд для решения берёт бэкенд.`}
               </p>
             )}
 

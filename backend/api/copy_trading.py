@@ -18,9 +18,10 @@ follower_id приезжал в теле или query, и эндпоинт ве�
 
 import math
 import uuid
+from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, field_validator
+from fastapi import APIRouter, Depends, Query
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.exc import IntegrityError
 
 import audit_log as al
@@ -62,15 +63,8 @@ class RegisterLeader(BaseModel):
 
 class CreateFollow(BaseModel):
     leader_id: str
-    allocation_usd: float
+    allocation_usd: float = Field(gt=0, le=1_000_000_000, allow_inf_nan=False)
     max_leverage: float = 3
-
-    @field_validator("allocation_usd")
-    @classmethod
-    def allocation_positive(cls, v: float) -> float:
-        if not math.isfinite(v) or v <= 0:
-            raise ValueError("allocation_usd — положительное конечное число")
-        return v
 
     @field_validator("max_leverage")
     @classmethod
@@ -95,16 +89,27 @@ class UpdateLeaderFee(BaseModel):
 
 
 class SimulateMirrorRequest(BaseModel):
+    """Вход ручного прогона mirror_engine.
+
+    side — Literal, а не строка с проверкой «== "long", иначе short»: опечатка
+    в side ("Long", "buy") молча переворачивала сторону зеркального ордера, и
+    оператор видел в плане не ту ногу, которую собирался проверить.
+
+    price_decimals обязателен и в границах рынка: без него base_amount и цена
+    считаются в неверном масштабе, а `int()` от NaN или 1e400 — это не «пустой
+    ответ», а 500 на эндпоинте, который показывает план."""
+
     leader_id: str
     market_id: int
-    side: str  # "long" | "short"
+    side: Literal["long", "short"]
     is_increase: bool
-    size_delta: float
-    price: float
-    leader_equity_usd: float
-    leader_position_before: float = 0
-    min_base_amount: float = 0.001
-    size_decimals: int = 3
+    size_delta: float = Field(ge=0, le=1_000_000_000, allow_inf_nan=False)
+    price: float = Field(gt=0, le=1_000_000_000, allow_inf_nan=False)
+    leader_equity_usd: float = Field(ge=0, le=1_000_000_000_000, allow_inf_nan=False)
+    leader_position_before: float = Field(default=0, ge=0, allow_inf_nan=False)
+    min_base_amount: float = Field(default=0.001, ge=0, allow_inf_nan=False)
+    size_decimals: int = Field(default=3, ge=0, le=8)
+    price_decimals: int = Field(ge=0, le=8)
 
 
 async def _own_account_index(user_id: str) -> int | None:
@@ -119,6 +124,21 @@ async def _own_account_index(user_id: str) -> int | None:
     return row["lighter_account_index"]
 
 
+async def _owned_leader(user_id: str, leader_id: str) -> dict:
+    """Лидер, которым владеет этот субъект токена: 404, если записи нет, 403,
+    если она есть, но аккаунт Lighter подтверждён входом кошелька у другого."""
+    row = await db.leader(leader_id)
+    if not row:
+        raise deny(404, "LEADER_NOT_FOUND", "Лидер не найден")
+    if row["lighter_account_index"] != await _own_account_index(user_id):
+        raise deny(
+            403,
+            "LEADER_NOT_OWNED",
+            "Это читает или меняет только тот, чей вход подтвердил этот аккаунт Lighter",
+        )
+    return row
+
+
 # ── Публичное чтение: это витрина, она открыта без входа ──────────────────────
 
 
@@ -129,12 +149,39 @@ async def list_leaders():
 
 @router.get("/follows/by-leader/{leader_id}")
 async def list_follows_for_leader(leader_id: str):
+    """Публичная витрина лидера: сколько людей и какой капитал.
+
+    `follower_id` наружу не отдаётся. Тот же ответ у оператора
+    (POST /simulate-mirror) закрыт токеном куратора именно потому, что
+    аллокации и размеры — не публичные данные; оставлять их в открытом роуте
+    противоречием было бы — это список людей с суммами, которые они вложили."""
     rows = await db.follows_for_leader(leader_id)
     return {
         "follower_count": len(rows),
         "total_aum_usd": sum(r["allocation_usd"] for r in rows),
-        "follows": rows,
+        "follows": [
+            {
+                "allocation_usd": r["allocation_usd"],
+                "max_leverage": r["max_leverage"],
+                "created_at": r["created_at"],
+            }
+            for r in rows
+        ],
     }
+
+
+@router.get("/leaders/{leader_id}/followers")
+async def list_own_leader_followers(
+    leader_id: str, user_id: str = Depends(require_user)
+):
+    """Консоль лидера: кто и на сколько подписан, построчно.
+
+    Тот же список, что отдаётся публично, но агрегатом ниже — с follower_id и
+    current_mirrored_size. Право на него решает владение лидером, а не знание
+    его ID: список людей с суммами, которые они вложили в чужие сделки, это не
+    витрина."""
+    await _owned_leader(user_id, leader_id)
+    return await db.follows_for_leader(leader_id)
 
 
 # ── Всё, у чего есть владелец ────────────────────────────────────────────────
@@ -158,7 +205,16 @@ async def register_leader(req: RegisterLeader, user_id: str = Depends(require_us
         return {"leader_id": existing["id"]}
 
     leader_id = str(uuid.uuid4())
-    await db.upsert_leader(leader_id, account_index, req.handle, req.fee_bps)
+    try:
+        await db.upsert_leader(leader_id, account_index, req.handle, req.fee_bps)
+    except IntegrityError:
+        # UNIQUE leaders.lighter_account_index: параллельный запрос уже успел
+        # завести запись на этот аккаунт. Идемпотентный ответ — тот же id, что
+        # вернул бы обычный путь «сначала проверь», а не 500 на втором клике.
+        existing = await db.leader_by_account_index(account_index)
+        if existing is None:
+            raise
+        return {"leader_id": existing["id"]}
     await al.log_action(
         al.AuditEntry(
             actor=user_id,
@@ -182,15 +238,7 @@ async def update_leader_fee(
     """Лидер меняет комиссию в любой момент. Влияет только на то, что подписчик
     увидит в Discover после изменения, — уже созданные строки follows не пересчитываются
     (в них нет комиссии: она хранится один раз в leaders.fee_bps)."""
-    row = await db.leader(leader_id)
-    if not row:
-        raise deny(404, "LEADER_NOT_FOUND", "Лидер не найден")
-    if row["lighter_account_index"] != await _own_account_index(user_id):
-        raise deny(
-            403,
-            "LEADER_NOT_OWNED",
-            "Комиссию меняет только тот, чей вход подтвердил этот аккаунт Lighter",
-        )
+    row = await _owned_leader(user_id, leader_id)
     await db.upsert_leader(
         leader_id, row["lighter_account_index"], row["handle"], req.fee_bps
     )
@@ -213,6 +261,22 @@ async def list_own_follows(user_id: str = Depends(require_user)):
 
 @router.post("/follows")
 async def create_follow(req: CreateFollow, user_id: str = Depends(require_user)):
+    """Подписка на чужого лидера.
+
+    На себя — отказ. Без этой строки лидер подписывается на себя своей же
+    аллокацией и total_aum_usd на его витрине растёт из воздуха: AUM — единственное,
+    чем Discover ранжирует лидеров, и иначе «сколько под ним капитала» остаётся
+    цифрой, которую лидер печатает сам одним запросом."""
+    row = await db.leader(req.leader_id)
+    if row is None:
+        raise deny(404, "LEADER_NOT_FOUND", "Лидер не найден")
+    if row["lighter_account_index"] == await _own_account_index(user_id):
+        raise deny(
+            400,
+            "SELF_FOLLOW_NOT_ALLOWED",
+            "На своего лидера подписываться нельзя: AUM витрины считается из этих строк",
+        )
+
     follow_id = str(uuid.uuid4())
     try:
         await db.create_follow(
@@ -223,12 +287,11 @@ async def create_follow(req: CreateFollow, user_id: str = Depends(require_user))
             req.max_leverage,
         )
     except IntegrityError:
-        # Скорее всего UNIQUE(follower_id, leader_id) — уже подписан на этого
-        # лидера. Реже — FK: подписчика или лидера не существует. Форма отказа
-        # одна: различие клиенту опереть не на что, оба случая значат «так нельзя».
-        raise HTTPException(
-            status_code=400,
-            detail="Подписка уже существует или невалидны данные",
+        # UNIQUE(follower_id, leader_id): вторая подписка на того же лидера.
+        # Отдельный код и 409, а не общий 400 «или данные невалидны»: клиенту
+        # есть на что опереться, и «уже подписан» — это не «запрос испорчен».
+        raise deny(
+            409, "FOLLOW_EXISTS", "Подписка на этого лидера у тебя уже есть"
         ) from None
     return {"follow_id": follow_id}
 
@@ -306,7 +369,9 @@ async def simulate_mirror(req: SimulateMirrorRequest):
         leader_position_before=req.leader_position_before,
     )
     constraints = MarketConstraints(
-        min_base_amount=req.min_base_amount, size_decimals=req.size_decimals
+        min_base_amount=req.min_base_amount,
+        size_decimals=req.size_decimals,
+        price_decimals=req.price_decimals,
     )
 
     plan = compute_mirror_plan(event, followers, constraints)

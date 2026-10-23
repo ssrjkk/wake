@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Radio, ChevronRight, Users, DollarSign, TrendingUp, TrendingDown, Percent, Wallet } from "lucide-react";
-import { listLeaders, listFollowsForLeader, setLeaderFee, type LeaderFollowRow } from "../lib/lighter";
+import { listLeaders, listOwnLeaderFollowers, setLeaderFee, type LeaderFollowRow } from "../lib/lighter";
 import { errorText } from "../lib/backend";
 import { buildLeader } from "../lib/leaders";
 import type { Leader } from "./types";
@@ -43,7 +43,7 @@ export default function Earn({ isCopyable, setTab, leaderId, leaderFeeBps, setLe
           return;
         }
         const built = await buildLeader(mine);
-        const subs = await listFollowsForLeader(leaderId!);
+        const subs = await listOwnLeaderFollowers(leaderId!);
         if (!cancelled) {
           setLeader(built);
           setFollows(subs.sort((a, b) => b.allocation_usd - a.allocation_usd));

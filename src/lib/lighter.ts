@@ -64,6 +64,10 @@ export type OrderBook = {
   // у BTC "370.840860". Не доллары и не сопоставимо между рынками, поэтому
   // любое сравнение требует Number() и явной подписи "в активе".
   open_interest: string;
+  // Рядом с open_interest Lighter отдаёт и тот же интерес в долларах (замер
+  // 2026-10-23: поле есть у всех 246 строк книги). Именно он сопоставим между
+  // BTC и DOGE, поэтому ранжирование кандидатов на хедж идёт по нему.
+  open_interest_usd?: number;
 };
 
 export async function getOrderBooks(filter: "all" | "spot" | "perp" = "perp"): Promise<OrderBook[]> {
@@ -277,7 +281,7 @@ export type MarketOverviewRow = {
   maker_fee: number;
   funding_hourly: number | null;      // без знака; кто платит — funding_payer
   funding_annualized: number | null;  // ставка × 24 × 365
-  funding_payer: "long" | "short" | null;
+  funding_payer: "long" | "short" | "none" | null;
 };
 
 export type MarketOverview = {
@@ -370,7 +374,9 @@ export async function getLeaderStats(leaderId: string): Promise<LeaderStats> {
 }
 
 // Ряд подписок лидера — те же строки таблицы follows, что считает getLeaderStats,
-// но поштучно: видно, кто именно и сколько аллоцировал. Пауза исключается запросом.
+// но поштучно и только для владельца: публичный GET /follows/by-leader отдаёт
+// агрегаты, потому что «кто именно и на сколько аллоцировал» у оператора
+// закрыто токеном куратора, и правилом должно быть оно, а не комментарий.
 export type LeaderFollowRow = {
   id: string;
   follower_id: string;
@@ -380,9 +386,10 @@ export type LeaderFollowRow = {
   created_at: number;
 };
 
-export async function listFollowsForLeader(leaderId: string): Promise<LeaderFollowRow[]> {
-  const data = await backendJson<{ follows?: BackendFollow[] }>(`/follows/by-leader/${leaderId}`);
-  return (data.follows ?? []).map((r) => ({
+/** Консоль лидера: построчный список его подписчиков. 403, если лидер чужой. */
+export async function listOwnLeaderFollowers(leaderId: string): Promise<LeaderFollowRow[]> {
+  const rows = await backendJson<BackendFollow[]>(`/leaders/${leaderId}/followers`);
+  return rows.map((r) => ({
     id: r.id,
     follower_id: r.follower_id,
     allocation_usd: Number(r.allocation_usd),
@@ -417,21 +424,65 @@ export async function listLeaders(): Promise<LeaderRow[]> {
 // Ордер подписывает и отправляет локальный backend/signing_service.py; адрес — из
 // VITE_SIGNING_SERVICE_URL. Если сервис не запущен, запрос падает явной ошибкой —
 // интерфейс не делает вид, что сделка прошла. Пока у сервиса включён сухой ход
-// (WAKE_DRY_RUN, значение по умолчанию), он возвращает план и dry_run: true, и в
-// Lighter ничего не уходит. Сухой ход (WAKE_DRY_RUN, значение по
-// умолчанию) возвращает план и tx_hash=null: в Lighter ничего не уходит.
+// (WAKE_DRY_RUN, значение по умолчанию), он возвращает план, dry_run: true и
+// tx_hash=null: в Lighter ничего не уходит.
+const TICK_EPSILON = 1e-9;
+
+/** Базовые единицы рынка: amount * 10**size_decimals, округление вниз.
+ *
+ * Math.floor(0.29 * 100) даёт 28, потому что 0.29*100 в float64 это
+ * 28.999999999999996 — тот же баг, что был в Python-части, и он стоил одного
+ * шага цены на каждом ордере, где значение кратно шагу. Сначала проверяется, не
+ * лежит ли число в пределах float-шума под целым: если да, берётся целое; если
+ * значение реально ниже (28.5, 28.999) — всё равно floor, вверх не округляем. */
+export function toBaseUnits(amount: number, decimals: number): number {
+  const scaled = amount * 10 ** decimals;
+  const nearest = Math.round(scaled);
+  return nearest <= scaled + TICK_EPSILON ? nearest : Math.floor(scaled);
+}
+
+/** Цена в тиках рынка: price * 10**price_decimals, ближайший тик. */
+export function toPriceTicks(price: number, decimals: number): number {
+  const scaled = price * 10 ** decimals;
+  const nearest = Math.round(scaled);
+  return nearest >= scaled - TICK_EPSILON ? nearest : Math.ceil(scaled);
+}
+
+/** client_order_index: уникальный на каждый замысел и в границах int32.
+ *
+ * Date.now() % 1e6 повторяется каждые ~16,7 минуты и совпадает у двух кликов в
+ * одну миллисекунду. signing_service помнит отправленные индексы час и на
+ * совпадении отдаёт tx_hash прошлой сделки, не отправляя ордер — «успешный»
+ * ответ без ордера. crypto.getRandomValues даёт 31-битное значение; вероятность
+ * совпадения на масштабе одного счёта пренебрежима. */
+export function randomClientOrderIndex(): number {
+  const buf = new Uint32Array(1);
+  crypto.getRandomValues(buf);
+  return Number(buf[0] % 0x7fffffff) || 1;
+}
+
 export async function placeOrderViaSigningService(
   market: OrderBook,
   side: "long" | "short",
   usdSize: number,
   price: number
 ): Promise<{ tx_hash: string | null; dry_run: boolean }> {
-  const baseAmountFloat = usdSize / price;
-  const baseAmount = Math.floor(baseAmountFloat * 10 ** market.supported_size_decimals);
-  const priceInt = Math.round(price * 10 ** market.supported_price_decimals);
+  const baseAmount = toBaseUnits(usdSize / price, market.supported_size_decimals);
+  const priceInt = toPriceTicks(price, market.supported_price_decimals);
+  const minQuote = Number(market.min_quote_amount);
 
+  if (!(usdSize > 0) || !(price > 0)) {
+    throw new Error("Размер и цена должны быть положительными числами");
+  }
   if (baseAmount <= 0) {
     throw new Error("Размер после округления по decimals рынка равен нулю — увеличь сумму");
+  }
+  if (minQuote > 0 && usdSize < minQuote) {
+    // До отправки: Lighter отверг бы такой ордер своей строкой, и человек получил
+    // бы ошибку биржи вместо ответа «не хватает на минимум этого рынка».
+    throw new Error(
+      `Минимальный ордер по паре — ${minQuote} USDC, у тебя ${usdSize} USDC`
+    );
   }
 
   const res = await fetch(`${SIGNING_SERVICE_URL}/place-order`, {
@@ -439,7 +490,7 @@ export async function placeOrderViaSigningService(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       market_index: market.market_id,
-      client_order_index: Date.now() % 1_000_000,
+      client_order_index: randomClientOrderIndex(),
       base_amount: baseAmount,
       price: priceInt,
       is_ask: side === "short",

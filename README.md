@@ -55,7 +55,7 @@ Both identity paths end in the same thing: a signed session token, and every end
 
 **Wallet.** Injected wallets (MetaMask, Rabby) work with no configuration; WalletConnect QR needs `VITE_WALLETCONNECT_PROJECT_ID`. Ownership is proven, not asserted: `POST /auth/wallet/challenge` returns a one-off `personal_sign` text (5 minutes, single use), `POST /auth/wallet/verify` recovers the address from the signature and rejects it if it is not the address that asked. The follower record is created from that recovered checksummed address.
 
-**The token.** `{user_id, token, expires_at}` comes back from any successful sign-in; send it as `Authorization: Bearer <token>`. It is `wk1.<payload>.<HMAC-SHA256>` signed with `WAKE_SESSION_SECRET` and valid for `WAKE_SESSION_TTL_DAYS` (30 days by default) — there is no server-side state to lose, and no way to claim another user by editing an id in the request. Without `WAKE_SESSION_SECRET` the backend answers 503 instead of issuing tokens signed with a guessable key.
+**The token.** `{user_id, token, expires_at}` comes back from any successful sign-in; send it as `Authorization: Bearer <token>`. It is `wk1.<payload>.<HMAC-SHA256>` signed with `WAKE_SESSION_SECRET` and valid for `WAKE_SESSION_TTL_DAYS` (7 days by default) — there is no server-side state to lose, and no way to claim another user by editing an id in the request. Without `WAKE_SESSION_SECRET` the backend answers 503 instead of issuing tokens signed with a guessable key.
 
 ## Quick start
 
@@ -192,8 +192,8 @@ Price markets close themselves at the deadline only while this process runs; oth
 | `WAKE_MAINNET_LIVE` | `false` | second switch: `WAKE_DRY_RUN=false` on mainnet refuses to start without it |
 | `WAKE_CORS_ORIGINS` | `http://localhost:5173` | comma-separated list of frontends allowed to call the API |
 | `WAKE_SESSION_SECRET` | empty | signs session tokens; empty means every sign-in answers 503 rather than using a guessable key |
-| `WAKE_SESSION_TTL_DAYS` | 30 | how long a token stays valid (1–180) |
-| `WAKE_CURATOR_TOKEN` | empty | empty answers 500 `CURATOR_NOT_CONFIGURED` on every operator endpoint; a wrong `X-Curator-Token` answers 403 |
+| `WAKE_SESSION_TTL_DAYS` | 7 | how long a token stays valid (1–30) |
+| `WAKE_CURATOR_TOKEN` | empty | empty answers 503 `CURATOR_NOT_CONFIGURED` on every operator endpoint; a wrong `X-Curator-Token` answers 403 |
 | `WAKE_TRUSTED_PROXY_IPS` | empty | which connection peers may supply `X-Forwarded-For`; empty means the socket address wins, so behind Railway everyone shares one bucket |
 | `TELEGRAM_BOT_TOKEN` | empty | bot process and Telegram login verification |
 | `WAKE_MASTER_KEY` | empty | encrypts the key store; keep it in a secrets manager, not on disk |
@@ -206,7 +206,7 @@ Price markets close themselves at the deadline only while this process runs; oth
 # backend — run from backend/; needs a scratch PostgreSQL database
 createdb wake_test
 export WAKE_TEST_DATABASE_URL=postgresql+asyncpg://wake:wake@localhost:5432/wake_test
-python -m unittest discover        # 350 tests, all through discovery
+python -m unittest discover        # 388 tests, all through discovery
 python -m pytest -q                # the same set under pytest (+ Allure in CI)
 
 # frontend
@@ -236,7 +236,7 @@ PW_PORT=5178 npx playwright test
   - `portfolio.py` — cross-asset risk and hedge
   - `funding.py` — venue comparison and carry calculations
 - Storage is one PostgreSQL base: `database.py` (async engine), `pg_models.py` (schema), `alembic/` (migrations), and the repositories `db.py`, `predict_db.py`, `agent_db.py`, `audit_log.py`, `subscription.py`
-- Core logic lives in root modules and is tested on its own: `mirror_engine.py`, `leader_position_tracker.py`, `predict_amm.py`, `predict_resolution.py`, `portfolio_risk.py`, `funding_arb.py`, `agent_decision.py`, `agent_memory.py`, `risk_limits.py`, `rate_limiter.py`, `cache.py`
+- Core logic lives in root modules and is tested on its own: `mirror_engine.py`, `leader_position_tracker.py`, `predict_amm.py`, `predict_resolution.py`, `portfolio_risk.py`, `funding_arb.py`, `quant.py`, `agent_decision.py`, `agent_memory.py`, `risk_limits.py`, `rate_limiter.py`, `cache.py`
 - Configuration is read once in `backend/config.py`, and every variable it owns is validated there — a bad combination (live orders on mainnet without the second switch, a non-Postgres URL) stops the process at startup. A handful of variables stay outside it because they belong to one process: the signing key triple in `signing_service.py`, `WAKE_MASTER_KEY` and `WAKE_KEYSTORE_PATH` in `encrypted_key_store.py`, `WAKE_TEST_DATABASE_URL` in the tests, `WAKE_ORDER_*` in `place_order_example.py`. They are listed in `backend/.env.example` too, with the process that reads each one.
 
 ### Frontend (React + TypeScript + Vite + Tailwind + wagmi)
@@ -316,7 +316,7 @@ docker compose up predict-resolver
 
 - `fee_bps` on a leader is validated (0–500) and stored, but nothing charges it — there is no payout path.
 - No payments of any kind. Subscription tiers and trials (`backend/subscription.py`) exist as state only.
-- Session tokens are not revocable: there is no server-side session store, so a leaked token is valid until `WAKE_SESSION_TTL_DAYS` passes and "log out" can only mean discarding it on the client. The trade-off was made deliberately for a backend that survives a Redis flush, and it is the reason the TTL is bounded at 180 days.
+- Session tokens are not revocable: there is no server-side session store, so a leaked token is valid until `WAKE_SESSION_TTL_DAYS` passes and "log out" can only mean discarding it on the client. The trade-off was made deliberately for a backend that survives a Redis flush, and it is the reason the default is 7 days with a hard ceiling of 30.
 - The rate limiter fails open when Redis is unreachable — a dead Redis must not take the terminal away from someone with open positions. `/ready` reports that state instead of hiding it.
 - Predict markets are an internal LMSR AMM: prices and payouts are computed against the pool in this database, not against a counterparty on an exchange.
 - The LLM decision path is covered by fallback tests (`test_llm_agent.py`) — no key, network error, malformed JSON, invalid action — but not by a call to a real model.

@@ -13,7 +13,7 @@ import uuid
 import testsupport
 import db
 import leader_listener
-from mirror_engine import MarketConstraints
+from mirror_engine import MarketConstraints, MirrorOrder, Side
 
 
 def _patch_module(module, name, value):
@@ -86,8 +86,13 @@ def raw_event(
 
 class TestBuildConstraints(unittest.TestCase):
     """Ошибкой было приложение BTC-шаблона ко всем рынкам: у каждого рынка свои
-    min_base_amount и supported_size_decimals, неверный шаг — это неверный
-    base_amount mirror-ордера на реальном счёте."""
+    min_base_amount, supported_size_decimals и supported_price_decimals; неверный
+    шаг — это неверный base_amount mirror-ордера на реальном счёте, неверная
+    decimals — цена ордера не на тот порядок величины.
+
+    Форма полей взята из живого orderBooks mainnet (замер 2026-10-23): размеры
+    приходят СТРОКАМИ ("min_base_amount": "0.70"), decimals — числами, и оба
+    decimals есть у 246 из 246 строк книги."""
 
     def test_per_market_values_keyed_by_market_id(self):
         books = [
@@ -95,22 +100,28 @@ class TestBuildConstraints(unittest.TestCase):
                 "market_id": "1",
                 "status": "active",
                 "min_base_amount": "0.00007",
-                "supported_size_decimals": "4",
+                "supported_size_decimals": 4,
+                "supported_price_decimals": 2,
             },
             {
                 "market_id": "8",
                 "status": "active",
                 "min_base_amount": "0.01",
-                "supported_size_decimals": "2",
+                "supported_size_decimals": 2,
+                "supported_price_decimals": 4,
             },
         ]
         out = leader_listener.build_constraints(books)
         self.assertEqual(sorted(out), [1, 8])
         self.assertEqual(
-            out[1], MarketConstraints(min_base_amount=0.00007, size_decimals=4)
+            out[1],
+            MarketConstraints(
+                min_base_amount=0.00007, size_decimals=4, price_decimals=2
+            ),
         )
         self.assertEqual(
-            out[8], MarketConstraints(min_base_amount=0.01, size_decimals=2)
+            out[8],
+            MarketConstraints(min_base_amount=0.01, size_decimals=2, price_decimals=4),
         )
         self.assertIsInstance(out[1].min_base_amount, float)
         self.assertIsInstance(out[8].size_decimals, int)
@@ -121,22 +132,104 @@ class TestBuildConstraints(unittest.TestCase):
                 "market_id": "1",
                 "status": "inactive",
                 "min_base_amount": "0.1",
-                "supported_size_decimals": "2",
+                "supported_size_decimals": 2,
+                "supported_price_decimals": 2,
             },
             {
                 "market_id": "8",
                 "status": "active",
                 "min_base_amount": "0.1",
-                "supported_size_decimals": "2",
+                "supported_size_decimals": 2,
+                "supported_price_decimals": 2,
             },
             {"market_id": "9", "status": "active"},  # книга без полей ограничений
+            {
+                "market_id": "10",
+                "status": "active",
+                "min_base_amount": "0.1",
+                "supported_size_decimals": 2,
+                # нет supported_price_decimals
+            },
         ]
         out = leader_listener.build_constraints(books)
         self.assertEqual(
             list(out),
             [8],
-            "неактивный рынок поставить ордер не может, битая строка не роняет весь список",
+            "неактивный рынок поставить ордер не может; битая строка не роняет "
+            "весь список; рынок без price_decimals исключён, а не получил дефолт 0 "
+            "— с дефолтом ордер ушёл бы с ценой в сто раз меньше рынка",
         )
+
+
+class TestBuildOrderArgs(unittest.TestCase):
+    """Аргументы create_order считаются здесь, а не внутри сетевого кода —
+    иначе единственная проверка «ордер собрался верно» требовала бы живого
+    Lighter и приватного ключа.
+
+    Каждый из четырёх case ниже — это баг, который уже был в этой функции:
+    цена без масштаба рынка, сторона закрытия не в обратную сторону и
+    float-усечённый base_amount."""
+
+    def setUp(self):
+        self.constraints = MarketConstraints(
+            min_base_amount=0.001, size_decimals=4, price_decimals=2
+        )
+        self.uid = str(uuid.uuid4())
+
+    def args(self, side, reduce_only, base_amount=0.29, price=2000.0):
+        order = MirrorOrder(
+            follower_id="f1",
+            market_id=8,
+            side=side,
+            base_amount=base_amount,
+            reduce_only=reduce_only,
+        )
+        return leader_listener.build_order_args(
+            order, price, self.constraints, 900, self.uid
+        )
+
+    def test_price_is_scaled_to_market_ticks(self):
+        # Было: int(2000.0) = 2000, то есть лимитка в $20 на рынке за $2000.
+        self.assertEqual(self.args(Side.LONG, False)["price"], 200_000)
+
+    def test_sub_dollar_price_is_not_truncated_to_zero(self):
+        # DOGE-класс: int(0.1634) = 0 — ордер с нулевой ценой.
+        c = MarketConstraints(min_base_amount=0.001, size_decimals=1, price_decimals=4)
+        order = MirrorOrder("f1", 61, Side.LONG, 1.0, False)
+        self.assertEqual(
+            leader_listener.build_order_args(order, 0.1634, c, 900, self.uid)["price"],
+            1634,
+        )
+
+    def test_base_amount_keeps_the_whole_tick(self):
+        # Было: int(0.29 * 10**4) = 2899 вместо 2900.
+        self.assertEqual(self.args(Side.LONG, False)["base_amount"], 2900)
+
+    def test_open_long_buys_open_short_sells(self):
+        self.assertFalse(self.args(Side.LONG, False)["is_ask"])
+        self.assertTrue(self.args(Side.SHORT, False)["is_ask"])
+
+    def test_close_flips_the_side_of_the_position(self):
+        """side в плане — СТОРОНА ПОЗЫЦИИ, а не направление сделки. Без XOR
+        закрытие лонга уходило как buy+reduce_only, то есть подписчик не мог
+        закрыться никогда."""
+        close_long = self.args(Side.LONG, True)
+        close_short = self.args(Side.SHORT, True)
+        self.assertTrue(close_long["is_ask"], "закрытие лонга — это продажа")
+        self.assertFalse(close_short["is_ask"], "закрытие шорта — это покупка")
+        self.assertTrue(close_long["reduce_only"])
+
+    def test_client_order_index_is_stable_per_intent_and_within_int32(self):
+        first = self.args(Side.LONG, False)["client_order_index"]
+        self.assertEqual(first, self.args(Side.LONG, False)["client_order_index"])
+        self.assertGreaterEqual(first, 0)
+        self.assertLess(first, 2**31)
+        other_uid = str(uuid.uuid4())
+        order = MirrorOrder("f1", 8, Side.LONG, 0.29, False)
+        second = leader_listener.build_order_args(
+            order, 2000.0, self.constraints, 900, other_uid
+        )["client_order_index"]
+        self.assertNotEqual(first, second)
 
 
 class TestHandleLeaderEvent(ListenerDbCase):
@@ -147,7 +240,8 @@ class TestHandleLeaderEvent(ListenerDbCase):
         first = await self.add_follower(1000.0)
         second = await self.add_follower(500.0)
         await self.run_event(
-            raw_event(), MarketConstraints(min_base_amount=0.001, size_decimals=3)
+            raw_event(),
+            MarketConstraints(min_base_amount=0.001, size_decimals=3, price_decimals=2),
         )
 
         rows = [
@@ -172,7 +266,7 @@ class TestHandleLeaderEvent(ListenerDbCase):
         follower_id = await self.add_follower(1.0)
         await self.run_event(
             raw_event(price=2000.0, size_delta=0.5, leader_equity_usd=50000.0),
-            MarketConstraints(min_base_amount=10.0, size_decimals=2),
+            MarketConstraints(min_base_amount=10.0, size_decimals=2, price_decimals=2),
         )
 
         rows = await self.mirror_log(follower_id)
@@ -211,7 +305,7 @@ class TestHandleLeaderEvent(ListenerDbCase):
                 leader_position_before=0.4,
                 leader_equity_usd=50000.0,
             ),
-            MarketConstraints(min_base_amount=0.001, size_decimals=3),
+            MarketConstraints(min_base_amount=0.001, size_decimals=3, price_decimals=2),
         )
 
         rows = await self.mirror_log(follower_id)
@@ -223,7 +317,8 @@ class TestHandleLeaderEvent(ListenerDbCase):
         follower_id = await self.add_follower(1000.0)
         await db.set_paused(self.follow_ids[follower_id], True)
         await self.run_event(
-            raw_event(), MarketConstraints(min_base_amount=0.001, size_decimals=3)
+            raw_event(),
+            MarketConstraints(min_base_amount=0.001, size_decimals=3, price_decimals=2),
         )
         self.assertEqual(await self.mirror_log(follower_id), [])
 

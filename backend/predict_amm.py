@@ -31,8 +31,19 @@ class LMSRMarket:
         )
 
     def price_yes(self) -> float:
-        """Логистическая форма — эквивалентна наивной, но не переполняется на больших q."""
-        return 1 / (1 + math.exp((self.q_no - self.q_yes) / self.b))
+        """Логистическая форма — эквивалентна наивной, но не переполняется.
+
+        Разворот sigmoid нужен в обе стороны: math.exp() в Python при аргументе
+        больше ~709 бросает OverflowError (в numpy — inf), поэтому наивная
+        форма 1/(1+exp((q_no-q_yes)/b)) падала не на больших q_yes, а на больших
+        q_no: рынок, где кто-то скупил NO, валил GET /predict/markets целиком
+        (цена считается для каждой строки списка). При x <= 0 считается через
+        exp(x), который уходит в 0, а не в inf — значение всегда конечное."""
+        x = (self.q_yes - self.q_no) / self.b
+        if x >= 0:
+            return 1 / (1 + math.exp(-x))
+        e = math.exp(x)
+        return e / (1 + e)
 
     def price_no(self) -> float:
         return 1 - self.price_yes()

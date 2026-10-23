@@ -49,7 +49,7 @@ class TestPredictResolver(unittest.TestCase):
 
     def test_due_market_closes_on_threshold(self):
         self.create_price("due-yes", 120_000, ">=", self.now - 60)
-        closed = self.resolve(lambda mid, net: 125_000)
+        closed = self.resolve(lambda mid, net, at: 125_000)
         self.assertEqual([c["market_id"] for c in closed], ["due-yes"])
         m = self.markets()["due-yes"]
         self.assertEqual(m["outcome"], "yes")
@@ -57,23 +57,23 @@ class TestPredictResolver(unittest.TestCase):
 
     def test_below_threshold_resolves_no(self):
         self.create_price("due-no", 120_000, ">=", self.now - 60)
-        closed = self.resolve(lambda mid, net: 119_999)
+        closed = self.resolve(lambda mid, net, at: 119_999)
         self.assertEqual(closed[0]["outcome"], "no")
 
     def test_market_not_yet_due_stays_open(self):
         self.create_price("future", 120_000, ">=", self.now + 3600)
-        self.assertEqual(self.resolve(lambda mid, net: 999_999), [])
+        self.assertEqual(self.resolve(lambda mid, net, at: 999_999), [])
         self.assertEqual(self.markets()["future"]["status"], "open")
 
     def test_event_markets_are_never_touched(self):
         _run(pdb.create_market("event", "event", "Победит ли А?", self.now - 60, 50))
-        self.assertEqual(self.resolve(lambda mid, net: 1), [])
+        self.assertEqual(self.resolve(lambda mid, net, at: 1), [])
         self.assertEqual(self.markets()["event"]["status"], "open")
 
     def test_price_fetch_failure_leaves_market_open_for_next_tick(self):
         self.create_price("flaky", 120_000, ">=", self.now - 60)
 
-        def broken(market_id, network):
+        def broken(market_id, network, resolve_at):
             raise RuntimeError("Lighter API недоступен")
 
         self.assertEqual(self.resolve(broken), [])
@@ -83,7 +83,7 @@ class TestPredictResolver(unittest.TestCase):
             "без реальной цены закрывать рынок нельзя — иначе исход угадан",
         )
         self.assertEqual(
-            len(self.resolve(lambda mid, net: 130_000)),
+            len(self.resolve(lambda mid, net, at: 130_000)),
             1,
             "на следующем тике тот же рынок должен закрыться",
         )
@@ -95,7 +95,7 @@ class TestPredictResolver(unittest.TestCase):
         )
         self.assertGreater(cost, 0)
 
-        self.resolve(lambda mid, net: 121_000)
+        self.resolve(lambda mid, net, at: 121_000)
 
         with self.assertRaises(ValueError):
             _run(
@@ -110,19 +110,23 @@ class TestPredictResolver(unittest.TestCase):
 
     def test_resolver_skips_a_market_closed_between_ticks(self):
         self.create_price("stale", 120_000, ">=", self.now - 60)
-        self.assertEqual(len(self.resolve(lambda mid, net: 125_000)), 1)
+        self.assertEqual(len(self.resolve(lambda mid, net, at: 125_000)), 1)
         self.assertEqual(
-            self.resolve(lambda mid, net: 125_000),
+            self.resolve(lambda mid, net, at: 125_000),
             [],
             "второй проход не должен повторно закрывать рынок",
         )
         self.assertEqual(self.markets()["stale"]["outcome"], "yes")
 
-    def test_price_fn_receives_the_markets_lighter_id_and_network(self):
+    def test_price_fn_receives_lighter_id_network_and_deadline(self):
+        """Третьй аргумент — дедлайн рынка, а не «сейчас». Именно он привязывает
+        оракул к моменту, который рынок и обещал разрешить: без него резолвер после
+        суток простоя закрыл бы рынок ценой нового дня."""
         self.create_price("args", 1000, ">", self.now - 1, lighter_market_id=77)
         seen = []
-        self.resolve(lambda mid, net: seen.append((mid, net)) or 1001)
-        self.assertEqual(seen, [(77, LIGHTER_NETWORK)])
+        self.resolve(lambda mid, net, at: seen.append((mid, net, at)) or 1001)
+        self.assertEqual(seen, [(77, LIGHTER_NETWORK, seen[0][2])])
+        self.assertAlmostEqual(seen[0][2], self.now - 1, places=3)
 
 
 if __name__ == "__main__":

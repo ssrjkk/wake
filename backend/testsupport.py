@@ -21,6 +21,33 @@ import unittest
 
 from sqlalchemy import text
 
+# ── Окружение тестового процесса — задается здесь, а не в тестовом модуле ─────
+# config читает env один раз при импорте и на этом импорте строит настройки,
+# поэтому значение должно быть установлено ДО первого импорта config — в любом
+# порядкеCollection. Пока это делал только test_api_smoke, прогон `pytest
+# test_db.py test_api_smoke.py` падал не из-за кода, а из-за порядка: test_db
+# импортировал config раньше, чем test_api_smoke успевал подменить env, и
+# подпись Telegram не совпадала с токеном, который уже был в config.
+#
+# Все шесть значений — фиктивные, сеть и живые деньги ими не задеваются.
+CURATOR_TOKEN = "smoke-test-token"
+SESSION_SECRET = "smoke-test-session-secret-0123456789abcdef"
+BOT_TOKEN = "123456:smoke-test-bot-token"
+
+os.environ["WAKE_CURATOR_TOKEN"] = CURATOR_TOKEN
+os.environ["WAKE_SESSION_SECRET"] = SESSION_SECRET
+os.environ["TELEGRAM_BOT_TOKEN"] = BOT_TOKEN
+# llm_agent читает ключ при импорте и без него решает по правилу. Пустая строка
+# тут не «выключить фичу», а закрыть зависимость результата теста от того, что
+# случайно окажется в окружении запускающего.
+os.environ["ANTHROPIC_API_KEY"] = ""
+# Все запросы идут с одного client IP, поэтому несколько классов подряд
+# выбивают дефолтное ведро (40) и роуты начинают отдавать 429 вместо своих
+# 200/401/404. Сам лимитер проверен в test_rate_limiter.py — здесь он не предмет
+# теста, а помеха.
+os.environ["WAKE_RATE_LIMIT_CAPACITY"] = "100000"
+os.environ["WAKE_RATE_LIMIT_REFILL"] = "100000"
+
 _TEST_URL = os.environ.get("WAKE_TEST_DATABASE_URL")
 if not _TEST_URL:
     raise RuntimeError(
@@ -60,15 +87,28 @@ def run(coro):
     return asyncio.run(_in_this_loop())
 
 
+_schema_ready = False
+
+
 async def _reset() -> None:
-    """Создаёт схему, если её ещё нет, и очищает все таблицы.
+    """Пересоздаёт схему при первом вызове в процессе и очищает таблицы всегда.
 
     Схема берётся из pg_models (create_all), а не из alembic: тестам важна
     схема, с которой работают репозитории, а применённые миграции проверяются
     отдельным прогоном `alembic upgrade head` на чистой базе.
+
+    drop_all перед create_all — не перестраховка: create_all молча оставляет
+    существующие таблицы как есть, и на локальной базе, созданной до нового
+    столбца, тесты падали с UndefinedColumnError вместо «схема разошлась с
+    моделью». Базе с суффиксом _test пересоздание схемы не вредит — имя
+    проверяется выше именно ради того, чтобы её можно было чистить.
     """
+    global _schema_ready
     async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+        if not _schema_ready:
+            await conn.run_sync(Base.metadata.drop_all)
+            await conn.run_sync(Base.metadata.create_all)
+            _schema_ready = True
         tables = ", ".join(t.name for t in Base.metadata.sorted_tables)
         await conn.execute(text(f"TRUNCATE {tables} RESTART IDENTITY CASCADE"))
 

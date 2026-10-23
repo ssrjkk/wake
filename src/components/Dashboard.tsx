@@ -238,8 +238,10 @@ export default function Dashboard({ setTab, setAsset }: DashboardProps) {
                       <span style={{ color: "var(--text-muted)" }}>нет ставки</span>
                     ) : r.funding_payer === "long" ? (
                       <span style={{ color: "#10b981", fontWeight: 500 }}>лонги</span>
-                    ) : (
+                    ) : r.funding_payer === "short" ? (
                       <span style={{ color: "#ef4444", fontWeight: 500 }}>шорты</span>
+                    ) : (
+                      <span style={{ color: "var(--text-muted)" }}>никто (0%)</span>
                     )}
                   </td>
                   <td style={{ padding: "10px 8px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: "#888" }}>

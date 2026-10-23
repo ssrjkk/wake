@@ -20,8 +20,10 @@ Oracle с dispute-периодом, как у настоящего Polymarket; �
 исходы, которые не состоялись.
 """
 
+import math
 from dataclasses import dataclass
 from enum import Enum
+from urllib.parse import urlparse
 
 
 class Comparator(Enum):
@@ -51,10 +53,20 @@ class PriceResolution:
 def resolve_price_market(
     observed_price: float, threshold: float, comparator: Comparator
 ) -> PriceResolution:
-    """observed_price — РЕАЛЬНАЯ цена с Lighter (getCandles/getOrderBooks в
-    src/lib/lighter.ts) на момент/после дедлайна рынка. Эта функция не делает
-    сетевых вызовов сама — ей подают уже полученную реальную цену, чтобы её
-    можно было тестировать без сети (см. test_predict_resolution.py)."""
+    """observed_price — РЕАЛЬНАЯ цена с Lighter (lighter_rest.get_price_at на
+    момент дедлайна рынка). Эта функция не делает сетевых вызовов сама — ей подают
+    уже полученную реальную цену, чтобы её можно было тестировать без сети
+    (см. test_predict_resolution.py).
+
+    Конечность проверяется здесь, а не «где-то в клиенте»: NaN или inf в цене
+    дают не ошибку, а молча вычисленный исход. Сравнение с NaN всегда False,
+    то есть рынок «BTC выше 100k» с битым ответом свечей закрылся бы исходом NO и
+    по этому исходу прошли бы выплаты."""
+    if not math.isfinite(observed_price) or not math.isfinite(threshold):
+        raise ValueError(
+            f"observed_price и threshold должны быть конечными числами, "
+            f"получено {observed_price!r} и {threshold!r}"
+        )
     if observed_price < 0:
         raise ValueError("observed_price не может быть отрицательной")
     is_yes = _OPS[comparator](observed_price, threshold)
@@ -81,7 +93,12 @@ def resolve_event_market(
     """НЕ автоматическая, НЕ трастлесс. resolved_by и evidence_url обязательны
     намеренно — резолюция без указания, кто и на основании чего её вынес, не
     создаётся этой функцией вообще. Это минимум для аудита постфактум, не
-    полноценный dispute-механизм."""
+    полноценный dispute-механизм.
+
+    Схема у evidence_url проверяется, потому что эта строка становится ссылкой в
+    интерфейсе: javascript: и data: прошли бы как «источник» и выполнились по
+    клику. Кураторский токен — не причина доверять содержимое поля: токен один на
+    процесс, а ссылку видит каждый посетитель рынка."""
     if outcome not in ("yes", "no"):
         raise ValueError("outcome должен быть 'yes' или 'no'")
     if not resolved_by:
@@ -89,6 +106,11 @@ def resolve_event_market(
     if not evidence_url:
         raise ValueError(
             "evidence_url обязателен — резолюция без источника не создаётся"
+        )
+    scheme = urlparse(evidence_url).scheme.lower()
+    if scheme not in ("http", "https"):
+        raise ValueError(
+            f"evidence_url — http(s) ссылка, получено {evidence_url[:40]!r}"
         )
     return EventResolution(
         outcome=outcome,

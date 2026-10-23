@@ -39,6 +39,7 @@ import logging
 import time
 
 import predict_db as pdb
+import audit_log as al
 from predict_resolution import resolve_price_market, Comparator
 from config import LIGHTER_NETWORK, PREDICT_RESOLVER_TICK
 
@@ -50,17 +51,28 @@ TICK_SECONDS = PREDICT_RESOLVER_TICK
 async def resolve_due_markets(
     now: float, price_fn, network: str = LIGHTER_NETWORK
 ) -> list[dict]:
-    """Закрывает все просроченные открытые price-рынки. price_fn(market_id, network)
-    возвращает mark-цену — инжектится, чтобы цикл можно было прогнать тестами без
-    сети (test_predict_resolver.py). Рынок, по которому цена не получена, остаётся
-    открытым и будет повторён на следующем тике: лучше просроченная резолюция,
-    чем исход, угаданный вместо данных."""
+    """Закрывает все просроченные открытые price-рынки. price_fn(market_id,
+    network, resolve_at) возвращает mark-цену НА МОМЕНТ ДЕДЛАЙНА — инжектится,
+    чтобы цикл можно было прогнать тестами без сети (test_predict_resolver.py).
+    Рынок, по которому цена не получена, остаётся открытым и будет повторён на
+    следующем тике: лучше просроченная резолюция, чем исход, угаданный вместо
+    данных.
+
+    resolve_at передаётся в price_fn нарочно. Пока цена бралась «какая сейчас»,
+    пропуск резолвера на сутки превращал исход рынка «BTC выше 100k 1 октября»
+    в цену 3 октября — то есть просрочка тика была не задержкой выплаты, а другим
+    исходом по тем же деньгам. Цена, привязанная к дедлайну, одинакова и на тике
+    позже дедлайна, и через неделю.
+
+    Каждое закрытие идёт в аудит: исход вынесла машина по внешнему оракулу, и
+    вопрос «почему рынок закрылся именно так» должен иметь ответ в таблице, а не
+    в логах процесса, которые rotate'ятся."""
     closed = []
     for m in await pdb.list_markets("open"):
         if m["kind"] != "price" or m["resolve_at"] > now:
             continue
         try:
-            observed = price_fn(m["lighter_market_id"], network)
+            observed = price_fn(m["lighter_market_id"], network, m["resolve_at"])
             resolution = resolve_price_market(
                 observed, m["threshold"], Comparator(m["comparator"])
             )
@@ -76,11 +88,28 @@ async def resolve_due_markets(
             # куратора или предыдущий тик). Исход уже записан — перетирать его нельзя.
             logger.warning("рынок %s не закрыт: %s", m["id"], e)
             continue
+        await al.log_action(
+            al.AuditEntry(
+                actor="auto:lighter_mark_price",
+                action="market_resolution",
+                resource=m["id"],
+                details={
+                    "outcome": resolution.outcome,
+                    "observed_price": resolution.observed_price,
+                    "threshold": resolution.threshold,
+                    "comparator": resolution.comparator.value,
+                    "resolve_at": m["resolve_at"],
+                    "network": network,
+                },
+                success=True,
+            )
+        )
         logger.info(
-            "закрыт %s: %s (цена %s, порог %s %s)",
+            "закрыт %s: %s (цена %s на %s, порог %s %s)",
             m["id"],
             resolution.outcome,
             resolution.observed_price,
+            int(m["resolve_at"]),
             resolution.comparator.value,
             m["threshold"],
         )
@@ -102,7 +131,7 @@ def main():
     args = parser.parse_args()
 
     from lighter_rest import (
-        get_mark_price,
+        get_price_at,
     )  # сетевой вызов — только когда реально доходим до дела
 
     logging.basicConfig(
@@ -111,7 +140,7 @@ def main():
     logger.info("Резолвер Predict: сеть=%s, тик=%ds", LIGHTER_NETWORK, TICK_SECONDS)
 
     while True:
-        closed = asyncio.run(resolve_due_markets(time.time(), get_mark_price))
+        closed = asyncio.run(resolve_due_markets(time.time(), get_price_at))
         if closed:
             logger.info("закрыто рынков за тик: %d", len(closed))
         if not args.loop:

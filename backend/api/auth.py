@@ -21,11 +21,13 @@
 
 import hashlib
 import hmac
+import logging
 import time
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.concurrency import run_in_threadpool
 from aiogram.utils.web_app import check_webapp_signature, safe_parse_webapp_init_data
@@ -43,6 +45,8 @@ from lighter_rest import get_account_index_by_l1
 from pg_models import Follower
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+logger = logging.getLogger("wake.auth")
 
 # Подпись живёт в URL и в истории сессий, поэтому свежесть — часть проверки, а не
 # вежливость. 24 часа — столько же, сколько отведено Login Widget.
@@ -74,18 +78,37 @@ class WalletSignatureRequest(BaseModel):
     signature: str
 
 
-def verify_telegram_auth(data: TelegramAuthData) -> bool:
-    """Verify Telegram Login Widget signature per Telegram docs."""
+def verify_telegram_auth(data: TelegramAuthData) -> bool | None:
+    """Verify Telegram Login Widget signature per Telegram docs.
+
+    Возвращает False на неподтверждённой подписи и None, когда проверять нечем
+    (на сервере нет TELEGRAM_BOT_TOKEN). Это разные ответы: второе — вина
+    конфигурации, и роут отдаёт по нему 503, как это делает Mini App-поток для
+    того же случая. 401 без токена учит клиента перелогиниться и вход не чинит.
+
+    Два уточнения, каждое дороже остального:
+
+      Проверка свежести (auth_date) обязательна: подпись живёт в URL и в истории
+      сессий, и без неё один перехваченный ответ годился бы вечно.
+
+      Значения полей не должны содержать перевод строки и «=». check_string
+      склеивается как k=v\\n, поэтому поле, вписавшее в себя перевод строки с
+      новой парой k=v, сдвигает границы между полями. Подпись Telegram на такую
+      строку не подделать, но сверять её становится не с чем: имя пользователя и
+      фото — текст, который Telegram не нормализует."""
     if not settings.telegram_bot_token:
-        return False
+        return None
 
     check_hash = data.hash
     token_hash = hashlib.sha256(settings.telegram_bot_token.encode()).digest()
 
+    values = data.model_dump(exclude={"hash"})
+    for key, value in values.items():
+        if isinstance(value, str) and ("\n" in value or "=" in value):
+            return False
+
     data_check_string = "\n".join(
-        f"{k}={v}"
-        for k, v in sorted(data.model_dump(exclude={"hash"}).items())
-        if v is not None
+        f"{k}={v}" for k, v in sorted(values.items()) if v is not None
     )
 
     h = hmac.new(token_hash, data_check_string.encode(), hashlib.sha256).hexdigest()
@@ -175,6 +198,11 @@ async def _follower_for_telegram_user(db: AsyncSession, telegram_id: int) -> str
     мини-апп не плодили два аккаунта под одного человека. l1_address — NOT NULL
     UNIQUE, а L1-адреса у Telegram-входа нет, поэтому туда идёт то же имя, что и
     в user_id.
+
+    Вставка обёрнута в SAVEPOINT и на IntegrityError перечитывается: два первых
+    входа одного человека приходят обычно одним двойным тапом по кнопке, и без
+    этого второй запрос ловил UNIQUE на l1_address — 500 вместо входа. Откат к
+    savepoint при этом не трогает ничего вокруг: сессия запроса остаётся живой.
     """
     user_id = f"tg_{telegram_id}"
 
@@ -186,13 +214,23 @@ async def _follower_for_telegram_user(db: AsyncSession, telegram_id: int) -> str
     if existing:
         return existing.id
 
-    new_follower = Follower(
-        id=user_id,
-        l1_address=f"tg:{telegram_id}",
-        telegram_id=telegram_id,
-    )
-    db.add(new_follower)
-    await db.flush()
+    try:
+        async with db.begin_nested():
+            db.add(
+                Follower(
+                    id=user_id,
+                    l1_address=f"tg:{telegram_id}",
+                    telegram_id=telegram_id,
+                )
+            )
+            await db.flush()
+    except IntegrityError:
+        row = await db.scalar(
+            select(Follower).where(Follower.telegram_id == telegram_id)
+        )
+        if row is None:
+            raise
+        return row.id
     return user_id
 
 
@@ -225,7 +263,18 @@ async def auth_telegram(
     db: AsyncSession = Depends(get_db),
 ):
     """Вход через Login Widget: проверяет подпись, создаёт запись и отдаёт токен."""
-    if not verify_telegram_auth(data):
+    verdict = verify_telegram_auth(data)
+    if verdict is None:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "error": {
+                    "code": "TELEGRAM_NOT_CONFIGURED",
+                    "message": "Telegram-вход не настроен: на бэкенде нет TELEGRAM_BOT_TOKEN",
+                }
+            },
+        )
+    if not verdict:
         await al.log_action(
             al.AuditEntry(
                 actor=f"tg_{data.id}",
@@ -302,7 +351,11 @@ async def wallet_verify(req: WalletSignatureRequest, request: Request):
         account_index = await run_in_threadpool(
             get_account_index_by_l1, address, LIGHTER_NETWORK
         )
-    except RuntimeError:
+    except Exception as e:
+        # Не только RuntimeError: Lighter может отдать битую форму строки, и
+        # вход кошелька не должен из-за этого становиться 500 — индекс аккаунта
+        # это удобство для публикации лидера, а не условие входа.
+        logger.warning("индекс аккаунта Lighter не получен для %s: %s", address, e)
         account_index = None
 
     await copy_db.upsert_follower(

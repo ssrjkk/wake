@@ -9,7 +9,6 @@ leader_listener.py: WAKE_DRY_RUN=true по умолчанию, реальный 
 agent_memory.py (14 тестов) и agent_decision.py (11 тестов).
 """
 
-import time
 import uuid
 import dataclasses
 import logging
@@ -19,9 +18,22 @@ import json
 from agent_memory import AgentMemoryStore, TradeRecord
 from config import DRY_RUN, SIGNING_SERVICE_URL
 from llm_agent import llm_decision
+from quant import scale_to_int
 from risk_limits import RiskLimits, UserRiskState, check_order, record_executed
 
 logger = logging.getLogger("wake.agent")
+
+
+def _client_order_index(trade_uid: str) -> int:
+    """Уникальный на каждую замысел индекс ордера, выводимый из id сделки.
+
+    Прежний `int(time.time() * 1000) % 1_000_000` повторяется каждые ~16,7
+    минуты и совпадает у двух запросов в одну миллисекунду. signing_service
+    держит idempotency-кэш на этом индексе (час), поэтому второй ордер молча
+    считался повтором первого: пользователь получал tx_hash прошлой сделки, а
+    нового ордера в Lighter не было.
+    """
+    return int(uuid.UUID(trade_uid).int % 2**31)
 
 
 def _place_order_via_signing_service(
@@ -29,12 +41,13 @@ def _place_order_via_signing_service(
     base_amount: int,
     price: int,
     is_ask: bool,
+    client_order_index: int,
     reduce_only: bool = False,
 ) -> dict:
     payload = json.dumps(
         {
             "market_index": market_index,
-            "client_order_index": int(time.time() * 1000) % 1_000_000,
+            "client_order_index": client_order_index,
             "base_amount": base_amount,
             "price": price,
             "is_ask": is_ask,
@@ -113,25 +126,44 @@ def run_agent_step(
         logger.info("размер урезан лимитом: $%.0f -> $%.0f", trade_size_usd, capped)
     decision = dataclasses.replace(decision, size_usd=capped)
 
+    # Один id на замысел: он попадает и в память, и в client_order_index, так
+    # что строка agent_trades и ордер в Lighter описывают одно и то же.
+    trade_uid = str(uuid.uuid4())
+
     if DRY_RUN:
         logger.info("DRY_RUN=true — не исполняю реально")
-        _apply_to_memory(memory, decision, market_id, price, closing)
+        _apply_to_memory(memory, decision, market_id, price, closing, trade_uid)
         record_executed(risk_state, market_id, capped, is_reduce_only=is_reduce)
         return decision, {"status": "dry_run"}
 
     try:
         # Закрытие — тем объёмом, что реально открыт, и только в обратную сторону.
-        base_amount = int(
-            (closing.size if closing else capped / price) * 10**size_decimals
+        # scale_to_int, а не int(): на float-арифметике int(0.29 * 10**2) = 28, и
+        # ордер уходил на шаг меньше посчитанного; для цены то же самое означало
+        # лимитку не на том порядке величины.
+        base_amount = scale_to_int(
+            closing.size if closing else capped / price, size_decimals
         )
-        price_int = int(price * 10**price_decimals)
+        price_int = scale_to_int(price, price_decimals)
         is_ask = decision.action == "short" or (
             closing is not None and closing.side == "long"
         )
         result = _place_order_via_signing_service(
-            market_id, base_amount, price_int, is_ask, reduce_only=is_reduce
+            market_id,
+            base_amount,
+            price_int,
+            is_ask,
+            _client_order_index(trade_uid),
+            reduce_only=is_reduce,
         )
-        _apply_to_memory(memory, decision, market_id, price, closing)
+        if result.get("dry_run") or result.get("tx_hash") is None:
+            # Сервис подписи сам в сухом режиме: ордера нет, но ответ есть.
+            # Записать сделку в память в этом случае — значит научить агента
+            # позиции, которой не существует, и показать «sent» пользователю.
+            _apply_to_memory(memory, decision, market_id, price, closing, trade_uid)
+            record_executed(risk_state, market_id, capped, is_reduce_only=is_reduce)
+            return decision, {"status": "dry_run", **result}
+        _apply_to_memory(memory, decision, market_id, price, closing, trade_uid)
         record_executed(risk_state, market_id, capped, is_reduce_only=is_reduce)
         return decision, {"status": "sent", **result}
     except Exception as e:
@@ -145,12 +177,13 @@ def _apply_to_memory(
     market_id: int,
     price: float,
     closing: TradeRecord | None,
+    trade_uid: str,
 ) -> None:
     """Память должна отражать и входы, и выходы: без record_close закрытых сделок
     и win_rate в ней не появляется никогда."""
     if decision.action in ("long", "short"):
         memory.record_open(
-            str(uuid.uuid4()),
+            trade_uid,
             market_id,
             decision.action,
             price,

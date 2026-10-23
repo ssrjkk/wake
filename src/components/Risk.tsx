@@ -1,6 +1,20 @@
 import { useState, useEffect } from "react";
 import { X, Loader2 } from "lucide-react";
 import { getCandles, type OrderBook } from "../lib/lighter";
+
+/** Простые доходности по закрытиям. Нулевое закрытие — отсутствующие данные:
+ *  деление на него даёт Infinity, а Infinity в ряду превращает волатильность
+ *  портфеля в Infinity, которое бэкенд уже не может отдать как JSON. */
+function closesToReturns(closes: number[]): number[] {
+  const out: number[] = [];
+  for (let i = 1; i < closes.length; i++) {
+    const prev = closes[i - 1];
+    const current = closes[i];
+    if (!(prev > 0) || !Number.isFinite(current)) continue;
+    out.push((current - prev) / prev);
+  }
+  return out;
+}
 import { backendJson, errorText } from "../lib/backend";
 import type { RiskAnalysis, HedgeSuggestion, RiskPosition } from "./types";
 
@@ -43,13 +57,18 @@ export default function Risk({ markets, setToast }: RiskProps) {
     setRiskBusy(true);
     setHedgeResult(null);
     try {
-      const returnsByMarket: Record<string, number[]> = {};
-      for (const pos of riskPositions) {
-        const candles = await getCandles(pos.marketId, "1h", 30);
-        const closes = candles.map((c) => c.c);
-        const returns = closes.slice(1).map((c, i) => (c - closes[i]) / closes[i]);
-        returnsByMarket[String(pos.marketId)] = returns;
-      }
+      // Свечи независимых рынков читаются параллельно: последовательный цикл на
+      // корзине из пяти позиций это пять сетевых RTT подряд, и панель «думает»
+      // столько, сколько осталось живых свечей у самого медленного рынка.
+      const series = await Promise.all(
+        riskPositions.map(async (pos) => {
+          const candles = await getCandles(pos.marketId, "1h", 30);
+          return [pos.marketId, closesToReturns(candles.map((c) => c.c))] as const;
+        })
+      );
+      const returnsByMarket: Record<string, number[]> = Object.fromEntries(
+        series.map(([id, returns]) => [String(id), returns])
+      );
 
       setRiskResult(await backendJson<RiskAnalysis>("/portfolio/risk", {
         method: "POST",
@@ -75,12 +94,24 @@ export default function Risk({ markets, setToast }: RiskProps) {
     const target = riskPositions[0];
     setRiskBusy(true);
     try {
+      // вселенная кандидатов — 15 рынков с наибольшим открытым интересом в
+      // долларах, а не «первые 15 по индексу книги»: best hedge зависел от того,
+      // какие строки Lighter вернул раньше, и в списке без ликвидного контрагента
+      // предложение было бы недостижимым.
+      const pool = [...markets]
+        .filter((m) => m.status === "active" && (m.open_interest_usd ?? 0) > 0)
+        .sort((a, b) => (b.open_interest_usd ?? 0) - (a.open_interest_usd ?? 0))
+        .slice(0, 15);
+      const series = await Promise.all(
+        pool.map(async (m) => {
+          const candles = await getCandles(m.market_id, "1h", 30);
+          return [m, closesToReturns(candles.map((c) => c.c))] as const;
+        })
+      );
       const returnsByMarket: Record<string, number[]> = {};
       const candidates: [number, string][] = [];
-      for (const m of markets.slice(0, 15)) {
-        const candles = await getCandles(m.market_id, "1h", 30);
-        const closes = candles.map((c) => c.c);
-        returnsByMarket[String(m.market_id)] = closes.slice(1).map((c, i) => (c - closes[i]) / closes[i]);
+      for (const [m, returns] of series) {
+        returnsByMarket[String(m.market_id)] = returns;
         if (m.market_id !== target.marketId) candidates.push([m.market_id, m.symbol]);
       }
       setHedgeResult(await backendJson<{ suggestion: HedgeSuggestion | null }>("/portfolio/hedge", {
@@ -136,7 +167,8 @@ export default function Risk({ markets, setToast }: RiskProps) {
                       type="number"
                       value={p.notionalUsd}
                       onChange={(e) => {
-                        const v = Number(e.target.value);
+                        const raw = e.target.valueAsNumber;
+                        const v = Number.isFinite(raw) ? raw : 0;
                         setRiskPositions((arr) => arr.map((x, idx) => (idx === i ? { ...x, notionalUsd: v } : x)));
                       }}
                       style={{ width: "120px", background: "#0a0a0a", border: "1px solid #2a2a2a", borderRadius: "4px", padding: "8px", color: "#fafafa", fontFamily: "JetBrains Mono, monospace", fontSize: "12px", outline: "none" }}

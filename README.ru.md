@@ -55,7 +55,7 @@
 
 **Кошелёк.** Injected-кошельки (MetaMask, Rabby) работают без всякой настройки; QR-коннектор WalletConnect требует `VITE_WALLETCONNECT_PROJECT_ID`. Владение адресом доказывается, а не заявляется: `POST /auth/wallet/challenge` отдаёт одноразовый текст для `personal_sign` (5 минут, одно использование), `POST /auth/wallet/verify` восстанавливает адрес из подписи и отказывает, если это не тот адрес, что запрашивал. Запись follower создаётся из восстановленного checksum-адреса.
 
-**Токен.** Любой успешный вход отвечает `{user_id, token, expires_at}`; дальше — `Authorization: Bearer <токен>`. Это `wk1.<payload>.<HMAC-SHA256>` на ключе `WAKE_SESSION_SECRET`, срок — `WAKE_SESSION_TTL_DAYS` (по умолчанию 30 дней). Серверного состояния сессий нет, и назвать чужим id в запросе себя кем-то другим больше нельзя. Без `WAKE_SESSION_SECRET` бэкенд отвечает 503, а не подписывает токены угадываемым ключом.
+**Токен.** Любой успешный вход отвечает `{user_id, token, expires_at}`; дальше — `Authorization: Bearer <токен>`. Это `wk1.<payload>.<HMAC-SHA256>` на ключе `WAKE_SESSION_SECRET`, срок — `WAKE_SESSION_TTL_DAYS` (по умолчанию 7 дней). Серверного состояния сессий нет, и назвать чужим id в запросе себя кем-то другим больше нельзя. Без `WAKE_SESSION_SECRET` бэкенд отвечает 503, а не подписывает токены угадываемым ключом.
 
 ## Быстрый старт
 
@@ -192,8 +192,8 @@ Price-рынки закрываются по дедлайну только по�
 | `WAKE_MAINNET_LIVE` | `false` | второй переключатель: `WAKE_DRY_RUN=false` на mainnet без него не стартует |
 | `WAKE_CORS_ORIGINS` | `http://localhost:5173` | список фронтендов через запятую |
 | `WAKE_SESSION_SECRET` | пусто | подписывает токены сессии; пусто — любой вход отвечает 503, а не подписывает токены угадываемым ключом |
-| `WAKE_SESSION_TTL_DAYS` | 30 | сколько живёт токен (1–180) |
-| `WAKE_CURATOR_TOKEN` | пусто | пусто — операторские эндпоинты отвечают 500 `CURATOR_NOT_CONFIGURED`; неверный `X-Curator-Token` — 403 |
+| `WAKE_SESSION_TTL_DAYS` | 7 | сколько живёт токен (1–30) |
+| `WAKE_CURATOR_TOKEN` | пусто | пусто — операторские эндпоинты отвечают 503 `CURATOR_NOT_CONFIGURED`; неверный `X-Curator-Token` — 403 |
 | `WAKE_TRUSTED_PROXY_IPS` | пусто | каким соединениям разрешён `X-Forwarded-For`; пусто — побеждает адрес соединения, и за прокси весь сервис делит один bucket |
 | `TELEGRAM_BOT_TOKEN` | пусто | процесс бота и проверка подписи Telegram-входа |
 | `WAKE_MASTER_KEY` | пусто | шифрует хранилище ключей; хранить в секрет-менеджере, не на диске |
@@ -206,7 +206,7 @@ Price-рынки закрываются по дедлайну только по�
 # бэкенд — из backend/; нужна отдельная PostgreSQL-база для тестов
 createdb wake_test
 export WAKE_TEST_DATABASE_URL=postgresql+asyncpg://wake:wake@localhost:5432/wake_test
-python -m unittest discover        # 350 тестов, всё через discover
+python -m unittest discover        # 388 тестов, всё через discover
 python -m pytest -q                # тот же набор под pytest (в CI ещё и Allure)
 
 # фронтенд
@@ -236,7 +236,7 @@ PW_PORT=5178 npx playwright test
   - `portfolio.py` — кросс-ассетный риск и хедж
   - `funding.py` — сравнение площадок и расчёты carry
 - Хранилище одно — PostgreSQL: `database.py` (async-движок), `pg_models.py` (схема), `alembic/` (миграции) и репозитории `db.py`, `predict_db.py`, `agent_db.py`, `audit_log.py`, `subscription.py`
-- Ядро логики — в корневых модулях, и тестируется отдельно: `mirror_engine.py`, `leader_position_tracker.py`, `predict_amm.py`, `predict_resolution.py`, `portfolio_risk.py`, `funding_arb.py`, `agent_decision.py`, `agent_memory.py`, `risk_limits.py`, `rate_limiter.py`, `cache.py`
+- Ядро логики — в корневых модулях, и тестируется отдельно: `mirror_engine.py`, `leader_position_tracker.py`, `predict_amm.py`, `predict_resolution.py`, `portfolio_risk.py`, `funding_arb.py`, `quant.py`, `agent_decision.py`, `agent_memory.py`, `risk_limits.py`, `rate_limiter.py`, `cache.py`
 - Конфигурация читается один раз — `backend/config.py`, и каждая его собственная переменная валидируется там: недопустимое сочетание (живые ордера на mainnet без второго переключателя, не-PostgreSQL URL) останавливает процесс на старте. Несколько переменных живут вне него, потому что относятся к одному процессу: тройка ключей подписи в `signing_service.py`, `WAKE_MASTER_KEY` и `WAKE_KEYSTORE_PATH` в `encrypted_key_store.py`, `WAKE_TEST_DATABASE_URL` в тестах, `WAKE_ORDER_*` в `place_order_example.py`. Все они перечислены в `backend/.env.example` с указанием, кто именно их читает.
 
 ### Фронтенд (React + TypeScript + Vite + Tailwind + wagmi)
@@ -316,7 +316,7 @@ docker compose up predict-resolver
 
 - `fee_bps` лидера проверяется (0–500) и сохраняется, но никогда не списывается: пути выплат нет.
 - Никаких платежей. Тарифы и триалы (`backend/subscription.py`) существуют только как состояние.
-- Токены сессии не отзываются: серверного хранилища сессий нет, поэтому украденный токен жив до конца `WAKE_SESSION_TTL_DAYS`, а «выйти» означает только выбросить токен на клиенте. На это пошли сознательно ради бэкенда, который переживает flush Redis, — и поэтому срок ограничен 180 днями.
+- Токены сессии не отзываются: серверного хранилища сессий нет, поэтому украденный токен жив до конца `WAKE_SESSION_TTL_DAYS`, а «выйти» означает только выбросить токен на клиенте. На это пошли сознательно ради бэкенда, который переживает flush Redis, — и поэтому по умолчанию это 7 дней с жёстким потолком в 30.
 - Rate limiter пропускает запросы, когда Redis недоступен: мёртвый Redis не должен отнимать терминал у того, у кого открыты позиции. `/ready` об этом сообщает, а не прячет.
 - Рынки Predict — внутренний LMSR-AMM: цены и выплаты считаются по пулу в этой базе, а не по контрагенту на бирже.
 - LLM-путь решений покрыт тестами на откаты (`test_llm_agent.py`) — нет ключа, сетевая ошибка, битый JSON, недопустимое действие, — но не реальным вызовом модели.

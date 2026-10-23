@@ -13,15 +13,31 @@ predict_amm.py — реальная, известная формула, не "п
 """
 
 from dataclasses import dataclass
+from math import isfinite
 
 
 def price_returns(prices: list) -> list:
-    if len(prices) < 2:
-        return []
-    return [(prices[i] - prices[i - 1]) / prices[i - 1] for i in range(1, len(prices))]
+    """Простые доходности по закрытиям.
+
+    Нулевое, отрицательное или неконечное значение в ЛЮБОЙ точке пары — это
+    отсутствующие данные, а не наблюдение: close=0 у неликвидной свечи раньше
+    давал либо ZeroDivisionError (синхронный роут падал), либо "-100%" и
+    бесконечность на следующем шаге, и обе ветки выглядят как настоящая
+    волатильность. Пара выбрасывается целиком."""
+    out = []
+    for prev, current in zip(prices, prices[1:]):
+        if not isfinite(prev) or not isfinite(current) or prev <= 0 or current <= 0:
+            continue
+        out.append((current - prev) / prev)
+    return out
+
+
+def _finite(returns: list) -> list:
+    return [x for x in returns if isfinite(x)]
 
 
 def volatility(returns: list) -> float:
+    returns = _finite(returns)
     n = len(returns)
     if n < 2:
         return 0.0
@@ -31,16 +47,28 @@ def volatility(returns: list) -> float:
 
 
 def pearson_correlation(returns_a: list, returns_b: list) -> float:
-    if len(returns_a) != len(returns_b):
-        raise ValueError("серии должны быть одинаковой длины")
-    n = len(returns_a)
+    """Корреляция по ПОСЛЕДНИМ min(len_a, len_b) значениям.
+
+    Ряды приходят с разных рынков и разной длины: у нового листа меньше свечей,
+    чем у BTC за то же окно. Прежняя проверка «серии равной длины, иначе
+    ValueError» роняла весь расчётRisk-панели одним сообщением про длину массива,
+    которое человек не мог ни на что опереться. Усечение по общему хвосту —
+    стандартная пара-в-пара работа с несопоставимыми по истории рядами: сравниваются
+    одни и те же интервалы, а не «всё, что было у каждого».
+    """
+    a = _finite(list(returns_a))
+    b = _finite(list(returns_b))
+    n = min(len(a), len(b))
     if n < 2:
-        raise ValueError("нужно минимум 2 точки")
-    mean_a = sum(returns_a) / n
-    mean_b = sum(returns_b) / n
-    cov = sum((returns_a[i] - mean_a) * (returns_b[i] - mean_b) for i in range(n)) / n
-    std_a = (sum((x - mean_a) ** 2 for x in returns_a) / n) ** 0.5
-    std_b = (sum((x - mean_b) ** 2 for x in returns_b) / n) ** 0.5
+        raise ValueError(
+            f"для корреляции нужно минимум 2 общих значения, есть {len(a)} и {len(b)}"
+        )
+    a, b = a[-n:], b[-n:]
+    mean_a = sum(a) / n
+    mean_b = sum(b) / n
+    cov = sum((a[i] - mean_a) * (b[i] - mean_b) for i in range(n)) / n
+    std_a = (sum((x - mean_a) ** 2 for x in a) / n) ** 0.5
+    std_b = (sum((x - mean_b) ** 2 for x in b) / n) ** 0.5
     if std_a == 0 or std_b == 0:
         return 0.0  # нет вариации — корреляция не определена, трактуем как отсутствие связи
     r = cov / (std_a * std_b)
@@ -62,12 +90,27 @@ def _correlation_between(mid_a: int, mid_b: int, returns_by_market: dict) -> flo
     return pearson_correlation(returns_by_market[mid_a], returns_by_market[mid_b])
 
 
+def _require_series(positions: list, returns_by_market: dict) -> None:
+    """Ряд должен быть у каждого рынка корзины. Молча пропущенный рынок — это
+    волатильность портфеля, посчитанная по половине портфеля, и выглядит она
+    ровно как настоящая цифра."""
+    missing = sorted(
+        {p.market_id for p in positions if p.market_id not in returns_by_market}
+    )
+    if missing:
+        raise ValueError(
+            f"нет ряда доходностей для рынков {missing} — корреляции считать не по чему"
+        )
+
+
 def portfolio_dollar_volatility(positions: list, returns_by_market: dict) -> float:
     """Портфельная (не наивная сумма) волатильность в долларах — учитывает,
     что скоррелированные позиции складывают риск, а некоррелированные и
     противоположные — гасят его. Стандартная формула var(sum) через матрицу
     ковариаций, не приближение."""
+    _require_series(positions, returns_by_market)
     vols = {p.market_id: volatility(returns_by_market[p.market_id]) for p in positions}
+
     variance = 0.0
     for pi in positions:
         for pj in positions:
@@ -87,6 +130,7 @@ def portfolio_dollar_volatility(positions: list, returns_by_market: dict) -> flo
 def naive_dollar_volatility(positions: list, returns_by_market: dict) -> float:
     """Если бы риски просто складывались без учёта корреляции — точка сравнения
     для diversification_score."""
+    _require_series(positions, returns_by_market)
     return sum(
         abs(p.signed_notional_usd) * volatility(returns_by_market[p.market_id])
         for p in positions
@@ -111,6 +155,10 @@ class HedgeSuggestion:
     hedge_notional_usd: float  # знак уже учтён — это готовая к открытию позиция
     correlation_to_target: float
     resulting_portfolio_vol_usd: float
+    unhedged_vol_usd: float
+    """Цель без хеджа рядом. Без этой цифры «результирующая волатильность 800$»
+    не читается никак: непонятно, стало лучше или хуже, и панель предлагала бы
+    хедж, который риск увеличил."""
 
 
 def suggest_hedge(
@@ -119,14 +167,22 @@ def suggest_hedge(
     """Minimum-variance hedge ratio: h* = corr(target,candidate) * vol_target / vol_candidate.
     Перебирает кандидатов, выбирает того, кто даёт наименьшую результирующую
     портфельную волатильность (не просто наибольшую |корреляцию| — это разные
-    вещи, если у кандидатов сильно разная собственная волатильность)."""
+    вещи, если у кандидатов сильно разная собственная волатильность).
+
+    Кандидат, который риска не убавил, отсеивается: «лучший из худших» — это не
+    предложение хеджа, а предложение открыть вторую позицию, которая двигает
+    портфель в ту же сторону."""
+    _require_series([target], returns_by_market)
     target_vol = volatility(returns_by_market[target.market_id])
     if target_vol == 0:
         return None
+    unhedged = abs(target.signed_notional_usd) * target_vol
 
     best = None
     for candidate_id, candidate_symbol in candidates:
         if candidate_id == target.market_id:
+            continue
+        if candidate_id not in returns_by_market:
             continue
         candidate_vol = volatility(returns_by_market[candidate_id])
         if candidate_vol == 0:
@@ -139,10 +195,17 @@ def suggest_hedge(
         resulting_vol = portfolio_dollar_volatility(
             [target, hedge_position], returns_by_market
         )
+        if resulting_vol >= unhedged:
+            continue
 
         if best is None or resulting_vol < best.resulting_portfolio_vol_usd:
             best = HedgeSuggestion(
-                candidate_id, candidate_symbol, hedge_notional, corr, resulting_vol
+                candidate_id,
+                candidate_symbol,
+                hedge_notional,
+                corr,
+                resulting_vol,
+                unhedged,
             )
 
     return best

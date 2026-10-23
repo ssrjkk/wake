@@ -21,7 +21,7 @@ mirror_log.
 
 from datetime import UTC, datetime
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert
 
 from database import async_session_factory
@@ -42,6 +42,7 @@ def _follow_dict(f: Follow, leader_handle: str | None = None) -> dict:
         "current_mirrored_size": f.current_mirrored_size,
         "paused": 1 if f.paused else 0,
         "created_at": _epoch(f.created_at),
+        "deleted_at": _epoch(f.deleted_at) if f.deleted_at else None,
     }
     if leader_handle is not None:
         row["leader_handle"] = leader_handle
@@ -179,7 +180,11 @@ async def log_mirror_result(
 async def active_follows_for_leader(leader_id: str) -> list[dict]:
     """Всё, что нужно compute_mirror_plan() и реальному исполнению по конкретному
     лидеру, одним запросом — включая lighter_account_index подписчика, не только
-    его внутренний follower_id."""
+    его внутренний follower_id.
+
+    deleted_at IS NULL здесь обязателен: отписавшийся подписчик остаётся в
+    таблице ровно ради своего журнала, и без этого фильтра движок продолжал бы
+    зеркалить человека, который вышел."""
     async with async_session_factory() as session:
         rows = (
             await session.execute(
@@ -192,19 +197,28 @@ async def active_follows_for_leader(leader_id: str) -> list[dict]:
                     Follower.lighter_account_index.label("follower_account_index"),
                 )
                 .join(Follower, Follower.id == Follow.follower_id)
-                .where(Follow.leader_id == leader_id, Follow.paused.is_(False))
+                .where(
+                    Follow.leader_id == leader_id,
+                    Follow.paused.is_(False),
+                    Follow.deleted_at.is_(None),
+                )
             )
         ).mappings()
         return [dict(r) for r in rows]
 
 
 async def follows_for_leader(leader_id: str) -> list[dict]:
-    """Неактивные папки исключены: этот ответ кормит счётчик подписчиков и AUM."""
+    """Неактивные и отменённые папки исключены: этот ответ кормит счётчик
+    подписчиков и AUM."""
     async with async_session_factory() as session:
         rows = (
             await session.scalars(
                 select(Follow)
-                .where(Follow.leader_id == leader_id, Follow.paused.is_(False))
+                .where(
+                    Follow.leader_id == leader_id,
+                    Follow.paused.is_(False),
+                    Follow.deleted_at.is_(None),
+                )
                 .order_by(Follow.created_at.desc())
             )
         ).all()
@@ -217,7 +231,7 @@ async def follows_for_follower(follower_id: str) -> list[dict]:
             await session.execute(
                 select(Follow, Leader.handle)
                 .join(Leader, Leader.id == Follow.leader_id)
-                .where(Follow.follower_id == follower_id)
+                .where(Follow.follower_id == follower_id, Follow.deleted_at.is_(None))
                 .order_by(Follow.created_at.desc())
             )
         ).all()
@@ -334,27 +348,40 @@ async def leader(id_: str) -> dict | None:
 
 
 async def owned_follow(follow_id: str, follower_id: str) -> dict | None:
-    """Подписка, только если она принадлежит этому подписчику — проверка
-    владения на уровне запроса, а не в вызывающем коде."""
+    """Подписка, только если она принадлежит этому подписчику и не отменена —
+    проверка владения на уровне запроса, а не в вызывающем коде."""
     async with async_session_factory() as session:
         row = await session.scalar(
             select(Follow).where(
-                Follow.id == follow_id, Follow.follower_id == follower_id
+                Follow.id == follow_id,
+                Follow.follower_id == follower_id,
+                Follow.deleted_at.is_(None),
             )
         )
         return _follow_dict(row) if row else None
 
 
 async def delete_follow(follow_id: str, follower_id: str) -> bool:
-    """Удаляет подписку и возвращает, была ли она. Одна транзакция вместо
-    «сначала SELECT, потом DELETE»: между двумя запросами подписку мог удалить
-    параллельный запрос, и тогда DELETE отработал бы впустую, а эндпоинт
-    ответил бы 200 на несуществующую запись."""
+    """Отписка: строка помечается deleted_at и снимается с зеркаления (paused),
+    журнал mirror_log остаётся на месте.
+
+    Удалять строку нельзя: на неё ссылается mirror_log, и жёсткий DELETE давал
+    IntegrityError — 500 на обычной кнопке «отписаться». ON DELETE CASCADE
+    стер бы единственную запись того, что копи-движок делал с деньгами
+    подписчика.
+
+    WHERE с проверкой владельца и WHERE deleted_at IS NULL — один запрос: между
+    «проверить, что своя» и «пометить» параллельный отзыв не должен успеть
+    превратить отписку в отметку на уже удалённой строке."""
     async with async_session_factory() as session:
         result = await session.execute(
-            delete(Follow).where(
-                Follow.id == follow_id, Follow.follower_id == follower_id
+            update(Follow)
+            .where(
+                Follow.id == follow_id,
+                Follow.follower_id == follower_id,
+                Follow.deleted_at.is_(None),
             )
+            .values(deleted_at=datetime.now(UTC), paused=True)
         )
         await session.commit()
         return result.rowcount > 0

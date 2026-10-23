@@ -76,9 +76,14 @@ class TestNetwork(unittest.TestCase):
 
 class TestSessionLimits(unittest.TestCase):
     def test_ttl_out_of_range_rejected(self):
-        for ttl in (0, 181):
+        for ttl in (0, 31):
             with self.assertRaises(ValidationError):
                 build(wake_session_ttl_days=ttl)
+
+    def test_default_ttl_is_short(self):
+        """7 дней, а не 30: у токена нет отзыва, и срок — единственная граница,
+        после которой украденная строка перестаёт быть входом."""
+        self.assertEqual(build().wake_session_ttl_days, 7)
 
     def test_rate_limits_must_be_positive(self):
         with self.assertRaises(ValidationError):
@@ -158,6 +163,19 @@ class TestListParsing(unittest.TestCase):
     def test_cors_origins_split_and_cleaned(self):
         settings = build(wake_cors_origins="http://a.test, http://b.test ,,")
         self.assertEqual(settings.cors_origins_list, ["http://a.test", "http://b.test"])
+
+    def test_wildcard_cors_rejected(self):
+        """app.py обещает «Strict CORS (no wildcards)». Со звёздочкой и
+        allow_credentials=True браузер запрос всё равно отклоняет, но в конфиге
+        это выглядит как политика «разрешено всем» — проверять надо на старте."""
+        for bad in ("*", "https://*.pages.dev", "https://a.test, *"):
+            with self.assertRaises(ValidationError, msg=bad):
+                build(wake_cors_origins=bad)
+
+    def test_non_origin_value_rejected(self):
+        for bad in ("a.test", "  ", "ftp://a.test"):
+            with self.assertRaises(ValidationError, msg=bad):
+                build(wake_cors_origins=bad)
 
     def test_empty_trusted_proxies_is_empty_list(self):
         """Пустая строка — «прокси нет», тогда как X-Forwarded-For игнорируется и

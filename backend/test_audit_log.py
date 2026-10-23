@@ -6,6 +6,7 @@ details как JSON и форма ответа (timestamp — epoch числом
 """
 
 import json
+import logging
 import time
 import unittest
 
@@ -84,6 +85,83 @@ class TestQueries(AuditCase):
             [r["timestamp"] for r in rows],
             sorted((r["timestamp"] for r in rows), reverse=True),
         )
+
+
+class TestAuditFailureDoesNotBreakRequest(unittest.TestCase):
+    """Аудит пишется ПОСЛЕ изменения денег. Моргнувшая база не имеет права
+    превращать успешную сделку в 500 — клиент повторил бы запрос и получил бы
+    вторую сделку вместо одной.
+
+    Здесь ломается сам слой записи (async_session_factory), а log_action обязан
+    проглотить ошибку и выбросить её в лог уровнем ERROR: событие не должно
+    исчезнуть вместе с исключением."""
+
+    def test_write_failure_is_logged_and_swallowed(self):
+        original = al.async_session_factory
+        al.async_session_factory = lambda: _broken_session()
+        self.addCleanup(setattr, al, "async_session_factory", original)
+        records = _capture("wake.audit")
+        try:
+            _run(
+                al.log_action(
+                    al.AuditEntry(
+                        actor="user:carol",
+                        action="trade_executed",
+                        resource="market_9",
+                        details={"shares": 3},
+                    )
+                )
+            )
+        finally:
+            records.stop()
+
+        self.assertEqual(len(records.records), 1, "одно падение — одна запись в лог")
+        line = records.records[0].getMessage()
+        self.assertIn("trade_executed", line)
+        self.assertIn("user:carol", line)
+        self.assertIn("market_9", line, "событие должно восстанавливаться из лога")
+
+
+def _broken_session():
+    class _Boom:
+        async def __aenter__(self):
+            raise RuntimeError("база легла")
+
+        async def __aexit__(self, *exc):
+            return False
+
+        def add(self, row):
+            pass
+
+        async def commit(self):
+            pass
+
+    return _Boom()
+
+
+def _capture(name: str):
+    class Collect(logging.Handler):
+        def __init__(self):
+            super().__init__()
+            self.records = []
+
+        def emit(self, record):
+            self.records.append(record)
+
+    logger = logging.getLogger(name)
+    old_level, old_handlers = logger.level, logger.handlers
+    logger.setLevel(logging.DEBUG)
+    collector = Collect()
+    logger.addHandler(collector)
+
+    def stop():
+        logger.removeHandler(collector)
+        logger.setLevel(old_level)
+        logger.handlers = old_handlers
+        return collector
+
+    collector.stop = stop  # type: ignore[attr-defined]
+    return collector
 
 
 if __name__ == "__main__":

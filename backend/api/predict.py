@@ -312,12 +312,15 @@ async def resolve_price(
     """Ручной триггер того же пути, что проходит predict_resolver.py по таймеру,
     для случая «резолвер ещё не поднят как процесс».
 
-    Под токеном куратора, хотя цена приходит с Lighter, а не от оператора: mark-цена
-    берётся в момент вызова, поэтому без гейта держатель позиции сам выбирал бы момент,
-    по которому решается его же ставка. Резолвер закрывает рынок в течение
-    WAKE_PREDICT_RESOLVER_TICK после дедлайна, так что ручным триггером куратор
-    догоняет пропущенные тики, а не пересоздаёт исход."""
-    from lighter_rest import get_mark_price
+    Под токеном куратора, хотя цену даёт Lighter, а не оператор: право вынести
+    исход по внешнему оракулу — не то, чем должен владеть держатель позиции.
+    Цена берётся НЕ «какая сейчас», а на дедлайне рынка (get_price_at): иначе
+    ручным триггером можно было бы резолвить рынок недельной давности ценой
+    сегодняшнего дня, и куратор становился бы оракулом по своему выбору момента.
+    Резолвер закрывает рынок в течение WAKE_PREDICT_RESOLVER_TICK после дедлайна,
+    так что ручным триггером куратор догоняет пропущенные тики, а не пересоздаёт
+    исход."""
+    from lighter_rest import get_price_at
 
     now = _time.time()
     m = await pdb.get_market(market_id)
@@ -339,22 +342,52 @@ async def resolve_price(
     # останавливает остальные запросы.
     try:
         observed = await run_in_threadpool(
-            get_mark_price, m["lighter_market_id"], req.network
+            get_price_at, m["lighter_market_id"], m["resolve_at"], req.network
         )
     except RuntimeError as e:
         raise HTTPException(status_code=502, detail=str(e))
     resolution = resolve_price_market(
         observed, m["threshold"], Comparator(m["comparator"])
     )
-    await pdb.resolve_market(
-        market_id, resolution.outcome, "auto:lighter_mark_price", None
+    try:
+        await pdb.resolve_market(
+            market_id, resolution.outcome, "auto:lighter_mark_price", None
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    await al.log_action(
+        al.AuditEntry(
+            actor=f"curator:{_curator_identity()}",
+            action="market_resolution",
+            resource=market_id,
+            details={
+                "outcome": resolution.outcome,
+                "observed_price": resolution.observed_price,
+                "threshold": resolution.threshold,
+                "comparator": resolution.comparator.value,
+                "resolve_at": m["resolve_at"],
+                "network": req.network,
+                "trigger": "manual",
+            },
+            success=True,
+        )
     )
     return {
         "outcome": resolution.outcome,
         "observed_price": observed,
+        "observed_at": m["resolve_at"],
         "network": req.network,
         "resolve_at": m["resolve_at"],
     }
+
+
+def _curator_identity() -> str:
+    """Кто именно дёрнул ручной триггер. Имени у машинного токена нет, поэтому в
+    аудит идёт его префикс — этого хватает, чтобы отличить ручную резолюцию от
+    автоматической и не светить секрет в таблице."""
+    from config import CURATOR_TOKEN
+
+    return (CURATOR_TOKEN or "")[:8] or "curator"
 
 
 @router.post("/predict/markets/{market_id}/claim")

@@ -19,7 +19,7 @@ from fastapi import APIRouter, HTTPException
 
 import lighter_rest
 from config import LIGHTER_NETWORK
-from funding_arb import HOURS_PER_YEAR, funding_by_market, snapshot_from_signed_rate
+from funding_arb import annualized_yield, funding_by_market, snapshot_from_signed_rate
 
 router = APIRouter()
 
@@ -44,9 +44,10 @@ def markets_overview():
             dict(r)
             | {
                 "funding_hourly": snapshot.hourly_rate if snapshot else None,
-                "funding_annualized": snapshot.hourly_rate * HOURS_PER_YEAR
-                if snapshot
-                else None,
+                # annualized_yield — единственная формула годовой в проекте
+                # (funding_arb.py): копия ×24×365 в роутере дала бы расхождение
+                # между сайтом и ботом, если эпох Lighter когда-нибудь изменится.
+                "funding_annualized": annualized_yield(snapshot) if snapshot else None,
                 # direction — это КТО платит: "long" = платят лонги, ставку забирают шорты.
                 "funding_payer": snapshot.direction if snapshot else None,
             }

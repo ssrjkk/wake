@@ -46,6 +46,16 @@ class Base(DeclarativeBase):
 
 class Leader(Base):
     __tablename__ = "leaders"
+    __table_args__ = (
+        # Один лидер на аккаунт Lighter. POST /leaders идемпотентен по индексу
+        # аккаунта, но без ограничения два параллельных запроса заводили по
+        # строке — две карточки одного трейдера и удвоенный AUM в Discover.
+        Index(
+            "uq_leaders_lighter_account_index",
+            "lighter_account_index",
+            unique=True,
+        ),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
     lighter_account_index: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -92,6 +102,10 @@ class Follow(Base):
         Float, nullable=False, default=0.0
     )
     paused: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    """Отписка — не удаление строки. На подписке висит mirror_log с журналом
+    того, что движок сделал с деньгами подписчика; каскад их стёр бы, а жёсткий
+    FK уронил DELETE 500. Список активных подписок таких строк не отдаёт."""
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

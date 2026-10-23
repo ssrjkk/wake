@@ -38,6 +38,8 @@ $50,000 на счету и подписчик с $200 аллокации НЕ д
 from dataclasses import dataclass, field
 from enum import Enum
 
+from quant import round_down
+
 
 class Side(Enum):
     LONG = "long"
@@ -62,6 +64,11 @@ class LeaderEvent:
 class MarketConstraints:
     min_base_amount: float
     size_decimals: int
+    price_decimals: int
+    """price_decimals — не для расчёта размера, а для исполнения: Lighter ждёт
+    цену целым числом в тиках рынка (price * 10**supported_price_decimals), и
+    шаг цены у рынков разный (SMIC — 4, ETH — у книги свой). Без него листенер
+    отправлял int(0.16) = 0 для DOGE и 110000 вместо 11000000 для BTC."""
 
 
 @dataclass(frozen=True)
@@ -85,21 +92,15 @@ class MirrorOrder:
 @dataclass(frozen=True)
 class SkippedFollower:
     follower_id: str
-    reason: str  # "leader_equity_unavailable" | "below_min_order_size" |
-    # "no_mirrored_position_to_reduce" | "leader_position_before_unavailable" |
-    # "reduce_amount_below_min"
+    reason: str  # "leader_equity_unavailable" | "price_unavailable" |
+    # "below_min_order_size" | "no_mirrored_position_to_reduce" |
+    # "leader_position_before_unavailable" | "reduce_amount_below_min"
 
 
 @dataclass(frozen=True)
 class MirrorPlan:
     orders: list = field(default_factory=list)  # list[MirrorOrder]
     skipped: list = field(default_factory=list)  # list[SkippedFollower]
-
-
-def _round_down(value: float, decimals: int) -> float:
-    """Всегда вниз — переисполнить чужой ордер хуже, чем недоисполнить."""
-    factor = 10**decimals
-    return int(round(value * factor, 6)) / factor  # round() гасит float-шум перед int()
 
 
 def compute_mirror_plan(
@@ -117,6 +118,14 @@ def compute_mirror_plan(
                 )
             return plan
 
+        if event.price <= 0:
+            # Цена нужна дважды: как стоимость ноги лидера и как делитель при
+            # переводе desired_notional обратно в базовые единицы. С нулём
+            # второй шаг — ZeroDivisionError посреди вебсокет-цикла.
+            for f in followers:
+                plan.skipped.append(SkippedFollower(f.follower_id, "price_unavailable"))
+            return plan
+
         leader_notional = event.size_delta * event.price
         leader_risk_fraction = leader_notional / event.leader_equity_usd
 
@@ -125,7 +134,7 @@ def compute_mirror_plan(
             max_notional_by_margin = f.available_margin_usd * f.max_leverage
             capped_notional = min(desired_notional, max_notional_by_margin)
 
-            base_amount = _round_down(
+            base_amount = round_down(
                 capped_notional / event.price, constraints.size_decimals
             )
 
@@ -161,7 +170,7 @@ def compute_mirror_plan(
             continue
 
         close_fraction = min(1.0, event.size_delta / event.leader_position_before)
-        reduce_amount = _round_down(
+        reduce_amount = round_down(
             f.current_mirrored_size * close_fraction, constraints.size_decimals
         )
 

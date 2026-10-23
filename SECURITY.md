@@ -75,6 +75,12 @@ client IP.
 touch no user record and no database write. Everything that reads or changes
 someone's state requires the bearer token.
 
+`/follows/by-leader/{leader_id}` is deliberately aggregates only — follower
+count and total allocation. The per-row list (who followed, for how much, with
+what mirrored size) moved to `GET /leaders/{id}/followers` behind ownership of
+the leader: an operator tool that reads the same rows is curator-gated, so
+leaving them open here contradicted the project's own classification of them.
+
 Curator operations — market creation and resolution, manual copy-engine runs —
 require `X-Curator-Token` compared with `hmac.compare_digest` over bytes, and
 answer 500 when the server has no token configured rather than running
@@ -138,8 +144,11 @@ malformed request fails as 422 before an SDK call.
 
 Idempotency is an in-process cache keyed by `client_order_index` with a one-hour
 TTL. It dedupes replays inside one process; it is not shared between workers or
-instances, and the browser generates that index from the wall clock, so two
-orders in the same millisecond are two orders.
+instances. The index is no longer derived from the clock: the browser draws it
+from `crypto.getRandomValues` and both server paths derive it from the UUID of
+the trade or mirror row it belongs to, so the same intent keeps the same index
+while two different orders cannot land on one index and have the second silently
+answered with the first one's tx_hash.
 
 ### Key storage
 
@@ -391,9 +400,12 @@ Lighter, и из него нет ни одного пути к `/place-order`: �
 запрос падает в 422 до обращения к SDK.
 
 Идемпотентность — кэш внутри процесса по `client_order_index` с TTL в час. Он
-склеивает повторы в одном процессе, не разделяется между воркерами и инстансами,
-а браузер строит индекс из часов, поэтому два ордера в одну миллисекунду — это два
-ордера.
+склеивает повторы в одном процессе, не разделяется между воркерами и инстансами.
+Индекс больше не строится по часам: браузер берёт его из `crypto.getRandomValues`,
+а оба серверных пути выводят из UUID той сделки или строки зеркалирования, к
+которой он относится. Поэтому повтор одного замысла сохраняет тот же индекс, а
+два разных ордера не могут столкнуться на одном индексе и получить ответ с
+tx_hash первого, не отправив второй.
 
 ### Хранение ключей
 

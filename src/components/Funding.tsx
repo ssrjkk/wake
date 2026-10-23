@@ -114,7 +114,7 @@ export default function Funding({ markets, setToast }: FundingProps) {
           // Знак ставки = кто платит: положительная — лонги платят шортам, и тогда
           // стратегия «шорт перпа + лонг спота» работает. Отрицательная — наоборот,
           // и бэкенд честно вернёт opportunity: null.
-          direction: row.rate >= 0 ? "long" : "short",
+          direction: row.rate > 0 ? "long" : row.rate < 0 ? "short" : "none",
           min_annualized_yield: minApy / 100,
         }),
       }));
@@ -165,7 +165,16 @@ export default function Funding({ markets, setToast }: FundingProps) {
             <h2 style={{ fontSize: "16px", fontWeight: 600, color: "#fafafa", margin: 0 }}>Funding и carry</h2>
             <button
               onClick={() => {
-                void getFundingRates().then(setRates).catch((e) => setLoadError(errorText(e)));
+                void getFundingRates()
+                  .then((r) => {
+                    setRates(r);
+                    // Баннер ошибки обязан гаснуть и здесь: прежний .then(setRates)
+                    // оставлял «funding-rates не ответили» над уже загрузившейся
+                    // таблицей, и по этому баннеру нельзя было понять, живые цифры
+                    // перед человеком или протухшие.
+                    setLoadError(null);
+                  })
+                  .catch((e) => setLoadError(errorText(e)));
               }}
               style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: "6px", fontSize: "11px", color: "#888", background: "transparent", border: "1px solid #2a2a2a", borderRadius: "4px", padding: "6px 10px", cursor: "pointer" }}
             >
@@ -174,6 +183,9 @@ export default function Funding({ markets, setToast }: FundingProps) {
           </div>
           <p style={{ fontSize: "12px", color: "var(--text-muted)", margin: "8px 0 0 0", maxWidth: "800px" }}>
             Реальные ставки funding со всех площадок — GET /api/v1/funding-rates. Шорт перпа + лонг спота того же актива: дельта-нейтрально, доход от ставки.
+            Знак — это кто платит: положительная ставка означает, что funding платят лонги и забирают его шорты перпа; отрицательная — наоборот, и cash-and-carry
+            без займа на таком рынке не строится. Колонки чужих площадок — ставка за ИХ эпоху выплат, а не за час: у Lighter эпох час (подтверждено живым API),
+            у остальных свой интервал, поэтому рядом эти числа читать как «кто платит больше» нельзя.
           </p>
         </div>
 
@@ -193,13 +205,20 @@ export default function Funding({ markets, setToast }: FundingProps) {
           <input
             type="number"
             value={minApy}
-            onChange={(e) => setMinApy(Number(e.target.value))}
+            onChange={(e) => {
+              // valueAsNumber: у очищенного поля Number("") = 0, а у «-» это
+              // NaN, и фильтр Math.abs(apy) >= NaN не проходит ни для одной
+              // строки — таблица пустела без единого объяснения.
+              const raw = e.target.valueAsNumber;
+              setMinApy(Number.isFinite(raw) ? Math.max(0, raw) : 0);
+            }}
             style={{ width: "60px", background: "#0a0a0a", border: "1px solid #1e1e1e", borderRadius: "4px", padding: "4px 8px", color: "#fafafa", fontFamily: "'JetBrains Mono', monospace", fontSize: "11px" }}
           />
           %
         </label>
         <span style={{ fontSize: "11px", color: "var(--text-muted)", marginLeft: "auto" }}>
           ставок: {rates ? rates.length : "—"}, перпов Lighter: {rows.length}
+          {rates != null && visible.length < rows.length ? `, показано ${visible.length}` : ""}
         </span>
       </div>
 
@@ -217,9 +236,9 @@ export default function Funding({ markets, setToast }: FundingProps) {
               <th style={{ padding: "10px 16px", fontWeight: 500 }}>Актив</th>
               <th style={{ padding: "10px 8px", fontWeight: 500, textAlign: "right" }}>Lighter, %/час</th>
               <th style={{ padding: "10px 8px", fontWeight: 500, textAlign: "right" }}>APR</th>
-              <th style={{ padding: "10px 8px", fontWeight: 500, textAlign: "right" }}>Binance</th>
-              <th style={{ padding: "10px 8px", fontWeight: 500, textAlign: "right" }}>Bybit</th>
-              <th style={{ padding: "10px 8px", fontWeight: 500, textAlign: "right" }}>Hyperliquid</th>
+              <th style={{ padding: "10px 8px", fontWeight: 500, textAlign: "right" }}>Binance, %/эпоху</th>
+              <th style={{ padding: "10px 8px", fontWeight: 500, textAlign: "right" }}>Bybit, %/эпоху</th>
+              <th style={{ padding: "10px 8px", fontWeight: 500, textAlign: "right" }}>Hyperliquid, %/эпоху</th>
               <th style={{ padding: "10px 8px", fontWeight: 500, textAlign: "right" }}>
                 Arcus{arcusError && <span style={{ color: "#ef4444", fontSize: "10px", display: "block", fontWeight: 400 }}>ошибка загрузки</span>}
               </th>

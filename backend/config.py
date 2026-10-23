@@ -33,7 +33,11 @@ class Settings(BaseSettings):
     # обязателен для входа — без него выдача отвечает 503, а не подписывает токены
     # угадываемым ключом.
     wake_session_secret: str = ""
-    wake_session_ttl_days: int = 30
+    # 7 дней, не 30. У токена нет отзыва (session.py прямо это говорит), и
+    # основанием для этого был именно короткий срок: 30 дней «короткий» — это
+    # месяц, когда украденная строка остаётся входом. Перелогин — подпись
+    # кошелька или тап в Telegram, цена короткого срока мала.
+    wake_session_ttl_days: int = 7
 
     # Токен куратора (api/predict.py): создание рынков, резолюция, ручной прогон
     # копи-движка.
@@ -145,11 +149,35 @@ class Settings(BaseSettings):
     @field_validator("wake_session_ttl_days")
     @classmethod
     def validate_session_ttl(cls, v: int) -> int:
-        if not 1 <= v <= 180:
+        if not 1 <= v <= 30:
             raise ValueError(
-                f"WAKE_SESSION_TTL_DAYS={v}: разумный диапазон 1–180 дней, "
-                "дольше — токен переживает сам вход"
+                f"WAKE_SESSION_TTL_DAYS={v}: разумный диапазон 1–30 дней; отзыв "
+                "токена не хранится, поэтому срок и есть защита"
             )
+        return v
+
+    @field_validator("wake_cors_origins")
+    @classmethod
+    def validate_cors_origins(cls, v: str) -> str:
+        """Список источников без wildcard — то, что обещает докстринг app.py.
+
+        Звёздочка с allow_credentials=True не работает по спецификации (браузер
+        её отклоняет), но в конфиге выглядит как «разрешили всем», и кто-то
+        потом считает это политикой. Отказ на старте дешевле, чем иллюзия
+        настроенного CORS."""
+        origins = [o.strip() for o in v.split(",") if o.strip()]
+        if not origins:
+            raise ValueError("WAKE_CORS_ORIGINS пустой — указать источник явно")
+        for origin in origins:
+            if "*" in origin:
+                raise ValueError(
+                    f"WAKE_CORS_ORIGINS={v!r}: wildcard не разрешён, каждый "
+                    "источник нужно перечислить целиком"
+                )
+            if not origin.startswith(("http://", "https://")):
+                raise ValueError(
+                    f"WAKE_CORS_ORIGINS: {origin!r} — должен быть с http:// или https://"
+                )
         return v
 
     @model_validator(mode="after")

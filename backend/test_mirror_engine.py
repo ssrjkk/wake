@@ -13,7 +13,7 @@ from mirror_engine import (
     compute_mirror_plan,
 )
 
-BTC = MarketConstraints(min_base_amount=0.001, size_decimals=3)
+BTC = MarketConstraints(min_base_amount=0.001, size_decimals=3, price_decimals=2)
 
 
 class TestProportionalIncrease(unittest.TestCase):
@@ -243,6 +243,54 @@ class TestMultipleFollowersMixedOutcomes(unittest.TestCase):
         self.assertEqual(plan.orders[0].follower_id, "whale")
         self.assertEqual(len(plan.skipped), 1)
         self.assertEqual(plan.skipped[0].follower_id, "dust")
+
+
+class TestExactTickSizing(unittest.TestCase):
+    """Размер считается через Decimal (quant.round_down), а не через int(v*10**d).
+
+    На float-арифметике 0.29 монеты при d=2 это int(28.999999999999996) = 28,
+    то есть ордер на шаг меньше запланированного, и ровно так же тихонько
+    резались 0.57 и 4.35. Тест держит именно эти три числа, потому что они
+    сняты с реального шага цены, а не придуманы."""
+
+    def _plan(self, price, allocation, equity=None):
+        # риск-доля лидера = size_delta*price / equity; при equity = 10*price
+        # это ровно 10%, и подписчик обязан получить 10% от СВОЕЙ аллокации.
+        event = LeaderEvent(
+            market_id=0,
+            side=Side.LONG,
+            is_increase=True,
+            size_delta=1.0,
+            price=price,
+            leader_equity_usd=equity if equity is not None else price * 10,
+        )
+        follower = FollowerConfig(
+            "f1",
+            allocation_usd=allocation,
+            available_margin_usd=allocation,
+            max_leverage=10,
+        )
+        return compute_mirror_plan(event, [follower], BTC)
+
+    def test_amounts_that_float_ate_are_kept(self):
+        # 10% от аллокации по цене 1.0 -> base_amount = allocation / 10.
+        for allocation, expected in ((2.9, 0.29), (5.7, 0.57), (43.5, 4.35)):
+            with self.subTest(allocation=allocation):
+                self.assertEqual(
+                    self._plan(1.0, allocation).orders[0].base_amount, expected
+                )
+
+    def test_round_down_never_goes_up(self):
+        # 0.333999 / 10 = 0.0333999 при d=3 -> 0.033, а не 0.034: вниз, всегда.
+        self.assertEqual(self._plan(1.0, 0.333999).orders[0].base_amount, 0.033)
+
+    def test_zero_price_skips_instead_of_crashing(self):
+        """Нулевая цена — ZeroDivisionError посреди вебсокет-цикла: снапшот
+        рынка без торгов её отдаёт. Equity при этом живой, так что дело именно
+        в цене."""
+        plan = self._plan(0.0, 1000.0, equity=10_000.0)
+        self.assertEqual(plan.orders, [])
+        self.assertEqual([s.reason for s in plan.skipped], ["price_unavailable"])
 
 
 if __name__ == "__main__":

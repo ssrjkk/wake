@@ -21,13 +21,13 @@ BTC прилетает ставка LIT с чужой биржи.
 from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 import lighter_rest
 from config import LIGHTER_NETWORK
 from funding_arb import (
-    HOURS_PER_YEAR,
     FundingSnapshot,
+    annualized_yield,
     base_asset,
     find_opportunity,
     funding_by_market,
@@ -42,20 +42,35 @@ router = APIRouter()
 
 
 class FundingCheckRequest(BaseModel):
-    market_id: int
-    symbol: str
-    hourly_rate: float
-    direction: Literal["long", "short"]
-    min_annualized_yield: float = 0.05
+    """Ставка за час — беззнаковая величина доли (0.0001 = 0.01%/час).
+
+    Границы заданы на модели, а не «проверяет математика»: NaN и inf из тела
+    запроса доходили до ответа, Starlette отказывалась сериализовать Infinity
+    (allow_nan=False по RFC 7159), и клиент получал 500 вместо внятного 422.
+    1% за час — это ~8760% годовых; выше этой границы ставки в живом ответе
+    Lighter нет ни у одной площадки, так что le=0.05 отсекает мусор, а не
+    реальные рынки."""
+
+    market_id: int = Field(ge=0)
+    symbol: str = Field(min_length=1, max_length=24)
+    hourly_rate: float = Field(ge=0, le=0.05, allow_inf_nan=False)
+    # "none" — ставка ровно 0: никто не платит. Без этой ветки нулевой рынок
+    # приходил бы как «платят шорты» (109 строк из 735 на замере 2026-10-23).
+    direction: Literal["long", "short", "none"]
+    min_annualized_yield: float = Field(default=0.05, ge=0, le=10, allow_inf_nan=False)
 
 
 class FundingSizeRequest(BaseModel):
-    capital_usd: float
-    price: float
-    perp_size_decimals: int
-    spot_size_decimals: int
-    perp_min_base_amount: float
-    spot_min_base_amount: float
+    """capital_usd/price — доллары и цена рынка; decimals — шаг конкретного
+    рынка из книги Lighter (замер 0..6). Верхняя граница decimals не косметика:
+    10**400 на int() превращается в OverflowError, то есть 500."""
+
+    capital_usd: float = Field(gt=0, le=1_000_000_000, allow_inf_nan=False)
+    price: float = Field(gt=0, le=1_000_000_000_000, allow_inf_nan=False)
+    perp_size_decimals: int = Field(ge=0, le=12)
+    spot_size_decimals: int = Field(ge=0, le=12)
+    perp_min_base_amount: float = Field(ge=0, le=1_000_000_000, allow_inf_nan=False)
+    spot_min_base_amount: float = Field(ge=0, le=1_000_000_000, allow_inf_nan=False)
 
 
 @router.post("/funding-arb/check")
@@ -186,9 +201,12 @@ def carry_markets():
                 "spot_size_decimals": leg.spot_size_decimals,
                 "hourly_rate": snapshot.hourly_rate if snapshot else None,
                 "direction": snapshot.direction if snapshot else None,
-                "annualized": snapshot.hourly_rate * HOURS_PER_YEAR
-                if snapshot
-                else None,
+                # annualized_yield() — единственное место, где часовая ставка
+                # превращается в годовую (funding_arb.py). Формула ×24×365
+                # второй копией в роутере означала бы, что страница и бот могут
+                # разойтись в годовой молча, и кто прав — решалось бы по
+                # скриншотам.
+                "annualized": annualized_yield(snapshot) if snapshot else None,
             }
         )
     return {

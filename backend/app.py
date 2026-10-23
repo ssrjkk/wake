@@ -93,7 +93,11 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins_list,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type", "Authorization"],
+    # X-Curator-Token обязано быть в списке: операторские роуты требуют именно
+    # этот заголовок (api/guards.py), и без него браузер не проходит preflight —
+    # то есть любой веб-интерфейс оператора был бы нерабочим по конфигу CORS, а
+    # не по коду.
+    allow_headers=["Content-Type", "Authorization", "X-Curator-Token"],
     allow_credentials=True,
 )
 
@@ -142,8 +146,19 @@ def _bucket_key(request: Request) -> str:
     return f"ip:{net.client_ip(request)}"
 
 
+# Проверки живости и готовности — не трафик пользователя. Оркестратор (Railway)
+# долбит /health и /ready секунда в секунду; за прокси все эти запросы приходят
+# с одного IP и попадают в одно ведро. Ведро на 40 токенов исчерпается самим
+# health-чекером, /ready начнёт отвечать 429, оркестратор решит, что приложение
+# не готово, и перезапустит его — классический self-inflicted restart loop.
+# Preflight (OPTIONS) — то же: это не запрос данных, а технический шаг браузера.
+_UNLIMITED_PATHS = ("/health", "/ready", "/docs", "/openapi.json", "/redoc")
+
+
 @app.middleware("http")
 async def rate_limit_middleware(request: Request, call_next):
+    if request.method == "OPTIONS" or request.url.path in _UNLIMITED_PATHS:
+        return await call_next(request)
     key = _bucket_key(request)
     cost = _WRITE_COST if request.method in ("POST", "PUT", "PATCH", "DELETE") else 1.0
     if not await _rate_limiter.allow(key, cost):
@@ -161,10 +176,22 @@ async def rate_limit_middleware(request: Request, call_next):
     return await call_next(request)
 
 
-# Unified error handler
+# Единый формат ошибок
 @app.exception_handler(Exception)
 async def unified_exception_handler(request: Request, exc: Exception):
     if isinstance(exc, ValueError):
+        # ValueError — это и валидация границ (predict_amm, portfolio_risk,
+        # wallet_auth), и баг в коде (_int("abc")). Статус 400 остаётся, но
+        # молча превращать настоящую ошибку сервера в «плохой запрос» нельзя:
+        # без этой строки Sentry и логики разбора видели бы только 400 от
+        # клиента там, где падал наш собственный код.
+        logger.warning(
+            "ValueError на %s %s: %s",
+            request.method,
+            request.url.path,
+            exc,
+            exc_info=True,
+        )
         return JSONResponse(
             status_code=400,
             content={

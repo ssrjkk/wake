@@ -63,10 +63,14 @@ async def require_curator(supplied: str | None = Depends(_curator)) -> None:
     честного 403."""
     if not CURATOR_TOKEN:
         raise deny(
-            500,
+            503,
             "CURATOR_NOT_CONFIGURED",
             "WAKE_CURATOR_TOKEN не настроен на сервере: операторские эндпоинты закрыты",
         )
+        # 503, а не 500: причина — конфигурация сервера, а не запрос. Один язык
+        # с SESSION_NOT_CONFIGURED и TELEGRAM_NOT_CONFIGURED нужен, чтобы у
+        # клиента был единственный способ отличить «у сервера чего-то нет» от
+        # «мой запрос плохой».
     if supplied is None or not hmac.compare_digest(
         supplied.encode(), CURATOR_TOKEN.encode()
     ):

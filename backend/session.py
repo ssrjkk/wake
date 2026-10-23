@@ -81,11 +81,19 @@ def verify(token: str, now: float | None = None) -> str:
         raise SessionError(
             "SESSION_NOT_CONFIGURED",
             "Сессии не выдаются: на сервере нет WAKE_SESSION_SECRET",
+            503,
         )
+        # 503, а не 401: причина на стороне сервера, и 401 отправляет клиента
+        # перелогиниться — цикл, из которого вход не выходит, потому что новый
+        # токен выдать нечем. Ровно это issue() уже делает для того же случая.
     parts = token.split(".")
     if len(parts) != 3 or parts[0] != "wk1":
         raise SessionError("SESSION_MALFORMED", "Токен имеет не форму сессии Wake")
     payload, signature = parts[1], parts[2]
+    if not signature.isascii():
+        # compare_digest по строкам с не-ASCII бросает TypeError — то есть
+        # один запрос с « wk1.abc.€ » давал 500 вместо честного 401.
+        raise SessionError("SESSION_BAD_SIGNATURE", "Подпись токена не совпала")
     if not hmac.compare_digest(signature, _sign(payload, SESSION_SECRET)):
         raise SessionError("SESSION_BAD_SIGNATURE", "Подпись токена не совпала")
     try:

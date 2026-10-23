@@ -1,5 +1,6 @@
 """python3 -m unittest test_portfolio_risk -v"""
 
+import math
 import unittest
 from portfolio_risk import (
     price_returns,
@@ -130,18 +131,34 @@ class TestHedgeSuggestion(unittest.TestCase):
         )
         self.assertAlmostEqual(suggestion.resulting_portfolio_vol_usd, 0.0, places=4)
 
-    def test_uncorrelated_candidate_gives_poor_hedge_high_residual_vol(self):
+    def test_uncorrelated_candidate_is_not_offered_as_a_hedge(self):
+        """Кандидат, который риска не убавил, наружу не отдаётся.
+
+        Прежняя версия движка возвращала «лучшего из худших» с высокой
+        результирующей волатильностью, и панель показывала это как предложение
+        открыть позицию. Для некоррелированного актива оптимальный h* убивает
+        только дисперсию самой приставки и добавляет её собственную — итог
+        хуже, чем без хеджа, и честный ответ здесь «предложения нет»."""
         a = [0.02, -0.02, 0.02, -0.02, 0.02, -0.02]
         b = [0.01, 0.01, -0.01, -0.01, 0.01, 0.01]  # некоррелирован с a
         returns = {0: a, 1: b}
         target = Position(0, "A", 1000)
+        self.assertIsNone(suggest_hedge(target, [(1, "B")], returns))
+
+    def test_suggestion_carries_the_unhedged_volume_to_compare_with(self):
+        a = [0.02, -0.02, 0.02, -0.02, 0.02, -0.02]
+        returns = {0: a, 1: a}
+        target = Position(0, "A", 1000)
         suggestion = suggest_hedge(target, [(1, "B")], returns)
         self.assertIsNotNone(suggestion)
-        naive = abs(target.signed_notional_usd) * volatility(a)
-        self.assertGreater(
-            suggestion.resulting_portfolio_vol_usd,
-            naive * 0.5,
-            "некоррелированный актив не должен давать иллюзию хорошего хеджа",
+        self.assertAlmostEqual(
+            suggestion.unhedged_vol_usd,
+            abs(target.signed_notional_usd) * volatility(a),
+            places=6,
+            msg="без цифры «до» результат «после» не читается",
+        )
+        self.assertLess(
+            suggestion.resulting_portfolio_vol_usd, suggestion.unhedged_vol_usd
         )
 
     def test_picks_best_among_multiple_candidates_by_resulting_vol_not_raw_correlation(
@@ -167,6 +184,58 @@ class TestHedgeSuggestion(unittest.TestCase):
         target = Position(0, "FLAT", 1000)
         suggestion = suggest_hedge(target, [(1, "OTHER")], returns)
         self.assertIsNone(suggestion)
+
+
+class TestGarbageData(unittest.TestCase):
+    """Математика не имеет права превращать битые данные в «меньше риска».
+
+    NaN и inf приходят из жизни: close=0 у неликвидной свечи, деление на неё,
+    ряды разной длины у рынка, который листнулся позже. Раньше это было
+    ZeroDivisionError (роут падал), либо inf → variance inf → max(0.0, inf) →
+    sqrt(inf) и наружу JSON с Infinity, который Starlette отказывается
+    сериализовать; NaN же давал score 1.0 — «портфель полностью захеджирован».
+    """
+
+    def test_zero_and_nan_closes_are_dropped_not_divided(self):
+        # close=0 — отсутствующие данные, а не «-100%»: пара выбрасывается целиком.
+        self.assertEqual(price_returns([100, 0, 110]), [])
+        self.assertEqual(price_returns([100, float("nan"), 110]), [])
+        self.assertEqual(price_returns([100, 105]), [0.05])
+
+    def test_volatility_ignores_non_finite_values(self):
+        self.assertAlmostEqual(
+            volatility([0.01, -0.01, float("nan"), float("inf")]), 0.01
+        )
+        self.assertEqual(volatility([0.01, float("nan")]), 0.0)
+        # Population-вариант (деление на n), как считает volatility(): mean=0,
+        # (0.0001+0.0001+0.0004+0.0004)/4 = 0.00025 -> 0.0158114.
+        self.assertAlmostEqual(
+            volatility([0.01, -0.01, 0.02, -0.02]), 0.015811388, places=6
+        )
+
+    def test_correlation_of_unequal_series_works_on_the_common_tail(self):
+        a = [0.01, 0.02, 0.03, 0.04]
+        b_short = [0.01, 0.02]
+        self.assertGreater(pearson_correlation(a, b_short), 0.9)
+
+    def test_correlation_needs_two_common_points(self):
+        with self.assertRaises(ValueError):
+            pearson_correlation([0.01], [0.01, 0.02])
+
+    def test_missing_series_names_the_market_instead_of_keyerror(self):
+        positions = [Position(0, "A", 1000), Position(7, "GHOST", 500)]
+        returns = {0: [0.01, -0.01, 0.02]}
+        with self.assertRaises(ValueError) as ctx:
+            portfolio_dollar_volatility(positions, returns)
+        self.assertIn("7", str(ctx.exception))
+
+    def test_portfolio_volatility_is_finite_for_finite_input(self):
+        positions = [Position(0, "A", 1000), Position(1, "B", -400)]
+        returns = {0: [0.01, -0.02, 0.03, -0.01], 1: [0.02, 0.01, -0.03, 0.01]}
+        value = portfolio_dollar_volatility(positions, returns)
+        self.assertTrue(math.isfinite(value) and value >= 0)
+        score = diversification_score(positions, returns)
+        self.assertTrue(0.0 <= score <= 1.0)
 
 
 if __name__ == "__main__":

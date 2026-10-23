@@ -10,6 +10,7 @@ requests/httpx, чтобы это можно было гонять где уго
 """
 
 import json
+import logging
 import time
 import random
 import urllib.request
@@ -18,6 +19,8 @@ from concurrent.futures import ThreadPoolExecutor
 from cache import cached
 from config import LIGHTER_NETWORK, LIGHTER_HOSTS
 from funding_arb import base_asset, snapshot_from_signed_rate
+
+logger = logging.getLogger("wake.lighter")
 
 MAX_RETRIES = 3
 RETRY_DELAY = 1.0
@@ -49,12 +52,29 @@ def _base(network: str) -> str:
 
 
 def _get(url: str) -> dict:
+    """GET с повторами только там, где повтор имеет смысл.
+
+    HTTPError — подкласс URLError, поэтому прежний код трижды долбил и 403, и
+    404, и 429 с паузами 1+2 с: запрос к закрытому эндпоинту (например
+    /orderBooks с depth, который Lighter отдаёт 403) висел по 3.5 секунды и
+    сжигал квоту, а на 429 просил ещё больше. Повторяются только сетевые сбои и
+    5xx — то, что действительно может пройти при следующем попытке.
+    """
     req = urllib.request.Request(url, headers={"Accept": "application/json"})
     last_err = None
     for attempt in range(MAX_RETRIES):
         try:
             with urllib.request.urlopen(req, timeout=10) as resp:
                 return json.loads(resp.read().decode())
+        except urllib.error.HTTPError as e:
+            if e.code < 500:
+                raise RuntimeError(
+                    f"Lighter API: HTTP {e.code} для {url.split('?')[0]}"
+                ) from e
+            last_err = e
+            if attempt < MAX_RETRIES - 1:
+                delay = RETRY_DELAY * (2**attempt) + random.uniform(0, 0.5)
+                time.sleep(delay)
         except urllib.error.URLError as e:
             last_err = e
             if attempt < MAX_RETRIES - 1:
@@ -114,8 +134,10 @@ def get_candles(
     resolution: str = "1h",
     count: int = 24,
     network: str = LIGHTER_NETWORK,
+    end_ms: int | None = None,
 ) -> list:
-    """Ровно последние `count` свечей.
+    """Ровно последние `count` свечей, оканчивая моментом `end_ms` (по умолчанию
+    — сейчас).
 
     Живое поведение (замерено на mainnet 2026-10-02, а не по докам): количество
     свечей задаёт ОКНО, а не count_back — при start_timestamp=0 Lighter отдаёт
@@ -124,16 +146,43 @@ def get_candles(
     свечей. Поэтому окно берётся с запасом в 2 интервала (чтобы округление по
     таймстемпам не откусило нужную свечу), а лишнее отрезается здесь — иначе
     «оборот за 24ч» молча считается по 26 часам.
+
+    end_ms нужен для резолюции price-рынков: окно обязано заканчиваться дедлайном
+    рынка, а не моментом, в который резолвер наконец проснулся.
     """
     interval_ms = RESOLUTION_MS[resolution]
-    now_ms = int(time.time() * 1000)
+    last_ms = int(time.time() * 1000) if end_ms is None else int(end_ms)
     url = (
         f"{_base(network)}/candles?market_id={market_id}&resolution={resolution}"
-        f"&start_timestamp={now_ms - (count + 2) * interval_ms}&end_timestamp={now_ms}"
+        f"&start_timestamp={last_ms - (count + 2) * interval_ms}&end_timestamp={last_ms}"
         f"&count_back={count}&set_timestamp_to_end=true"
     )
     data = _get(url)
     return data.get("c", [])[-count:]
+
+
+def get_price_at(
+    market_id: int, when_s: float, network: str = LIGHTER_NETWORK
+) -> float:
+    """Цена закрытия минуты, в которую попал момент `when_s`.
+
+    Для резолюции price-рынка это единственный корректный оракул: исход «BTC
+    выше 100k на 1 октября» обязан решаться ценой 1 октября. Прежний
+    get_mark_price брал последнюю свечу НА МОМЕНТ ЗАПРОСА, и пока резолвер был
+    жив (тик 300 с) это было почти верно, но пропуск на сутки-неделю превращал
+    исход в цену совсем другого дня — а по этим исходам люди получают выплаты.
+    Окно заканчивается дедлайном, так что ответ не зависит от того, когда
+    процесс проснулся."""
+    interval_ms = RESOLUTION_MS["1m"]
+    when_ms = int(when_s * 1000)
+    candles = get_candles(market_id, "1m", 6, network, end_ms=when_ms + interval_ms)
+    # Свеча покрывает [t, t+1м): нужна последняя с t <= when_ms.
+    covering = [c for c in candles if int(c["t"]) <= when_ms]
+    if not covering:
+        raise RuntimeError(
+            f"нет свечей, покрывающих момент {when_s}, для market_id={market_id}"
+        )
+    return float(covering[-1]["c"])
 
 
 def stats_from_candles(candles: list) -> dict:
@@ -183,25 +232,34 @@ def get_funding_rate(market_id: int, network: str = LIGHTER_NETWORK) -> dict:
     direction в ответе отсутствует, знак живёт в самом числе, поэтому
     направление выводится из знака, а не подставляется "long" по умолчанию."""
     market_id = int(market_id)
-    row = next(
-        (
-            r
-            for r in get_funding_rates(network)
-            if r.get("exchange") == "lighter"
-            and int(r.get("market_id", -1)) == market_id
-        ),
-        None,
-    )
+
+    def _same_market(row) -> bool:
+        """Совпадение по market_id площадки Lighter.
+
+        int() от поля, которое в других ответах этой же книги приходит СТРОКОЙ,
+        бросает ValueError на любой мусорной строке — раньше один битый market_id
+        в ответе /funding-rates вешал весь /funding и бота. Строку-не-число
+        просто не считаем совпадением."""
+        if row.get("exchange") != "lighter":
+            return False
+        try:
+            return int(row.get("market_id", -1)) == market_id
+        except (TypeError, ValueError):
+            return False
+
+    row = next((r for r in get_funding_rates(network) if _same_market(r)), None)
     if row is None:
         raise RuntimeError(f"нет funding rate для market_id={market_id}")
-    snapshot = snapshot_from_signed_rate(
-        market_id, row.get("symbol", ""), float(row["rate"])
-    )
+    try:
+        signed = float(row["rate"])
+    except (KeyError, TypeError, ValueError) as e:
+        raise RuntimeError(f"ставка funding для market_id={market_id} не число") from e
+    snapshot = snapshot_from_signed_rate(market_id, row.get("symbol", ""), signed)
     return {
         "market_id": market_id,
         "symbol": snapshot.symbol,
         "rate": snapshot.hourly_rate,
-        "signed_rate": float(row["rate"]),
+        "signed_rate": signed,
         "direction": snapshot.direction,
     }
 
@@ -284,8 +342,12 @@ def get_market_overview(
         for symbol, future in futures.items():
             try:
                 stats_by_symbol[symbol] = future.result()
-            except RuntimeError:
-                pass
+            except Exception as e:
+                # Не только RuntimeError: у рынка без свечей их нет, но битая
+                # строка в ответе (KeyError на "c") или OverflowError не имеют
+                # права вешать весь обзор — страница и бот остаются с остальными
+                # рынками, а этот попадёт в no_data.
+                logger.warning("рынок %s без статистики: %s", symbol, e)
 
     known_symbols = {symbol for symbol, _ in known}
     rows, no_market, no_data = [], [], []

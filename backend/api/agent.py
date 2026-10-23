@@ -20,46 +20,85 @@ agent_runner dry-run путь, subscription 10). Этот слой — HTTP-об
 
 import math
 from functools import partial
+from typing import Literal
 
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
 import agent_db
+import lighter_rest
 from api.guards import deny, require_curator, require_user
 from agent_runner import run_agent_step
+from config import LIGHTER_NETWORK
 from subscription import Subscription, Tier
 
 router = APIRouter()
 
-# Цена шага ограничена не жадностью: recent_prices читается целиком, а решение
-# строится по последним значениям. Тысяча элементов в массиве — это лишний CPU
-# на каждом запросе, который к тому же приходит от того же клиента, что и цены.
-_MAX_PRICES = 500
+# Разрешения /candles Lighter — тот же список, что у RESOLUTION_MS в
+# lighter_rest.py; кривое значение здесь означает 422, а не тихий 1m-ряд.
+Resolution = Literal["1m", "5m", "15m", "30m", "1h", "4h", "12h", "1d"]
 
 
 class AgentStepRequest(BaseModel):
+    """market_id, разрешение и глубина ряда — и больше ничего про данные.
+
+    Раньше recent_prices, size_decimals и price_decimals приезжали в теле
+    запроса. Это не «данные клиента», а вход денежного пути: по присланному
+    ряду считались momentum, цена исполнения и размер, а лимиты дневного
+    объёма и открытой позиции — тоже по нему. Прислав свой «ряд» и свои
+    decimals, клиент получал агента, который исполняет то, что он написал, а
+    не то, что видно на рынке; проверка на входе (конечность, > 0) от этого не
+    спасает — она проверяет форму, а не правду.
+
+    Цены и ограничения рынка теперь берутся из Lighter здесь же, где и
+    считается решение. Наружу уходит, каким рядом считать приходилось —
+    иначе ответ нельзя сверить с тем, что человек видит на графике."""
+
     market_id: int
-    recent_prices: list[float]
-    size_decimals: int = 4
-    price_decimals: int = 0
-    base_size_usd: float = 100
+    resolution: Resolution = "1h"
+    candles: int = Field(default=60, ge=2, le=200)
+    base_size_usd: float = Field(default=100, gt=0, le=1_000_000, allow_inf_nan=False)
 
-    @field_validator("recent_prices")
-    @classmethod
-    def prices_are_usable(cls, v: list[float]) -> list[float]:
-        if not v or len(v) > _MAX_PRICES:
-            raise ValueError(f"recent_prices — от 1 до {_MAX_PRICES} значений")
-        if not all(math.isfinite(p) and p > 0 for p in v):
-            raise ValueError("цены должны быть положительными и конечными")
-        return v
 
-    @field_validator("base_size_usd")
-    @classmethod
-    def size_is_usable(cls, v: float) -> float:
-        if not math.isfinite(v) or v <= 0:
-            raise ValueError("base_size_usd — положительное конечное число")
-        return v
+def _market_constraints(market_id: int) -> dict:
+    """Шаг и минимум рынка из живой книги (кэш 30 с, cache.py)."""
+    for book in lighter_rest.get_order_books(LIGHTER_NETWORK):
+        try:
+            if int(book["market_id"]) != market_id:
+                continue
+        except (KeyError, TypeError, ValueError):
+            continue
+        if book.get("status") != "active":
+            raise deny(
+                409,
+                "MARKET_NOT_ACTIVE",
+                f"рынок {market_id} не активен — ордер в него поставить нельзя",
+            )
+        return {
+            "size_decimals": int(book["supported_size_decimals"]),
+            "price_decimals": int(book["supported_price_decimals"]),
+            "symbol": str(book.get("symbol", "")),
+        }
+    raise deny(404, "MARKET_NOT_FOUND", f"рынка {market_id} нет в книге Lighter")
+
+
+def _candle_closes(market_id: int, resolution: str, count: int) -> list[float]:
+    candles = lighter_rest.get_candles(market_id, resolution, count, LIGHTER_NETWORK)
+    closes = []
+    for c in candles:
+        try:
+            closes.append(float(c["c"]))
+        except (KeyError, TypeError, ValueError):
+            continue
+    if len(closes) < 2 or not all(math.isfinite(x) and x > 0 for x in closes):
+        raise deny(
+            502,
+            "MARKET_DATA_UNUSABLE",
+            f"Lighter не отдал годный ряд свечей по рынку {market_id} "
+            f"({resolution}) — агент не решает по пустому или битому ряду",
+        )
+    return closes
 
 
 async def _subscription(user_id: str) -> Subscription | None:
@@ -87,16 +126,21 @@ async def agent_step(req: AgentStepRequest, user_id: str = Depends(require_user)
     memory = await agent_db.load_memory(user_id)
     risk_state = await agent_db.risk_state_today(user_id)
 
-    # В threadpool, а не в event loop: при выключенном WAKE_DRY_RUN шаг делает
-    # блокирующий urllib-запрос к signing_service, и в ожидании ордера встал бы
-    # весь процесс, а не только этот запрос.
+    # Данные для решения и для расчёта риска берутся здесь, а не из тела запроса.
+    # В threadpool, потому что _get у lighter_rest блокирующий urllib: в event
+    # loop он остановил бы весь процесс на время запроса к Lighter.
+    constraints = await run_in_threadpool(_market_constraints, req.market_id)
+    closes = await run_in_threadpool(
+        _candle_closes, req.market_id, req.resolution, req.candles
+    )
+
     step = partial(
         run_agent_step,
         memory,
         req.market_id,
-        req.recent_prices,
-        req.size_decimals,
-        req.price_decimals,
+        closes,
+        constraints["size_decimals"],
+        constraints["price_decimals"],
         req.base_size_usd,
         risk_state=risk_state,
     )
@@ -113,6 +157,13 @@ async def agent_step(req: AgentStepRequest, user_id: str = Depends(require_user)
         "reasoning": decision.reasoning,
         "execution": execution,
         "volume_today_usd": risk_state.volume_today_usd,
+        "data": {
+            "symbol": constraints["symbol"],
+            "resolution": req.resolution,
+            "candles_used": len(closes),
+            "last_price": closes[-1],
+            "network": LIGHTER_NETWORK,
+        },
     }
 
 

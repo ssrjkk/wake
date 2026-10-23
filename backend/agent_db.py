@@ -140,7 +140,16 @@ async def risk_state_today(user_id: str) -> UserRiskState:
     Ножки считаются отдельно: покупка и продажа одной и той же сделки — два
     исполнения, и прежний UserRiskState списывал на них лимит дважды же, чем
     record_executed() при шаге. Граница дня — UTC: локальный часовой пояс
-    сервера делал бы «сегодня» зависимым от того, где стоит контейнер."""
+    сервера делал бы «сегодня» зависимым от того, где стоит контейнер.
+
+    Статус решает, что считать. "sent" — это исполненный ордер: он и расходует
+    дневной объём, и создаёт открытую позицию. "dry_run" — сделка, которой на
+    рынке нет: как объём она считается (шаг агента был, и лимит на активность
+    именно по шагам), но в открытые позиции не попадает — иначе дневной лимит
+    позиции по рынку съедается несуществующими позициями, и первый же живой ордер
+    после серии сухих прогонов получает «лимит позиции исчерпан» по данным,
+    которых нет.
+    """
     now = datetime.now(UTC)
     async with async_session_factory() as session:
         rows = (
@@ -158,7 +167,7 @@ async def risk_state_today(user_id: str) -> UserRiskState:
             state.volume_today_usd += r.size * r.entry_price
         if r.closed_at is not None and r.closed_at >= _day_start(now):
             state.volume_today_usd += r.size * r.exit_price
-        if r.closed_at is None:
+        if r.closed_at is None and r.status == "sent":
             state.open_position_usd[r.market_id] = (
                 state.open_position_usd.get(r.market_id, 0.0) + r.size * r.entry_price
             )
