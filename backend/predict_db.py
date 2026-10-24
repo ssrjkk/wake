@@ -159,7 +159,15 @@ async def record_trade(
     внутри одного вызова. В SQLite это держалось на единственном письмен; в
     PostgreSQL два параллельных трейда прочитали бы одинаковые q_yes/q_no, и второй
     записал бы цену, посчитанную от уже устаревшего пула — то есть продал бы shares
-    по цене, которой рынок уже не имел."""
+    по цене, которой рынок уже не имел.
+
+    Дедлайн закрывает приём сделок здесь, а не только в интерфейсе: исход
+    price-рынка определён в resolve_at (оракул берёт цену на этот момент), а
+    статус "resolved" появляется на тик позже. В этом окне рынок формально открыт,
+    и любой, кто видит живую цену BTC, знает исход заранее — покупает его по цене
+    пула ниже доллара и получает доллар. Резолвер крутится раз в
+    WAKE_PREDICT_RESOLVER_TICK секунд, значит окно есть у каждого рынка всегда, а
+    величина его — максимум субсидии пула, b·ln2."""
     async with async_session_factory() as session:
         market = await session.scalar(
             select(PredictMarket).where(PredictMarket.id == market_id).with_for_update()
@@ -168,6 +176,12 @@ async def record_trade(
             raise ValueError(f"рынок {market_id} не найден")
         if market.status != "open":
             raise ValueError(f"рынок {market_id} не открыт (status={market.status})")
+        if market.resolve_at <= datetime.now(UTC):
+            raise ValueError(
+                f"дедлайн рынка {market_id} наступил "
+                f"({int(market.resolve_at.timestamp())}) — исход уже определён, "
+                "сделки не принимаются"
+            )
 
         amm = LMSRMarket(b=market.b, q_yes=market.q_yes, q_no=market.q_no)
         cost = amm.trade(outcome, shares)

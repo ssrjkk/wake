@@ -343,6 +343,24 @@ from the commit history rather than from a release.
   claim of an "optional KMS mode", which the removed file could not deliver.
 
 ### Fixed
+- Automatic resolution of price markets closed nothing. `resolve_due_markets()`
+  called its injected oracle as `price_fn(market_id, network, resolve_at)` while
+  `lighter_rest.get_price_at()` is `(market_id, when_s, network)` — so the string
+  `"mainnet"` arrived where a timestamp was expected, `int("mainnetmainnet…")`
+  raised `ValueError`, and the loop's own "no price, don't guess" branch swallowed
+  it as a warning per market. The headline claim «цены на Lighter резолвятся
+  автоматически» was false for every market, and the suite that looked like proof
+  of it passed because the test stubs took the same permuted arguments. The call
+  now matches the real signature, the stubs match it too, and
+  `test_real_oracle_closes_a_market` runs the cycle through the actual
+  `get_price_at` with only `urlopen` substituted — that seam is what had no cover.
+- Predict markets stayed tradeable after their deadline. `record_trade()` checked
+  only `status == "open"`, and the resolver closes a market up to
+  `WAKE_PREDICT_RESOLVER_TICK` after `resolve_at` — a window in which the outcome
+  of a price market is already fixed by the oracle and visible to anyone with a
+  chart. Buying the known answer cheaper than a dollar is paid for by the pool,
+  up to its `b·ln2` subsidy. The data layer now refuses a past-deadline market
+  for both kinds, price and event.
 - A zero-sized decision became a trade at the default size.
   `run_agent_step()` computed `decision.size_usd or (closing.size * price if
   closing else base_size_usd)`, so for `long`/`short` a `size_usd` of 0 — which

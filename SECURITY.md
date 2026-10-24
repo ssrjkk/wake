@@ -185,6 +185,14 @@ parameters — there is no string-built SQL in the backend. Sensitive actions ar
 written to the `audit_log` table in the same database, so they survive a
 container restart.
 
+Markets in the Predict module settle on the same layer as the money paths, not on
+the interface. `record_trade()` refuses a market whose `resolve_at` has passed:
+the outcome of a price market is already fixed by the oracle at that moment, so
+accepting trades until the resolver closes it means selling a known answer to the
+pool for less than a dollar. `resolve_market()` and `claim_winnings()` take row
+locks — the timer process and the curator's manual trigger can reach the same
+market in one tick, and two parallel claims by the same user must pay once.
+
 ### Transport, headers, rate limiting
 
 - CORS: explicit origins from `WAKE_CORS_ORIGINS`, no wildcards, credentials
@@ -445,6 +453,14 @@ PostgreSQL (и дописывает `asyncpg` к `postgresql://`, потому �
 `alembic check` в CI падает на расхождении. Весь SQL идёт через SQLAlchemy
 Core/ORM со связанными параметрами; строк SQL в бэкенде не собирают. Чувствительные
 действия пишутся в таблицу `audit_log` той же базы и переживают рестарт контейнера.
+
+Рынки Predict сходятся тем же слоем, что и денежные пути, а не интерфейсом.
+`record_trade()` отказывает рынку, у которого `resolve_at` уже прошёл: исход
+price-рынка в этот момент уже определён оракулом, и принимать сделки до того, как
+резолвер закроет рынок, значит продавать пулу заведомый ответ дешевле доллара.
+`resolve_market()` и `claim_winnings()` берут блокировки строк — процесс по
+таймеру и ручной триггер куратора могут сойтись к одному рынку в одном тике, а
+два параллельных клима одного пользователя должны заплатить один раз.
 
 ### Транспорт, заголовки, лимиты
 

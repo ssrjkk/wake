@@ -86,7 +86,7 @@ alembic check
 
 ## Tests
 
-**Backend** — one command, 516 tests, against a real PostgreSQL:
+**Backend** — one command, 519 tests, against a real PostgreSQL:
 
 ```bash
 cd backend
@@ -291,7 +291,7 @@ alembic check
 
 ## Тесты
 
-**Бэкенд** — одна команда, 516 тестов, против настоящего PostgreSQL:
+**Бэкенд** — одна команда, 519 тестов, против настоящего PostgreSQL:
 
 ```bash
 cd backend

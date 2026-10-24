@@ -170,6 +170,51 @@ class TestTrading(PredictCase):
         with self.assertRaises(ValueError):
             self.trade("user-carol", "m-price", "yes", 1)
 
+    def test_trading_after_the_deadline_is_refused(self):
+        """Между resolve_at и статусом "resolved" лежит как минимум тик резолвера:
+        рынок ещё открыт, а исход price-рынка уже определён ценой на дедлайн.
+        Купить его в этом окне — значит заплатить меньше доллара за доллар, и
+        платить будет пул (до своей субсидии b·ln2). Слой данных обязан отказать
+        сам, а не полагаться на то, что фронт спрятал кнопку."""
+        _run(
+            pdb.create_market(
+                "m-late",
+                "price",
+                "BTC выше 100k вчера?",
+                resolve_at=self.now - 60,
+                b=100,
+                lighter_market_id=0,
+                threshold=100_000,
+                comparator=">=",
+            )
+        )
+        with self.assertRaises(ValueError) as ctx:
+            _run(pdb.record_trade(str(uuid.uuid4()), "user-alice", "m-late", "yes", 10))
+        self.assertIn("дедлайн", str(ctx.exception))
+        market = _run(pdb.get_market("m-late"))
+        self.assertEqual((market["q_yes"], market["q_no"]), (0.0, 0.0), "пул не тронут")
+        self.assertEqual(_run(pdb.list_user_positions("user-alice")), [])
+
+    def test_event_market_closes_for_trading_at_its_deadline_too(self):
+        """У event-рынка исход ещё не вынесен, но правила те же: после дедлайна
+        информация продолжает приходить, и торговать после него — значит продавать
+        пулу более информированную сделку."""
+        _run(
+            pdb.create_market(
+                "m-late-event",
+                "event",
+                "Откроется ли мост?",
+                resolve_at=self.now - 1,
+                b=100,
+            )
+        )
+        with self.assertRaises(ValueError):
+            _run(
+                pdb.record_trade(
+                    str(uuid.uuid4()), "user-alice", "m-late-event", "yes", 5
+                )
+            )
+
     def test_unknown_market_is_rejected(self):
         with self.assertRaises(ValueError):
             self.trade("user-alice", "m-нет", "yes", 1)
