@@ -429,7 +429,7 @@ export default function Funding({ markets, setToast }: FundingProps) {
             <span style={{ color: "#fafafa" }}>Размер ног</span> — минимальные base-суммы и decimals берутся из /orderBooks, capital/2 на ногу, округление вниз.
           </p>
           <p style={{ margin: 0 }}>
-            <span style={{ color: "#fafafa" }}>Что это не даёт</span> ни гарантии, что ставка продержится час, ни защиты от деpeg спота. Funding меняется — данные обновляются раз в минуту.
+            <span style={{ color: "#fafafa" }}>Что это не даёт</span> ни гарантии, что ставка продержится час, ни защиты от depeg спота. Funding меняется — данные обновляются раз в минуту.
           </p>
         </div>
       </div>

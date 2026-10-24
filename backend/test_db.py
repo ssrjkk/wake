@@ -52,7 +52,7 @@ class TestFollowersAndLeaders(DbCase):
             _run(db.follower_by_l1("0xabc...1")),
             {"id": follower_id, "lighter_account_index": 101, "telegram_id": None},
         )
-        self.assertIsNone(_run(db.follower_by_l1("0xнет-такого")))
+        self.assertIsNone(_run(db.follower_by_l1("0xff-нет-такого")))
 
     def test_upsert_updates_handle_and_fee_but_keeps_created_at(self):
         created_before = next(

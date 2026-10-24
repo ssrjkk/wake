@@ -86,7 +86,7 @@ alembic check
 
 ## Tests
 
-**Backend** — one command, 420 tests, against a real PostgreSQL:
+**Backend** — one command, 448 tests, against a real PostgreSQL:
 
 ```bash
 cd backend
@@ -95,11 +95,12 @@ python -m pytest . -q
 
 That is exactly what CI runs. The suite is written as `unittest.TestCase` classes, so `python -m unittest discover` collects the same tests — `test_db.py`, `test_predict_db.py`, `test_predict_integration.py` and `test_audit_log.py` included.
 
-Three rules the suite enforces on itself, from `backend/testsupport.py`:
+Four rules the suite enforces on itself (the first three come from `backend/testsupport.py`, the fourth from `test_properties.py`):
 
 - Tests talk to a real database. `db.py`, `predict_db.py` and `audit_log.py` write PostgreSQL-specific SQL — `ON CONFLICT` against a target index, `FOR UPDATE`, `TIMESTAMPTZ`, `jsonb` — and on SQLite most of those statements never execute at all, so a stand-in would go green over a broken production query.
 - `WAKE_TEST_DATABASE_URL` is required and its database must end in `_test`, because tables are TRUNCATEd before each test. A stray pytest run must not be able to empty a working database.
 - `fakeredis` appears only where it is itself under test (`test_rate_limiter.py`).
+- Money math is checked by invariants over seeded random input, not by fixed examples. `test_properties.py` uses `random.Random(seed)` per check, so a failure replays with the same numbers, and it adds no hypothesis dependency to `requirements.txt` or the image. Change `quant.py`, `mirror_engine.py`, `funding_arb.py`, `predict_amm.py` or `portfolio_risk.py` and those inequalities must hold for every generated input, not only for the values a fixture happens to contain.
 
 **Frontend:**
 
@@ -290,7 +291,7 @@ alembic check
 
 ## Тесты
 
-**Бэкенд** — одна команда, 420 тестов, против настоящего PostgreSQL:
+**Бэкенд** — одна команда, 448 тестов, против настоящего PostgreSQL:
 
 ```bash
 cd backend
@@ -299,11 +300,12 @@ python -m pytest . -q
 
 Ровно это запускает CI. Suite написан классами `unittest.TestCase`, поэтому `python -m unittest discover` собирает те же тесты — включая `test_db.py`, `test_predict_db.py`, `test_predict_integration.py` и `test_audit_log.py`.
 
-Три правила, которые suite соблюдает к самому себе (см. `backend/testsupport.py`):
+Четыре правила, которые suite соблюдает к самому себе (первые три — из `backend/testsupport.py`, четвёртое — из `test_properties.py`):
 
 - Тесты идут в настоящую базу. `db.py`, `predict_db.py` и `audit_log.py` пишут PostgreSQL-специфичный SQL — `ON CONFLICT` с указанием индекса, `FOR UPDATE`, `TIMESTAMPTZ`, `jsonb`, — и на SQLite большая часть таких запросов просто не исполняется: подстава была бы зелёной над сломанным продакшн-запросом.
 - `WAKE_TEST_DATABASE_URL` обязателен, и база должна оканчиваться на `_test`: перед каждым тестом таблицы очищаются TRUNCATE, так что случайный запуск pytest не должен иметь возможности стереть рабочую базу.
 - `fakeredis` используется только там, где он сам и проверяется (`test_rate_limiter.py`).
+- Денежная математика проверяется инвариантами на псевдослучайном входе, а не зафиксированными примерами. В `test_properties.py` у каждой проверки своё `random.Random(seed)`, поэтому упавший тест воспроизводится с теми же числами, а hypothesis не попадает ни в `requirements.txt`, ни в образ. После правки в `quant.py`, `mirror_engine.py`, `funding_arb.py`, `predict_amm.py` или `portfolio_risk.py` эти неравенства должны держаться на любом сгенерированном входе, а не только на тех значениях, которые случайно попали в фикстуру.
 
 **Фронтенд:**
 

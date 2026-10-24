@@ -30,7 +30,7 @@ positive funding (лонги платят шортам) -> шорт перпа +
 
 from dataclasses import dataclass
 
-from quant import round_down
+from quant import is_finite, round_down
 
 HOURS_PER_YEAR = 24 * 365  # эпох funding в год у Lighter — 1-часовой эпох, не 8-часовой
 VENUES = ("lighter", "binance", "bybit", "hyperliquid")
@@ -257,7 +257,16 @@ def size_delta_neutral_position(
     покупку спота (та же номинальная стоимость, не тот же доллар капитала,
     иначе позиция не дельта-нейтральна). Округление ВНИЗ на обеих ногах —
     тот же принцип, что и everywhere в проекте: никогда не round up на
-    размере ордера."""
+    размере ордера.
+
+    Не конечный капитал или цена — это None, а не исключение. HTTP-граница тут
+    ни при (capital_usd и price уже `allow_inf_nan=False`): сравнение
+    `NaN <= 0` — False, поэтому битое значение проходило внутрь и попадало в
+    round_down, который на неконечном бросает ValueError. Позиция с размером NaN
+    наружу выглядела бы как «ноги посчитаны», а при исполнении стала бы
+    отказом биржи."""
+    if not (is_finite(capital_usd) and is_finite(price)):
+        return None
     if capital_usd <= 0 or price <= 0:
         return None
 

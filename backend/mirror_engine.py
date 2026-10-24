@@ -38,7 +38,7 @@ $50,000 на счету и подписчик с $200 аллокации НЕ д
 from dataclasses import dataclass, field
 from enum import Enum
 
-from quant import round_down
+from quant import is_finite, round_down
 
 
 class Side(Enum):
@@ -92,15 +92,34 @@ class MirrorOrder:
 @dataclass(frozen=True)
 class SkippedFollower:
     follower_id: str
-    reason: str  # "leader_equity_unavailable" | "price_unavailable" |
-    # "below_min_order_size" | "no_mirrored_position_to_reduce" |
-    # "leader_position_before_unavailable" | "reduce_amount_below_min"
+    reason: str  # "event_data_unavailable" | "leader_equity_unavailable" |
+    # "price_unavailable" | "follower_data_unavailable" | "below_min_order_size" |
+    # "mirror_size_uncomputable" | "no_mirrored_position_to_reduce" |
+    # "leader_position_before_unavailable" | "mirrored_size_unavailable" |
+    # "reduce_amount_below_min"
 
 
 @dataclass(frozen=True)
 class MirrorPlan:
     orders: list = field(default_factory=list)  # list[MirrorOrder]
     skipped: list = field(default_factory=list)  # list[SkippedFollower]
+
+
+def _size_on_grid(value: float, decimals: int) -> float | None:
+    """Размер ордера, приведённый к шагу рынка, или None.
+
+    None — это не «размер нулевой», а «этого размера не существует»: значение
+    неконечное (inf от переполнения произведения) либо конечное, но шире
+    точности Decimal (число из 29 разрядов при 28 в контексте). quant.round_down
+    на такое бросает ValueError, и если его не поймать здесь, исключение уйдёт
+    наружу из compute_mirror_plan — а её вызывает цикл вебсокета
+    (leader_listener.py), где один неподъёмный размер стоил бы зеркалирования
+    всем остальным подписчикам по этому событию. План обязан отвечать причиной на
+    каждого подписчика, а не исключением."""
+    try:
+        return round_down(value, decimals)
+    except ValueError:
+        return None
 
 
 def compute_mirror_plan(
@@ -111,6 +130,19 @@ def compute_mirror_plan(
     plan = MirrorPlan()
 
     if event.is_increase:
+        # Цена и доля риска приходят из вебсокета Lighter и из diff-а трекера,
+        # то есть из-за границы, где никто их не валидировал. Проверка одна и до
+        # ветвления: `NaN <= 0` — это False, и без неё NaN доходил до ордера.
+        if not all(
+            is_finite(v)
+            for v in (event.price, event.size_delta, event.leader_equity_usd)
+        ):
+            for f in followers:
+                plan.skipped.append(
+                    SkippedFollower(f.follower_id, "event_data_unavailable")
+                )
+            return plan
+
         if event.leader_equity_usd <= 0:
             for f in followers:
                 plan.skipped.append(
@@ -130,13 +162,35 @@ def compute_mirror_plan(
         leader_risk_fraction = leader_notional / event.leader_equity_usd
 
         for f in followers:
+            # Числа подписчика — из колонок Float той же строки follows, где
+            # спокойно живёт NaN. Оставлять такую строку на расчёт нельзя не
+            # потому, что NaN «заразит» размер (round_down ниже на нём
+            # споткнётся), а потому что min() с NaN возвращает НЕ NaN:
+            # min(desired, NaN) = desired, то есть подписчик с битой маржой
+            # получил бы ордер, рассчитанный так, будто потолка маржи нет. При
+            # этом исход решения не был бы виден в mirror_log.
+            if not all(
+                is_finite(v)
+                for v in (f.allocation_usd, f.available_margin_usd, f.max_leverage)
+            ):
+                plan.skipped.append(
+                    SkippedFollower(f.follower_id, "follower_data_unavailable")
+                )
+                continue
+
             desired_notional = leader_risk_fraction * f.allocation_usd
             max_notional_by_margin = f.available_margin_usd * f.max_leverage
             capped_notional = min(desired_notional, max_notional_by_margin)
 
-            base_amount = round_down(
+            base_amount = _size_on_grid(
                 capped_notional / event.price, constraints.size_decimals
             )
+
+            if base_amount is None:
+                plan.skipped.append(
+                    SkippedFollower(f.follower_id, "mirror_size_uncomputable")
+                )
+                continue
 
             if base_amount < constraints.min_base_amount:
                 plan.skipped.append(
@@ -156,7 +210,22 @@ def compute_mirror_plan(
         return plan
 
     # --- уменьшение / закрытие лидером ---
+    if not all(is_finite(v) for v in (event.size_delta, event.leader_position_before)):
+        for f in followers:
+            plan.skipped.append(
+                SkippedFollower(f.follower_id, "event_data_unavailable")
+            )
+        return plan
+
     for f in followers:
+        if not is_finite(f.current_mirrored_size):
+            # Свой же NaN: строка подписчика пришла из базы, а база умеет хранить
+            # Float('nan'), и проверка ниже (`<= 0`) его не замечает.
+            plan.skipped.append(
+                SkippedFollower(f.follower_id, "mirrored_size_unavailable")
+            )
+            continue
+
         if f.current_mirrored_size <= 0:
             plan.skipped.append(
                 SkippedFollower(f.follower_id, "no_mirrored_position_to_reduce")
@@ -170,9 +239,15 @@ def compute_mirror_plan(
             continue
 
         close_fraction = min(1.0, event.size_delta / event.leader_position_before)
-        reduce_amount = round_down(
+        reduce_amount = _size_on_grid(
             f.current_mirrored_size * close_fraction, constraints.size_decimals
         )
+
+        if reduce_amount is None:
+            plan.skipped.append(
+                SkippedFollower(f.follower_id, "mirror_size_uncomputable")
+            )
+            continue
 
         if reduce_amount < constraints.min_base_amount:
             plan.skipped.append(

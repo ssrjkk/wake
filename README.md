@@ -218,7 +218,7 @@ Price markets close themselves at the deadline only while this process runs; oth
 # backend — run from backend/; needs a scratch PostgreSQL database
 createdb wake_test
 export WAKE_TEST_DATABASE_URL=postgresql+asyncpg://wake:wake@localhost:5432/wake_test
-python -m unittest discover        # 420 tests, all through discovery
+python -m unittest discover        # 448 tests, all through discovery
 python -m pytest -q                # the same set under pytest (+ Allure in CI)
 
 # frontend

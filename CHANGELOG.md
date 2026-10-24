@@ -10,6 +10,22 @@ from the commit history rather than from a release.
 ## [Unreleased]
 
 ### Added
+- `backend/test_properties.py`: 27 seeded property checks over the money math,
+  complementing the example-based suites rather than repeating them — they test
+  the inequalities a single case cannot. `round_down` never grows a magnitude and
+  always lands on the market grid; `scale_to_int` is within half a tick, measured
+  in `Decimal` so float noise cannot hide a miss; every `compute_mirror_plan`
+  answer accounts for each follower exactly once and any order it emits is
+  finite, on the grid, not below `min_base_amount`, inside both the allocation
+  share and the margin ceiling, and a mirrored close is never larger than the
+  follower's own position; the LMSR market's liability `q·p − C(q)` never exceeds
+  the declared `b·ln2` reserve and prices sum to exactly 1.0; portfolio variance
+  obeys the triangle inequality, `diversification_score` stays in `[0, 1]`, and
+  the *sign* of a negative correlation is pinned (opposite series must cancel the
+  exposure, and an anticorrelated hedge must be opened in the same direction as
+  the position); both cash-and-carry legs stay inside the capital. Randomised
+  with `random.Random(seed)` per check, not hypothesis: a failure reproduces with
+  the same numbers, and no new dependency enters the image.
 - `src/lib/net.ts`: every external request now carries a timeout — 10 s for the
   public REST (Lighter, Arcus), 15 s for the Wake backend, and a `TimeoutError`
   is turned into "нет ответа за 10 с" instead of a DOMException in a toast.
@@ -305,6 +321,32 @@ from the commit history rather than from a release.
   claim of an "optional KMS mode", which the removed file could not deliver.
 
 ### Fixed
+- `round_down()` returned NaN when it was given NaN. Every comparison against
+  NaN is False, so `NaN <= 0` and `NaN < min_base_amount` both let the value
+  through, and the order died one step later in `scale_to_int()` at execution —
+  where it looks like a Lighter failure rather than junk on the way in. `quant.py`
+  is now total over its declared domain in the other direction too: non-finite or
+  non-numeric input raises `ValueError`, a number too wide for Decimal's 28-digit
+  context raises `ValueError` instead of leaking `InvalidOperation`, and
+  `is_finite()` is exported so callers guard once instead of writing `<= 0`
+  seven different ways.
+- `compute_mirror_plan()` could raise instead of answering with a plan. It
+  checked the event fields for finiteness but sent the follower fields straight
+  into arithmetic — and `Float` columns in PostgreSQL do store NaN. With the
+  `round_down()` fix above, a follower row with `allocation_usd = NaN` turned a
+  normal market event into `ValueError` inside `handle_leader_event()`, where the
+  WebSocket loop reads an exception as a dropped connection: one broken row cost
+  every follower of that leader their mirror. Broken follower numbers are now
+  skipped as `follower_data_unavailable` — `min(desired_notional, NaN)` returns
+  `desired_notional`, so previously a corrupt margin ceiling silently produced an
+  order computed as if no ceiling existed — and a size that cannot exist at this
+  market's step is skipped as `mirror_size_uncomputable`.
+- `size_delta_neutral_position()` promised `None` on unusable input and raised
+  `ValueError` instead for a non-finite capital or price (`capital_usd <= 0` does
+  not catch NaN). The HTTP route cannot feed it such values — `FundingSizeRequest`
+  has `allow_inf_nan=False` — but the function is the module's public contract,
+  and the caller that violates it is the next one who writes `funding_arb`
+  straight against a live payload.
 - The Arcus table on Overview marked every market as not active. It compared
   `status` with `"ACTIVE"` — a value from older documentation — while the live
   `/v1/markets` returns `ONLINE` for 64 rows and `OFFLINE` for 6 (measured on

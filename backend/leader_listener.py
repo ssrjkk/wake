@@ -15,7 +15,9 @@ apidocs.lighter.xyz/docs/websocket-reference — включая разворот
     официальными доками; хост берётся из WAKE_LIGHTER_NETWORK, а не из локального
     дефолта, чтобы данные и ордера относились к одной сети
   - db.active_follows_for_leader() — протестировано в test_db.py
-  - compute_mirror_plan() — 10/10 тестов зелёные
+  - compute_mirror_plan() — примеры в test_mirror_engine.py, инварианты на
+    случайном входе в test_properties.py (план обязан отвечать причиной, а не
+    исключением: исключение здесь = обрыв стрима для всех подписчиков лидера)
   - LeaderPositionTracker — 9/9 тестов зелёные, реальная схема сообщений
   - DRY_RUN=True по умолчанию: ордера не уходят, пока это явно не выключено
 
@@ -430,7 +432,7 @@ async def run_forever(
             delay = retry_delay  # стрим жил нормально — сбрасываем паузу
         except Exception as e:
             logger.warning(
-                "стрим оборвался (%s) — переподключение через %.0fс", e, delay
+                "стрим оборвался (%s) — переподключение через %.0f с", e, delay
             )
         await asyncio.sleep(delay)
         delay = min(delay * 2, 60.0)
