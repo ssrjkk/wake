@@ -21,10 +21,17 @@ from the commit history rather than from a release.
   with the engine.
 - `probeSigner()` in the Terminal: the order path signs in a local
   `signing_service.py`, and the button used to be enabled regardless of whether
-  that process is reachable from this origin. A chip now says
-  "подписание: отвечает / недоступно / проверяю", is re-checked before each
-  confirmation, and the failure toast no longer prints a bare `localhost:8787`
-  at a production user.
+  that process is reachable from this origin. A chip now reads
+  "подписание: не проверялось / проверяю… / отвечает / недоступно", is asked on
+  click and again before each confirmation — not on mount, because a public page
+  probing localhost is both a red console error the user never asked for and a
+  request Chrome's Private Network Access cuts short anyway — and the failure
+  toast no longer prints a bare `localhost:8787` at a production user.
+- `MARKETS_TABS` in `App.tsx`: the Lighter book was refetched every 15 s for the
+  whole life of the page, including on Overview/Discover/Earn/Predict where no
+  component reads it and including while the window was hidden. It now polls only
+  for the five tabs that consume it and only while the document is visible, and
+  the backend probe exists in one function instead of two copies.
 - `openInterestUsd()` in `src/lib/lighter.ts` and `unhedged_vol_usd` in the
   `HedgeSuggestion` type: the backend has been sending the unhedged baseline all
   along, and without it "resulting volatility $800" reads as nothing.

@@ -59,11 +59,11 @@ async function getTicker(marketId: number): Promise<Ticker | null> {
   }
 }
 
-// Ответ GET /health сервиса подписи. Нужен не для красоты: ордер из браузера
-// подписывает НЕ сайт, а локальный signing_service.py, и если он не запущен
-// (или его CORS-политика не знает этот источник), кнопка «Открыть long» была
-// обречена, а человек узнавал об этом только после клика и «Failed to fetch».
-// Проверка живёт здесь, а не в App: это свойство именно пути исполнения ордера.
+// Ответ GET /health сервиса подписи. Спрашиваем его ТОЛЬКО по действию
+// пользователя: сервис живёт на машине самого человека, и запрос к нему при
+// каждой загрузке вкладки даёт красную строку в консоли там, где человек ничего
+// не просил, а из публичного источника такой запрос к localhost дополнительно
+// режет ещё и браузер (Private Network Access).
 async function probeSigner(): Promise<boolean> {
   try {
     const res = await fetch(`${SIGNING_SERVICE_URL}/health`, { signal: AbortSignal.timeout(2000) });
@@ -98,8 +98,9 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
      страницы, а не на смене числа. */
   const [tick, setTick] = useState<{ dir: "up" | "down" | null; serial: number }>({ dir: null, serial: 0 });
   const lastTick = useRef<{ id: number; price: number } | null>(null);
-  // null — «ещё не проверяли», чтобы чип не врал «недоступно» до первого ответа.
+  // null — «ещё не проверяли»: чип не врет «недоступно» до первого вопроса.
   const [signerUp, setSignerUp] = useState<boolean | null>(null);
+  const [signerBusy, setSignerBusy] = useState(false);
 
   const currentMarket = markets.find((m) => m.symbol === asset);
   const marketId = currentMarket?.market_id;
@@ -194,18 +195,17 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
     return () => { live = false; };
   }, [visibleIds, nonce]);
 
-  // Сервис подписи спрашиваем при входе на вкладку и при смене сети; перед
-  // подтверждением ордера — ещё раз, потому что локальный процесс могут поднять
-  // через минуту после того, как страница уже всё показала.
-  useEffect(() => {
-    let live = true;
-    void probeSigner().then((up) => {
-      if (live) setSignerUp(up);
-    });
-    return () => {
-      live = false;
-    };
-  }, [network]);
+  // Сервис подписи спрашивает человек (кнопка-чип) или путь ордера при
+  // подтверждении: локальный процесс могут поднять через минуту после того, как
+  // страница всё показала, и к этому моменту ответ должен быть свежим.
+  async function checkSigner() {
+    setSignerBusy(true);
+    try {
+      setSignerUp(await probeSigner());
+    } finally {
+      setSignerBusy(false);
+    }
+  }
 
   useEffect(() => {
     const id = setInterval(() => setNonce((n) => n + 1), TICKER_TTL_MS);
@@ -341,7 +341,7 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
     // его уже после загрузки страницы, прошлый «недоступно» не должен его
     // блокировать, а «доступно» прошлой проверки не гарантирует, что процесс не
     // умер минуту назад.
-    void probeSigner().then(setSignerUp);
+    void checkSigner();
     setShowOrderConfirm(true);
   }
 
@@ -623,16 +623,27 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
           </p>
 
           <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
-            <span
-              className={signerUp === null ? "chip chip-info" : signerUp ? "chip chip-up" : "chip chip-warn"}
+            <button
+              type="button"
+              onClick={() => void checkSigner()}
+              disabled={signerBusy}
+              className={`chip ${signerBusy ? "chip-info" : signerUp === null ? "chip-info" : signerUp ? "chip-up" : "chip-warn"}`}
+              style={{ cursor: signerBusy ? "default" : "pointer" }}
               title={
                 `Сервис подписи: ${SIGNING_SERVICE_URL}. Он не опубликован вместе с сайтом — это локальный процесс, ` +
-                "который держит твой API-ключ Lighter и спрашивает WAKE_DRY_RUN. Красный чип означает, что запрос из " +
-                "этого источника не дошёл: сервис не запущен или адрес сайта не добавлен в его WAKE_CORS_ORIGINS."
+                "который держит твой API-ключ Lighter и спрашивает WAKE_DRY_RUN. Спрашиваем его по клику, а не при " +
+                "загрузке страницы: запрос с публичного адреса на localhost браузеры дополнительно режут. " +
+                "Красный чип — сервис не запущен, или этот источник не добавлен в его WAKE_CORS_ORIGINS."
               }
             >
-              {signerUp === null ? "подписание: проверяю…" : signerUp ? "подписание: отвечает" : "подписание: недоступно"}
-            </span>
+              {signerBusy
+                ? "подписание: проверяю…"
+                : signerUp === null
+                ? "подписание: не проверялось"
+                : signerUp
+                ? "подписание: отвечает"
+                : "подписание: недоступно"}
+            </button>
           </div>
 
           {/* Копи-режим — не украшение тикета, а запись в базе: publish — это

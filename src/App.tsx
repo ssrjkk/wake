@@ -40,6 +40,11 @@ const Agent = lazy(() => import("./components/Agent"));
 const Risk = lazy(() => import("./components/Risk"));
 const Funding = lazy(() => import("./components/Funding"));
 
+// Вкладки, которым нужна книга Lighter: Терминал и Портфель (символы и decimals
+// строк), Risk и Funding (отбор кандидатов и спот-ноги), Агент (currentMarket).
+// Обзор, Discover, Earn и Predict её не читают — там свои источники.
+const MARKETS_TABS: readonly Tab[] = ["terminal", "portfolio", "risk", "funding", "agent"];
+
 export default function App() {
   const { address, isConnected } = useAccount();
   const { data: ensName } = useEnsName({ address, chainId: 1 });
@@ -94,16 +99,23 @@ export default function App() {
   const signedIn = session !== null;
   const backendUp = backend !== null;
 
-  function checkBackend() {
-    setBackendChecked(false);
+  // Один вариант ответа «бэкенда нет» на весь файл: состояние выставляет только
+  // этот путь, и кнопка «Проверить», и загрузка страницы не могут разойтись в
+  // том, что значит «не отвечает».
+  function probeBackendState() {
     probeBackend()
       .then(setBackend)
       .catch(() => setBackend(null))
       .finally(() => setBackendChecked(true));
   }
 
+  function checkBackend() {
+    setBackendChecked(false);
+    probeBackendState();
+  }
+
   useEffect(() => {
-    probeBackend().then(setBackend).catch(() => setBackend(null)).finally(() => setBackendChecked(true));
+    probeBackendState();
   }, []);
 
   useEffect(() => {
@@ -183,6 +195,11 @@ export default function App() {
     return () => { live = false; };
   }, [address, accountKey]);
 
+  // needsMarkets, а не tab: эффект перезапускается только когда в книге
+  // появляется нужда, а не на каждом переключении между вкладками, где её не
+  // смотрят. Скрытое окно — тоже не зритель: 4 запроса в минуту на всю жизнь
+  // страницы уходили в то число, которое никто не читает.
+  const needsMarkets = MARKETS_TABS.includes(tab);
   useEffect(() => {
     let live = true;
     function load() {
@@ -191,9 +208,12 @@ export default function App() {
         .catch((e) => { if (live) setDataError(errorText(e)); });
     }
     load();
-    const id = setInterval(load, 15000);
+    const id = setInterval(() => {
+      if (document.hidden || !needsMarkets) return;
+      load();
+    }, 15000);
     return () => { live = false; clearInterval(id); };
-  }, [network]);
+  }, [network, needsMarkets]);
 
   useEffect(() => {
     function handleKey(e: KeyboardEvent) {

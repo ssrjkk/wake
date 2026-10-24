@@ -185,9 +185,11 @@ test.describe("Оболочка приложения", () => {
     ]);
   });
 
-  test("чип подписания показывает состояние локального signing service", async ({ page }) => {
-    // Ордер из браузера подписывает не сайт, а локальный процесс, и без этой
-    // строки человек тыкал бы «Открыть long» вслепую, получая «Failed to fetch».
+  test("чип подписания проверяется по клику, а не при загрузке вкладки", async ({ page }) => {
+    // Ордер из браузера подписывает не сайт, а локальный процесс. Спрашивать его
+    // при каждом монтировании нельзя: запрос с публичного адреса на localhost
+    // режет ещё и браузер, а в консоли остаётся красный ERR_CONNECTION_REFUSED
+    // там, где человек ничего не делал.
     await page.route("**/api/v1/orderBooks?*", (route) => route.fulfill({ json: { order_books: [{
       symbol: "BTC", market_id: 0, market_type: "perp", status: "active", taker_fee: "0", maker_fee: "0",
       min_base_amount: "0.00001", min_quote_amount: "10", supported_price_decimals: 1,
@@ -195,10 +197,21 @@ test.describe("Оболочка приложения", () => {
     }] } }));
     await page.route("**/api/v1/candles?*", (route) => route.fulfill({ json: { c: [] } }));
     await page.route("**/api/v1/funding-rates", (route) => route.fulfill({ json: { funding_rates: [] } }));
-    await page.route("http://localhost:8787/health", (route) => route.fulfill({ status: 200, json: { status: "ok" } }));
+    let healthChecks = 0;
+    await page.route("http://localhost:8787/health", (route) => {
+      healthChecks++;
+      return route.fulfill({ status: 200, json: { status: "ok" } });
+    });
     await page.goto("/");
     await nav(page).getByRole("button", { name: "Терминал" }).click();
-    await expect(page.getByText("подписание: отвечает")).toBeVisible();
+
+    const chip = page.getByRole("button", { name: /подписание:/ });
+    await expect(chip).toHaveText("подписание: не проверялось");
+    expect(healthChecks).toBe(0);
+
+    await chip.click();
+    await expect(chip).toHaveText("подписание: отвечает");
+    expect(healthChecks).toBe(1);
   });
 
   test("без ответа Lighter в Терминале — сообщение об отсутствии данных, а не пустые цифры", async ({ page }) => {
