@@ -107,7 +107,7 @@ Three rules the suite enforces on itself, from `backend/testsupport.py`:
 npm ci
 npm run lint                      # ESLint over src/, e2e/ and the config files
 npx tsc --noEmit
-npm run test:run                  # vitest: 122 tests in 12 files
+npm run test:run                  # vitest: 138 tests in 14 files
 npm run build
 PW_PORT=5178 npx playwright test  # first run needs `npx playwright install chromium`
 ```
@@ -311,7 +311,7 @@ python -m pytest . -q
 npm ci
 npm run lint                      # ESLint по src/, e2e/ и конфигам
 npx tsc --noEmit
-npm run test:run                  # vitest: 122 теста в 12 файлах
+npm run test:run                  # vitest: 138 тестов в 14 файлах
 npm run build
 PW_PORT=5178 npx playwright test  # первый прогон требует `npx playwright install chromium`
 ```

@@ -27,6 +27,17 @@ describe('открытый интерес в долларах', () => {
   })
 })
 
+/**
+ * Каждый внешний запрос обязан уходить с таймаутом: висящее без ответа соединение
+ * — это «загружаю…» до конца открытия вкладки. Проверка сразу и адреса, и сигнала,
+ * чтобы ни один из шести GET не остался без него.
+ */
+function calledUrlWithTimeout(fetchMock: ReturnType<typeof vi.fn>, call = 0): string {
+  const [url, init] = fetchMock.mock.calls[call] as [string, RequestInit]
+  expect(init?.signal).toBeInstanceOf(AbortSignal)
+  return url
+}
+
 describe('масштабирование ордера под рынок', () => {
   it('не теряет шаг цены на float-шуме', () => {
     // Math.floor(0.29 * 100) = 28: 0.29*100 в float64 это 28.999999999999996.
@@ -105,7 +116,7 @@ describe('lighter', () => {
 
       const result = await getOrderBooks()
       expect(result).toEqual(mockData.order_books)
-      expect(fetch).toHaveBeenCalledWith(expect.stringContaining('/orderBooks'))
+      expect(calledUrlWithTimeout(global.fetch as ReturnType<typeof vi.fn>)).toContain('/orderBooks')
     })
 
     it('throws on API error', async () => {
@@ -128,9 +139,10 @@ describe('lighter', () => {
 
       const result = await getCandles(1, '1h', 50)
       expect(result).toEqual(mockData.c)
-      expect(fetch).toHaveBeenCalledWith(expect.stringContaining('market_id=1'))
-      expect(fetch).toHaveBeenCalledWith(expect.stringContaining('resolution=1h'))
-      expect(fetch).toHaveBeenCalledWith(expect.stringContaining('count_back=50'))
+      const url = calledUrlWithTimeout(global.fetch as ReturnType<typeof vi.fn>)
+      expect(url).toContain('market_id=1')
+      expect(url).toContain('resolution=1h')
+      expect(url).toContain('count_back=50')
     })
 
     it('trims the window Lighter actually returned down to the requested count', async () => {
@@ -192,8 +204,9 @@ describe('lighter', () => {
 
       const result = await getRecentTrades(1, 10)
       expect(result).toBeDefined()
-      expect(fetch).toHaveBeenCalledWith(expect.stringContaining('market_id=1'))
-      expect(fetch).toHaveBeenCalledWith(expect.stringContaining('limit=10'))
+      const url = calledUrlWithTimeout(global.fetch as ReturnType<typeof vi.fn>)
+      expect(url).toContain('market_id=1')
+      expect(url).toContain('limit=10')
     })
   })
 
@@ -242,7 +255,7 @@ describe('lighter', () => {
         realizedPnl: -2,
         liquidationPrice: 45000.5,
       })
-      expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining('value=0xabc'))
+      expect(calledUrlWithTimeout(fetchMock)).toContain('value=0xabc')
     })
 
     it('throws when Lighter answers without accounts', async () => {

@@ -16,6 +16,7 @@
 // mainnet.zklighter.elliot.ai и testnet.zklighter.elliot.ai — оба подтверждены официальными
 // источниками Lighter (apidocs.lighter.xyz, GitHub elliottech/lighter-agent-kit).
 import { backendJson } from "./backend";
+import { timedFetch } from "./net";
 import { LIGHTER_NETWORK, SIGNING_SERVICE_URL } from "./config";
 
 const NETWORKS = {
@@ -82,7 +83,7 @@ export function openInterestUsd(m: OrderBook): number {
 }
 
 export async function getOrderBooks(filter: "all" | "spot" | "perp" = "perp"): Promise<OrderBook[]> {
-  const res = await fetch(`${BASE_URL()}/orderBooks?filter=${filter}`);
+  const res = await timedFetch(`${BASE_URL()}/orderBooks?filter=${filter}`);
   if (!res.ok) throw new Error(`Lighter API ${res.status}`);
   const data = await json<{ order_books: OrderBook[] }>(res);
   return data.order_books;
@@ -130,7 +131,7 @@ export async function getCandles(marketId: number, resolution: Resolution, count
     count_back: String(count),
     set_timestamp_to_end: "true",
   });
-  const res = await fetch(`${BASE_URL()}/candles?${params}`);
+  const res = await timedFetch(`${BASE_URL()}/candles?${params}`);
   if (!res.ok) throw new Error(`Lighter API ${res.status}`);
   const data = await json<{ c?: Candle[] }>(res);
   return (data.c ?? []).slice(-count);
@@ -159,7 +160,7 @@ type RawTrade = {
 
 export async function getRecentTrades(marketId: number, limit = 20): Promise<Trade[]> {
   const params = new URLSearchParams({ market_id: String(marketId), limit: String(Math.min(limit, 100)) });
-  const res = await fetch(`${BASE_URL()}/recentTrades?${params}`);
+  const res = await timedFetch(`${BASE_URL()}/recentTrades?${params}`);
   if (!res.ok) throw new Error(`Lighter API ${res.status}`);
   const data = await json<{ trades?: RawTrade[] }>(res);
   return (data.trades ?? []).map((t, i) => ({
@@ -185,7 +186,7 @@ export type FundingRateRow = {
 };
 
 export async function getFundingRates(): Promise<FundingRateRow[]> {
-  const res = await fetch(`${BASE_URL()}/funding-rates`);
+  const res = await timedFetch(`${BASE_URL()}/funding-rates`);
   if (!res.ok) throw new Error(`Lighter API ${res.status}`);
   const data = await json<{ funding_rates: FundingRateRow[] }>(res);
   return data.funding_rates;
@@ -232,7 +233,7 @@ type RawAccount = {
 };
 
 export async function getAccountByL1Address(address: string): Promise<LighterAccount> {
-  const res = await fetch(`${BASE_URL()}/account?by=l1_address&value=${address}`);
+  const res = await timedFetch(`${BASE_URL()}/account?by=l1_address&value=${address}`);
   if (!res.ok) throw new Error(`Lighter API ${res.status}`);
   const data = await json<{ accounts?: RawAccount[] }>(res);
   return mapAccount(data.accounts ?? []);
@@ -241,7 +242,7 @@ export async function getAccountByL1Address(address: string): Promise<LighterAcc
 // by=index is public on the same /account endpoint; the bulk /accounts route is not
 // (it answers 403 without an API key), so one request per account is the only option.
 export async function getAccountByIndex(index: number): Promise<LighterAccount> {
-  const res = await fetch(`${BASE_URL()}/account?by=index&value=${index}`);
+  const res = await timedFetch(`${BASE_URL()}/account?by=index&value=${index}`);
   if (!res.ok) throw new Error(`Lighter API ${res.status}`);
   const data = await json<{ accounts?: RawAccount[] }>(res);
   return mapAccount(data.accounts ?? []);
@@ -524,6 +525,11 @@ export async function placeOrderViaSigningService(
     );
   }
 
+  // Таймаута здесь намеренно нет. GET можно оборвать без последствий, а POST,
+  // который уже ушёл в Lighter, оборванный по таймеру оставляет состояние
+  // «неизвестно»: клиент решит, что не вышло, повторит с новым client_order_index
+  // и получит второй ордер. Пока запрос в полёте, кнопка заблокирована и
+  // повторить его нельзя — это и есть защита от дубля.
   const res = await fetch(`${SIGNING_SERVICE_URL}/place-order`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },

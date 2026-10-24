@@ -1,4 +1,5 @@
 import { LIGHTER_NETWORK } from "./config";
+import { timedFetch } from "./net";
 
 // Thin client for Arcus's public REST API.
 // Docs: https://docs.arcus.xyz, https://arcus-11aecf6e.mintlify.app
@@ -55,8 +56,16 @@ export function isArcusPerp(m: ArcusMarket): boolean {
   return m.type === "PERPETUAL" || m.marketDisplayName.includes("-PERP");
 }
 
+/** Рынок торгуется. Живой /v1/markets (mainnet, 2026-10-24: 70 рынков) знает
+ *  только "ONLINE" и "OFFLINE"; "ACTIVE" — форма из более ранней документации.
+ *  Сравнение с "ACTIVE" на живом ответе делало неактивным каждый рынок: строка
+ *  была серой и подписывалась сырым "online". */
+export function isArcusOnline(m: ArcusMarket): boolean {
+  return m.status === "ONLINE";
+}
+
 export async function getMarkets(): Promise<ArcusMarket[]> {
-  const res = await fetch(`${BASE_URL()}/markets`);
+  const res = await timedFetch(`${BASE_URL()}/markets`);
   if (!res.ok) throw new Error(`Arcus API ${res.status}`);
   const data = await json<{ markets?: ArcusMarket[] }>(res);
   return data.markets ?? [];
@@ -68,7 +77,7 @@ export type MidPrices = { mids: Record<string, string>; globalSequenceId: number
 
 export async function getMidPrices(market?: string): Promise<MidPrices> {
   const params = market ? `?market=${encodeURIComponent(market)}` : "";
-  const res = await fetch(`${BASE_URL()}/mids${params}`);
+  const res = await timedFetch(`${BASE_URL()}/mids${params}`);
   if (!res.ok) throw new Error(`Arcus API ${res.status}`);
   return json<MidPrices>(res);
 }
@@ -90,7 +99,7 @@ export async function getRecentTrades(market: string, limit = 100): Promise<Arcu
     market,
     limit: String(Math.min(limit, 1000)),
   });
-  const res = await fetch(`${BASE_URL()}/trades?${params}`);
+  const res = await timedFetch(`${BASE_URL()}/trades?${params}`);
   if (!res.ok) throw new Error(`Arcus API ${res.status}`);
   const data = await json<{ trades?: ArcusTrade[] }>(res);
   return data.trades ?? [];

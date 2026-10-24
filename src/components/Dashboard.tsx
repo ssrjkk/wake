@@ -1,7 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ArrowRight, BarChart3, Percent, RefreshCw, ShieldAlert, TriangleAlert, Users } from "lucide-react";
 import { getMarketOverview, type MarketOverview, type MarketOverviewRow } from "../lib/lighter";
-import { getMarkets as getArcusMarkets, getMidPrices, isArcusPerp, type ArcusMarket } from "../lib/arcus";
+import { getMarkets as getArcusMarkets, getMidPrices, isArcusOnline, isArcusPerp, type ArcusMarket } from "../lib/arcus";
 import { errorText } from "../lib/backend";
 import { getPredictMarkets, predictTimeLeft, type PredictMarket } from "../lib/predict";
 import { fmtPrice, fmtPct, fmtUsdCompact } from "./utils";
@@ -114,6 +114,14 @@ export default function Dashboard({ setTab, setAsset }: DashboardProps) {
     setAsset(row.symbol);
     setTab("terminal");
   }
+
+  // Торгующиеся рынки впереди: 6 строк из 70 в живом /v1/markets — OFFLINE, и в
+  // простом срезе «первые 15» они вытесняют те, по которым что-то видно.
+  // Порядок внутри группы сохраняется (sort стабилен).
+  const arcusRows = useMemo(
+    () => [...arcusMarkets].sort((a, b) => Number(isArcusOnline(b)) - Number(isArcusOnline(a))),
+    [arcusMarkets]
+  );
 
   const rows = overview?.rows ?? [];
   const visible = showAll ? rows : rows.slice(0, SHOWN_BY_DEFAULT);
@@ -323,7 +331,7 @@ export default function Dashboard({ setTab, setAsset }: DashboardProps) {
               </tr>
             </thead>
             <tbody>
-              {arcusMarkets.slice(0, 15).map((m, i) => {
+              {arcusRows.slice(0, 15).map((m, i) => {
                 const price = arcusPrices[m.marketDisplayName];
                 return (
                   <tr
@@ -358,8 +366,8 @@ export default function Dashboard({ setTab, setAsset }: DashboardProps) {
                     <td style={{ padding: "10px 8px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: "#888", fontSize: "11px" }}>{m.tickSize}</td>
                     <td style={{ padding: "10px 8px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: "#888", fontSize: "11px" }}>{m.stepSize}</td>
                     <td style={{ padding: "10px 8px", fontSize: "11px" }}>
-                      <span style={{ color: m.status === "ACTIVE" ? "#10b981" : "#666", fontWeight: m.status === "ACTIVE" ? 500 : 400 }}>
-                        {m.status === "ACTIVE" ? "активен" : m.status.toLowerCase()}
+                      <span style={{ color: isArcusOnline(m) ? "#10b981" : "#666", fontWeight: isArcusOnline(m) ? 500 : 400 }}>
+                        {isArcusOnline(m) ? "торгуется" : "выключен"}
                       </span>
                     </td>
                   </tr>
@@ -368,9 +376,9 @@ export default function Dashboard({ setTab, setAsset }: DashboardProps) {
             </tbody>
           </table>
           </div>
-          {arcusMarkets.length > 15 && (
+          {arcusRows.length > 15 && (
             <div style={{ padding: "8px 16px", borderTop: "1px solid #1e1e1e", fontSize: "11px", color: "var(--text-muted)" }}>
-              показано 15 из {arcusMarkets.length} рынков
+              показано 15 из {arcusRows.length} рынков
             </div>
           )}
         </div>

@@ -7,6 +7,7 @@
 // сообщение юзер видит в панели вместо внятной причины.
 import { BACKEND_URL } from "./config";
 import { authHeader, clearSession } from "./session";
+import { BACKEND_TIMEOUT_MS, isTimeoutError, timeoutText } from "./net";
 
 // Событие уходит, когда бэкенд отверг токен: приложение чистит состояние входа,
 // а не ждёт, пока пользователь сам сообразит, почему панели пустые.
@@ -33,15 +34,27 @@ function backendMessage(body: string, status: number): string {
 
 export async function backendJson<T>(path: string, init?: RequestInit): Promise<T> {
   let res: Response;
+  // Не показываем localhost URL пользователю — это выглядит непрофессионально на продакшене
+  const isLocalhost = BACKEND_URL.includes("localhost") || BACKEND_URL.includes("127.0.0.1");
   try {
     // Токен подмешивается сюда, а не в каждый вызов: иначе из десяти мест один
     // обязательно забыл бы заголовок, и ошибка выглядела бы как «нет данных».
     const headers = new Headers(init?.headers);
     for (const [key, value] of Object.entries(authHeader())) headers.set(key, value);
-    res = await fetch(`${BACKEND_URL}${path}`, { ...init, headers });
+    // Свой сигнал у вызывающего есть не всегда, а висящее соединение без ответа
+    // — это «загружаю…» до конца открытия вкладки. probeBackend передаёт свой,
+    // более короткий: он опрашивает сервис, который может быть не поднят.
+    res = await fetch(`${BACKEND_URL}${path}`, { ...init, headers, signal: init?.signal ?? AbortSignal.timeout(BACKEND_TIMEOUT_MS) });
   } catch (e) {
-    // Не показываем localhost URL пользователю — это выглядит непрофессионально на продакшене
-    const isLocalhost = BACKEND_URL.includes("localhost") || BACKEND_URL.includes("127.0.0.1");
+    if (isTimeoutError(e)) {
+      // DOMException с "signal timed out" в тосте не читается как объяснение.
+      throw new Error(
+        isLocalhost
+          ? `Бэкенд Wake ${timeoutText(BACKEND_TIMEOUT_MS)}. Функция требует подключённый сервер.`
+          : `Бэкенд Wake ${timeoutText(BACKEND_TIMEOUT_MS)}: ${BACKEND_URL}`,
+        { cause: e }
+      );
+    }
     const message = isLocalhost
       ? "Сервер недоступен. Функция требует подключённый бэкенд Wake."
       : `${BACKEND_URL} не отвечает (${e instanceof Error ? e.message : String(e)}). Wake — отдельный сервис, в сборку сайта он не входит.`;

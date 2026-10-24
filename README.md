@@ -259,6 +259,8 @@ PW_PORT=5178 npx playwright test
 - `src/lib/session.ts` — the session token from a sign-in, kept in `localStorage` under `wake.session.v1`; `backend.ts` reads it to set `Authorization`, and a 401 clears it and announces the sign-out
 - `src/lib/wallet.ts` — wallet sign-in: ask the backend for a challenge, sign it with `personal_sign`, send the signature back; the address is recovered server-side, so the client never claims an identity
 - `src/lib/lighter.ts` — Lighter public REST client
+- `src/lib/arcus.ts` — Arcus public REST client: read-only market data, and the only place that interprets Arcus's status and type fields
+- `src/lib/net.ts` — the timeout every external request carries, and the human wording for one that ran out
 - `src/lib/predict.ts`, `src/lib/telegram.ts`, `src/lib/leaders.ts`, `src/lib/config.ts`
 
 ## Deployment

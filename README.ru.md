@@ -259,6 +259,8 @@ PW_PORT=5178 npx playwright test
 - `src/lib/session.ts` — токен сессии, полученный при входе, лежит в `localStorage` под ключом `wake.session.v1`; `backend.ts` читает его, чтобы подставить `Authorization`, а 401 токен стирает и объявляет выход
 - `src/lib/wallet.ts` — вход по кошельку: запросить у бэкенда текст, подписать его через `personal_sign`, отправить подпись обратно; адрес восстанавливает сервер, поэтому клиент не может сам объявить, кто он
 - `src/lib/lighter.ts` — клиент публичного REST Lighter
+- `src/lib/arcus.ts` — клиент публичного REST Arcus: только чтение, и единственное место, где поля статуса и типа Arcus читаются как есть
+- `src/lib/net.ts` — таймаут, под которым уходит каждый наружный запрос, и внятная формулировка того, что он истёк
 - `src/lib/predict.ts`, `src/lib/telegram.ts`, `src/lib/leaders.ts`, `src/lib/config.ts`
 
 ## Деплой

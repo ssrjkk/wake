@@ -10,6 +10,19 @@ from the commit history rather than from a release.
 ## [Unreleased]
 
 ### Added
+- `src/lib/net.ts`: every external request now carries a timeout — 10 s for the
+  public REST (Lighter, Arcus), 15 s for the Wake backend, and a `TimeoutError`
+  is turned into "нет ответа за 10 с" instead of a DOMException in a toast.
+  Before this, nine GET calls had no signal at all: one TCP connection that was
+  accepted but never answered left the panel on "загружаю…" for the lifetime of
+  the tab, while the 15–60 s poll intervals stacked new requests on top of it.
+  `POST /place-order` deliberately keeps no timeout — aborting a request that
+  may already have reached the exchange invites a retry with a new
+  `client_order_index`, i.e. a second order; the disabled button is what
+  prevents the duplicate there.
+- `isArcusOnline()` in `src/lib/arcus.ts`, next to the `isArcusPerp()` it
+  belongs with, and a test that pins the live value set (`ONLINE`/`OFFLINE`) so
+  a future rename fails loudly instead of greying out the whole table.
 - `leaders.active` (migration `004_leader_active`), `PATCH /leaders/{id}/active`
   and `GET /leaders/mine`, plus the "Публиковать мои сделки" switch in the
   Terminal. The switch existed as three user-facing instructions and zero
@@ -46,7 +59,7 @@ from the commit history rather than from a release.
   leader plans no orders); frontend tests for `/leaders/mine`, the active switch,
   `openInterestUsd`, market categories against live symbol forms, and the avatar
   palette; two browser tests for the switch and the signing chip (420 backend,
-  122 unit, 18 browser).
+  138 unit, 18 browser).
 - `min={0}`/`valueAsNumber` on the remaining numeric inputs (copy allocation,
   carry capital) and a single in-flight guard on the Predict claim button, whose
   second click used to return "already claimed" where the user expected his money.
@@ -292,6 +305,12 @@ from the commit history rather than from a release.
   claim of an "optional KMS mode", which the removed file could not deliver.
 
 ### Fixed
+- The Arcus table on Overview marked every market as not active. It compared
+  `status` with `"ACTIVE"` — a value from older documentation — while the live
+  `/v1/markets` returns `ONLINE` for 64 rows and `OFFLINE` for 6 (measured on
+  mainnet 2026-10-24), so each row rendered grey and spelled the raw wire value.
+  Status is now read through `isArcusOnline()`, worded "торгуется" / "выключен",
+  and tradeable markets are ordered ahead of the offline ones in the visible 15.
 - The Terminal's market rail reshuffled on every poll. `/orderBooks` returns the
   same 214 active perps in a different order each call (measured on mainnet
   2026-10-24: three consecutive requests put BTC at index 14, 207 and 58), and

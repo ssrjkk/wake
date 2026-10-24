@@ -58,6 +58,29 @@ describe('backendJson', () => {
     expect(headersOf().get('Authorization')).toBe('Bearer wk1.aaa.bbb')
   })
 
+  // Висящее без ответа соединение — это «загружаю…» до конца открытия вкладки, а
+  // интервалы опроса добавляют поверх него новые запросы. Поэтому у каждого
+  // вызова обязан быть сигнал.
+  it('puts a timeout on every request', async () => {
+    fetchMock.mockResolvedValue({ ok: true, json: () => Promise.resolve([]) })
+    await backendJson('/leaders')
+    expect((fetchMock.mock.calls[0][1] as RequestInit).signal).toBeInstanceOf(AbortSignal)
+  })
+
+  it('keeps the caller signal instead of replacing it', async () => {
+    fetchMock.mockResolvedValue({ ok: true, json: () => Promise.resolve([]) })
+    const signal = AbortSignal.timeout(50)
+    await backendJson('/health', { signal })
+    expect((fetchMock.mock.calls[0][1] as RequestInit).signal).toBe(signal)
+  })
+
+  it('names a timeout in human words, not as a DOMException', async () => {
+    const timeout = new Error('signal timed out')
+    timeout.name = 'TimeoutError'
+    fetchMock.mockRejectedValue(timeout)
+    await expect(expectError(() => backendJson('/leaders'))).resolves.toContain('нет ответа за 15 с')
+  })
+
   // 401 — это «токен больше не действителен», и состояние входа должно уйти сразу:
   // иначе панели показывают пустоту там, где нужен повторный вход.
   it('drops the session and announces sign-out on 401', async () => {
