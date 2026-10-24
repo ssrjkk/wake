@@ -214,6 +214,35 @@ test.describe("Оболочка приложения", () => {
     expect(healthChecks).toBe(1);
   });
 
+  test("рельс рынков не перетасовывается и держит выбранный рынок в поле зрения", async ({ page }) => {
+    // Порядок /orderBooks у Lighter не стабилен между запросами (замер mainnet
+    // 2026-10-24: те же 214 перпов в трёх ответах, BTC на 14, 207 и 58 месте).
+    // Без сортировки рельс переставлялся на каждом опросе, и строка, за которой
+    // следят, уезжала из-под курсора.
+    const ids = [11, 3, 15, 7, 1, 9, 5, 13, 2, 8, 14, 4, 10, 6, 12];
+    const rows = () => ids.map((id) => ({
+      symbol: `M${id}`, market_id: id, market_type: "perp", status: "active",
+      taker_fee: "0", maker_fee: "0", min_base_amount: "0.001", min_quote_amount: "10",
+      supported_price_decimals: 2, supported_size_decimals: 4, open_interest: "10",
+    }));
+    const expected = ["M15", "M1", "M2", "M3", "M4", "M5", "M6", "M7", "M8", "M9", "M10", "M11"];
+    const rail = page.locator(".desk-row b.num");
+    await page.route("**/api/v1/orderBooks?*", (route) => route.fulfill({ json: { order_books: rows() } }));
+    await page.route("**/api/v1/candles?*", (route) => route.fulfill({ json: { c: [] } }));
+    await page.route("**/api/v1/funding-rates", (route) => route.fulfill({ json: { funding_rates: [] } }));
+    await page.goto("/?tab=terminal&asset=M15");
+
+    // 15 рынков при 12 видимых строках: выбранный M15 вне среза и обязан
+    // встать первым, а не исчезнуть из списка.
+    await expect(rail).toHaveText(expected);
+    await expect(page.locator('.desk-row[aria-current="true"]')).toContainText("M15");
+
+    // Следующий ответ книги — в обратном порядке: рельс обязан остаться прежним.
+    await page.route("**/api/v1/orderBooks?*", (route) => route.fulfill({ json: { order_books: rows().reverse() } }));
+    await page.reload();
+    await expect(rail).toHaveText(expected);
+  });
+
   test("без ответа Lighter в Терминале — сообщение об отсутствии данных, а не пустые цифры", async ({ page }) => {
     await page.goto("/");
     await nav(page).getByRole("button", { name: "Терминал" }).click();

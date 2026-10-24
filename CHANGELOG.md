@@ -46,7 +46,7 @@ from the commit history rather than from a release.
   leader plans no orders); frontend tests for `/leaders/mine`, the active switch,
   `openInterestUsd`, market categories against live symbol forms, and the avatar
   palette; two browser tests for the switch and the signing chip (420 backend,
-  122 unit, 17 browser).
+  122 unit, 18 browser).
 - `min={0}`/`valueAsNumber` on the remaining numeric inputs (copy allocation,
   carry capital) and a single in-flight guard on the Predict claim button, whose
   second click used to return "already claimed" where the user expected his money.
@@ -292,6 +292,13 @@ from the commit history rather than from a release.
   claim of an "optional KMS mode", which the removed file could not deliver.
 
 ### Fixed
+- The Terminal's market rail reshuffled on every poll. `/orderBooks` returns the
+  same 214 active perps in a different order each call (measured on mainnet
+  2026-10-24: three consecutive requests put BTC at index 14, 207 and 58), and
+  the rail was "first 12 rows of the response" — so the row being watched moved
+  out from under the cursor, and the market actually open on the desk was often
+  not in the list at all. The rail is ordered by `market_id` now, and the
+  selected market is pinned into the visible slice when it falls outside it.
 - The Terminal's price change was computed over all 48 hourly candles and
   labelled "/ 24ч" — a two-day move presented as a daily one, with the up/down
   colour derived from it. It now uses the same last-24 window as the high/low and

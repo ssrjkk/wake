@@ -114,9 +114,23 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
     return markets.filter((m) => m.symbol.toUpperCase().includes(q));
   }, [markets, searchQuery]);
 
+  /* Порядок рельса — по номеру рынка, а не «как вернула книга». Замер живого
+     /orderBooks (mainnet, 2026-10-24): три подряд запроса отдают те же 214
+     активных перпов в разном порядке, BTC — на 14, 207 и 58 месте. Без
+     сортировки список перетасовывался на каждом 15-секундном опросе, и строка,
+     за которой следят, уезжала из-под курсора. Выбранный рынок ставим первым,
+     если он в видимые строки не попал: иначе на экране «BTC», а в списке его
+     нет, и вернуться к нему можно только поиском. */
+  const visibleMarkets = useMemo(() => {
+    const sorted = [...filteredMarkets].sort((a, b) => a.market_id - b.market_id);
+    const index = sorted.findIndex((m) => m.symbol === asset);
+    if (index >= TICKER_ROWS) sorted.unshift(sorted.splice(index, 1)[0]);
+    return sorted.slice(0, TICKER_ROWS);
+  }, [filteredMarkets, asset]);
+
   const visibleIds = useMemo(
-    () => filteredMarkets.slice(0, TICKER_ROWS).map((m) => m.market_id).join(","),
-    [filteredMarkets]
+    () => visibleMarkets.map((m) => m.market_id).join(","),
+    [visibleMarkets]
   );
 
   useEffect(() => {
@@ -296,7 +310,6 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
     } на ${pctHour == null ? "неизвестно (нет открытия часа)" : `${fmt(pctHour, 2)}%`}`;
   }, [tape, lastCandle]);
 
-  const visibleMarkets = filteredMarkets.slice(0, TICKER_ROWS);
   const maxVolume = visibleMarkets.reduce((acc, m) => Math.max(acc, tickers[m.market_id]?.volume24h ?? 0), 0);
   /* Полоса оборота — логарифм, а не доля от максимума: обороты видимых рынков
      расходятся на порядки, и на линейной шкале у половины списка полоса была бы
