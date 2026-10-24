@@ -15,9 +15,9 @@ from agent_memory import AgentMemoryStore
 from agent_decision import AgentDecision, rule_based_decision
 from config import ANTHROPIC_API_KEY
 
-# Потолок заимствуется из логики лимитов, а не из фантазии: размер ордера всё
-# равно урезался бы в check_order(), и молча урезанный ответ модели хуже, чем
-# тот, где потолок назван в том же месте, где он задан.
+# Потолок заимствуется из логики лимитов, а не из фантазии: больше этого риска
+# check_order() не пропускает ни при каком ответе модели, и молча обрезанный
+# ответ хуже ответа, где потолок назван в том же месте, где он задан.
 MAX_LLM_SIZE_USD = 1_000_000
 
 SYSTEM_PROMPT = """Ты — торговый агент на Wake (терминал поверх Lighter perp DEX).

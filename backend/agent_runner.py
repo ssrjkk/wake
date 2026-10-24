@@ -4,17 +4,27 @@
 leader_listener.py: WAKE_DRY_RUN=true по умолчанию, реальный запрос идёт,
 только если это осознанно выключено.
 
-[!]  Сам HTTP-вызов к signing_service не тестировался мной (нужен реально
-поднятый FastAPI-сервис). Логика принятия решения — да, целиком, через
-agent_memory.py (14 тестов) и agent_decision.py (11 тестов).
+Три исхода живого шага различаются намеренно: "sent" (сервис ответил),
+"failed" (отказ с ответом или запрос, который заведомо никуда не дошёл) и
+"unknown" (соединвание оборвалось после того, как запрос мог дойти). "failed"
+означает «можно повторять», "unknown" — нет: повтор идёт с новым
+client_order_index, то есть вторым ордером, если первый всё-таки исполнился.
+
+Что покрыто тестами: выбор решения (agent_memory, agent_decision, fallback-
+ветка llm_agent), границы лимитов, учёт памяти и весь HTTP-путь к
+signing_service — включая оборванное соединение — через подмену urlopen в
+test_agent_execution.py. Реального Lighter эти тесты не касают: они заканчивают
+на адресе сервиса подписи.
 """
 
-import uuid
-import dataclasses
+import http.client
+import json
 import logging
+import socket
 import urllib.error
 import urllib.request
-import json
+import uuid
+import dataclasses
 
 from agent_memory import AgentMemoryStore, TradeRecord
 from config import DRY_RUN, SIGNING_SERVICE_URL
@@ -23,6 +33,36 @@ from quant import scale_to_int
 from risk_limits import RiskLimits, UserRiskState, check_order, record_executed
 
 logger = logging.getLogger("wake.agent")
+
+# Разумный потолок на ожидание ответа сервиса подписи. Больше 30 секунд — это не
+# «медленно», это состояние, в котором ордер мог быть уже отправлен, а ответ не
+# пришёл никогда; для такого случая есть "unknown", а не терпение.
+ORDER_REQUEST_TIMEOUT_S = 30
+
+# Заметка модели уходит в agent_trades и оттуда — в промпт каждого следующего
+# шага (summarize_for_reasoning). Без потолка один длинный или нарочно
+# сконструированный ответ разрастается и в строке базы, и в токене рассуждения.
+MAX_CONTEXT_NOTE_CHARS = 500
+
+# Ошибки, которые доказывают, что запрос не был передан в сеть: соединение не
+# установлено, адрес не разрешился. После них ордер точно нигде не появился.
+_NOT_SENT_ERRORS = (
+    ConnectionRefusedError,
+    socket.gaierror,
+    socket.herror,
+    FileNotFoundError,
+    PermissionError,
+)
+
+
+class SubmissionUnconfirmed(Exception):
+    """Запрос ушёл в сервис подписи, а ответа нет. Повторять его безопасно
+    только с тем же client_order_index."""
+
+
+def _request_never_left(exc: BaseException) -> bool:
+    reason = getattr(exc, "reason", exc)
+    return isinstance(reason, _NOT_SENT_ERRORS)
 
 
 def _client_order_index(trade_uid: str) -> int:
@@ -45,6 +85,12 @@ def _place_order_via_signing_service(
     client_order_index: int,
     reduce_only: bool = False,
 ) -> dict:
+    """Один запрос к сервису подписи.
+
+    HTTPError (отказ с ответом) уходит наружу как есть: исход известен. Всё, что
+    случилось ПОСЛЕ передачи тела — таймаут чтения, обрыв, неразобранный JSON, —
+    превращается в SubmissionUnconfirmed: ордер мог исполниться, и это не
+    «отказ»."""
     payload = json.dumps(
         {
             "market_index": market_index,
@@ -60,8 +106,19 @@ def _place_order_via_signing_service(
         data=payload,
         headers={"Content-Type": "application/json"},
     )
-    with urllib.request.urlopen(req, timeout=10) as resp:
-        return json.loads(resp.read().decode())
+    try:
+        with urllib.request.urlopen(req, timeout=ORDER_REQUEST_TIMEOUT_S) as resp:
+            body = resp.read()
+    except urllib.error.HTTPError:
+        raise
+    except (urllib.error.URLError, OSError, http.client.HTTPException) as e:
+        if _request_never_left(e):
+            raise
+        raise SubmissionUnconfirmed(str(e) or type(e).__name__) from e
+    try:
+        return json.loads(body.decode())
+    except (ValueError, UnicodeDecodeError) as e:
+        raise SubmissionUnconfirmed(f"ответ сервиса не разобран: {e}") from e
 
 
 def run_agent_step(
@@ -107,11 +164,14 @@ def run_agent_step(
             }
         closing = open_here[0]
 
-    # size_usd у "close" равен 0 — берём стоимость реальной открытой позиции, иначе
-    # лимиты и учёт объёма считаются по нулю, а ордер выйдет нулевым по размеру.
-    trade_size_usd = decision.size_usd or (
-        closing.size * price if closing else base_size_usd
-    )
+    # size_usd у "close" равен 0 по построению — берём стоимость реальной открытой
+    # позиции, иначе лимиты и учёт объёма считаются по нулю, а ордер выйдет
+    # нулевым по размеру. Для "long"/"short" ноль — это НЕ «базовый размер»:
+    # подставлять base_size_usd сюда значит открыть сделку на сумму, которую
+    # источник решения не называл. Мусорный ответ модели (size_usd=0 при
+    # валидном action) ровно так и превращался в $100, которых модель не просила;
+    # честный ответ здесь — отклонение в check_order().
+    trade_size_usd = closing.size * price if is_reduce else decision.size_usd
 
     risk_check = check_order(
         risk_limits, risk_state, market_id, trade_size_usd, is_reduce_only=is_reduce
@@ -130,6 +190,7 @@ def run_agent_step(
     # Один id на замысел: он попадает и в память, и в client_order_index, так
     # что строка agent_trades и ордер в Lighter описывают одно и то же.
     trade_uid = str(uuid.uuid4())
+    order_index = _client_order_index(trade_uid)
 
     if DRY_RUN:
         logger.info("DRY_RUN=true — не исполняю реально")
@@ -154,19 +215,34 @@ def run_agent_step(
             base_amount,
             price_int,
             is_ask,
-            _client_order_index(trade_uid),
+            order_index,
             reduce_only=is_reduce,
         )
-        if result.get("dry_run") or result.get("tx_hash") is None:
-            # Сервис подписи сам в сухом режиме: ордера нет, но ответ есть.
-            # Записать сделку в память в этом случае — значит научить агента
-            # позиции, которой не существует, и показать «sent» пользователю.
-            _apply_to_memory(memory, decision, market_id, price, closing, trade_uid)
-            record_executed(risk_state, market_id, capped, is_reduce_only=is_reduce)
-            return decision, {"status": "dry_run", **result}
+        # Сервис подписи может сам быть в сухом режиме: ордера на рынке нет, но
+        # ответ есть. Сделка в память попадает и так — тот же договор, что у
+        # верхнего DRY_RUN: память агента описывает его решения, а status строки
+        # в agent_trades отличает симуляцию от живого ордера (см. Agent.tsx).
+        status = (
+            "dry_run"
+            if (result.get("dry_run") or result.get("tx_hash") is None)
+            else "sent"
+        )
         _apply_to_memory(memory, decision, market_id, price, closing, trade_uid)
         record_executed(risk_state, market_id, capped, is_reduce_only=is_reduce)
-        return decision, {"status": "sent", **result}
+        return decision, {"status": status, **result}
+    except SubmissionUnconfirmed as e:
+        # Память и дневной объём НЕ пополняются: позиции, про которую неизвестно,
+        # в них не было бы. Но и "failed" здесь соврёт: повтор шага — это новый
+        # client_order_index, то есть второй ордер, если первый исполнился.
+        logger.error("исполнение не подтверждено: %s", e)
+        return decision, {
+            "status": "unknown",
+            "reason": (
+                f"сервис подписи не дал ответа ({e}). Ордер мог исполниться: "
+                "проверь позицию в Lighter, повтор шага откроет вторую сделку"
+            ),
+            "client_order_index": order_index,
+        }
     except urllib.error.HTTPError as e:
         # Тело ответа signing_service — это причина отказа Lighter ("Minimal price
         # difference exceeded", "insufficient margin" и т.п.). Без него в UI и в
@@ -204,7 +280,7 @@ def _apply_to_memory(
             decision.action,
             price,
             decision.size_usd / price,
-            context_note=decision.reasoning,
+            context_note=decision.reasoning[:MAX_CONTEXT_NOTE_CHARS],
         )
     elif decision.action == "close" and closing is not None:
         memory.record_close(closing.id, price)

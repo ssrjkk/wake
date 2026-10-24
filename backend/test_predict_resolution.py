@@ -61,7 +61,6 @@ class TestEventResolution(unittest.TestCase):
         )
         self.assertEqual(r.outcome, "yes")
         self.assertEqual(r.resolved_by, "admin:alice")
-        self.assertFalse(r.disputed)
 
     def test_rejects_missing_curator(self):
         with self.assertRaises(ValueError):

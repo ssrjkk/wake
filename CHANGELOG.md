@@ -10,6 +10,28 @@ from the commit history rather than from a release.
 ## [Unreleased]
 
 ### Added
+- `backend/test_agent_execution.py`, `backend/test_lighter_rest.py`,
+  `backend/test_key_store.py` (61 checks): the three modules that carried a
+  «не тестировалось мной» note in their own headers are now tested. The agent
+  suite drives the real HTTP path with `urlopen` substituted, so the payload
+  sent to the signing service is asserted as market-scaled integers
+  (`base_amount=97`, `price=10_300_000` for $100 of BTC at 103 000 with 5/2
+  decimals), and each of the three submission outcomes — `sent`, `failed`,
+  `unknown` — has its own case. The Lighter client suite pins URL construction,
+  which statuses repeat and which do not, and what a candle must contain to be
+  used at all. The keystore suite pins the atomic write, the missing file, the
+  wrong master key and the listener's boundary.
+- `usable_candles()` in `backend/lighter_rest.py` and `_json_safe()` in
+  `backend/app.py` — two boundaries that did not exist before. The first drops
+  candle rows whose `o/h/l/c/V` are not finite positive numbers, because one
+  such row is enough to make the whole public market overview fail to
+  serialize. The second sanitizes validation-error details: a rejected `NaN`
+  produced a 422 whose own body could not be serialized, which turned every
+  `allow_inf_nan=False` refusal into a 500.
+- `unknown` as a distinct execution status for the agent, styled and explained in
+  the Agent panel: a submission whose response was lost is neither a fill nor a
+  rejection. The panel shows the `client_order_index` so the order can be found
+  in Lighter instead of being re-issued.
 - `backend/test_properties.py`: 27 seeded property checks over the money math,
   complementing the example-based suites rather than repeating them — they test
   the inequalities a single case cannot. `round_down` never grows a magnitude and
@@ -321,6 +343,75 @@ from the commit history rather than from a release.
   claim of an "optional KMS mode", which the removed file could not deliver.
 
 ### Fixed
+- A zero-sized decision became a trade at the default size.
+  `run_agent_step()` computed `decision.size_usd or (closing.size * price if
+  closing else base_size_usd)`, so for `long`/`short` a `size_usd` of 0 — which
+  is exactly what `_bounded_float()` returns for a missing, non-numeric or
+  non-finite field in an LLM answer — silently became `base_size_usd`. A reply
+  of `{"action": "long", "size_usd": 0}` opened a $100 position the model never
+  sized, while `llm_agent.py` documented the opposite behaviour. The fallback
+  now applies only to `close`, whose `size_usd` is 0 by design; anything else
+  goes to the limit check and comes back as `blocked_by_risk_limit`.
+- An aborted order request was reported as a rejection.
+  `_place_order_via_signing_service()` had `timeout=10` and one
+  `except Exception` answering `failed` — but the frontend refuses to put a
+  timeout on `POST /place-order` for precisely this reason: once the bytes are
+  written the outcome is unknown, and the next step derives a fresh
+  `client_order_index` from a new uuid, so a «retry» is a second order. Timeout,
+  reset after send and an unparsable response now return `status: "unknown"`
+  with that index echoed; memory and the daily volume are not charged, and the
+  panel says to check Lighter instead of repeating. Refused connections and DNS
+  failures stay `failed`, because those provably never left the process.
+- `leader_listener.py` built `EncryptedKeyStore()` inside the execution loop and
+  handled nothing: no `WAKE_MASTER_KEY`, or a keystore that does not decrypt,
+  raised into `handle_leader_event()`, which the WebSocket loop reads as a
+  dropped connection — a configuration mistake cost every follower their
+  mirroring, repeatedly. `_key_store()` now answers `None` and each order gets a
+  `keystore_unavailable` row in `mirror_log`.
+- The keystore was rewritten in place. `open(path, "wb")` truncates before
+  writing, so a process that died between the two left an empty file: every
+  follower's API key gone at once, and the engine answering `no_key` from then
+  on. Writes now go to `.tmp` with `fsync` and swap in through `os.replace`, the
+  file is created `0600`, the temporary file is removed even when the swap fails,
+  and the constructor no longer creates a keystore at a mistyped
+  `WAKE_KEYSTORE_PATH` while the real table sits beside it under another name.
+- One bad candle could black out the whole page. `stats_from_candles()` trusted
+  the numbers it was handed, and Starlette serializes JSON with
+  `allow_nan=False`: a `NaN` close meant `ValueError: Out of range float values
+  are not JSON compliant`, so `/markets/overview` and the bot's market list
+  failed for every market rather than one. Rows that are not finite positive
+  prices are dropped before the arithmetic now, and `candles_used` reports how
+  many were actually counted.
+- `get_price_at()` could settle a market on prices from after its deadline. The
+  filter was `t <= when_ms`, and by measurement on mainnet (2026-10-24) `t` is
+  the minute-aligned start of a candle — so at a round deadline the candle
+  chosen was `[deadline, deadline+1min)`, meaning prices up to a minute in the
+  future and, when the resolver woke inside that minute, an unfinished candle.
+  The oracle now takes the last candle that ended at or before the deadline, so
+  no payout is decided by movement nobody had seen yet.
+- A validation refusal could not be serialized. `_validation_details()`
+  stringified only `ctx`, while Pydantic puts the rejected value itself in
+  `input` — so any field with `allow_inf_nan=False` (`/funding-arb/size`,
+  `/simulate-mirror`, now Predict too) answered a `NaN` request with a 500.
+  Every detail field goes through `_json_safe()` now, and the refusal names the
+  rejected value as the string `"nan"`.
+- Creating a Predict market accepted numbers that cannot be represented.
+  `question`, `lighter_market_id`, `threshold`, `resolve_at` and `b` were plain
+  floats: `resolve_at: NaN` reached `datetime.fromtimestamp()` and 500'd the
+  curator call, while `threshold: NaN` or `b: Infinity` was stored and then
+  poisoned the public `GET /predict/markets` with the same serialization failure
+  — one operator typo, broken page for everyone. The models now require finite
+  numbers, a positive threshold, a non-negative market index, a horizon of at
+  most ten years and a bounded question, and a `Comparator` value that no longer
+  matches the enum answers 409 instead of raising `ValueError` out of the
+  resolve route. The unused `disputed` field of `EventResolution` — no writer,
+  no reader — is gone.
+- `_market_constraints()` in `api/agent.py` did
+  `int(book["supported_size_decimals"])` unguarded: an active market missing
+  either decimals field raised `KeyError` into a 500 on `/agent/step`. It now
+  answers 502 `MARKET_DATA_UNUSABLE`, the way the candle path in the same module
+  already did, and `build_constraints()` in the listener has always skipped such
+  rows rather than defaulting them.
 - `round_down()` returned NaN when it was given NaN. Every comparison against
   NaN is False, so `NaN <= 0` and `NaN < min_base_amount` both let the value
   through, and the order died one step later in `scale_to_int()` at execution —

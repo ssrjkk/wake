@@ -20,7 +20,7 @@ import uuid
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator
 from starlette.concurrency import run_in_threadpool
 
 import predict_db as pdb
@@ -32,66 +32,74 @@ from config import LIGHTER_NETWORK
 
 router = APIRouter()
 
+MIN_QUESTION_CHARS = 3
+MAX_QUESTION_CHARS = 300
+# Дальше этого срока рынок никто не ждёт, а «вечный» дедлайн означает, что
+# резолюция никогда не придёт и строка будет жить в списке открытой вечно.
+MAX_MARKET_HORIZON_S = 10 * 365 * 86_400
+# Резерв маркетмейкера равен b·ln2 (predict_amm.max_subsidy), поэтому потолок у b
+# — это потолок суммы, которую рынок вообще способен выдать трейдеру из ничего.
+MAX_LMSR_B = 10_000_000
+MAX_SHARES = 1_000_000_000
 
-class CreatePriceMarket(BaseModel):
-    question: str
-    lighter_market_id: int
-    threshold: float
+
+class CreateMarketBase(BaseModel):
+    """Общее для price- и event-рынков: вопрос, дедлайн, ликвидность.
+
+    Границы нужны здесь, а не «где-то в базе»: эти числа уезжают обратно в
+    публичный JSON, а Starlette сериализует с allow_nan=False — одно NaN в строке
+    рынка стоит 500 на весь GET /predict/markets для всех посетителей (проверено:
+    ValueError «Out of range float values are not JSON compliant»). NaN к тому же
+    проходит любую проверку вида `v <= now`, потому что сравнение с NaN — False."""
+
+    question: str = Field(min_length=MIN_QUESTION_CHARS, max_length=MAX_QUESTION_CHARS)
+    resolve_at: float = Field(gt=0, allow_inf_nan=False)
+    b: float = Field(default=100.0, gt=0, le=MAX_LMSR_B, allow_inf_nan=False)
+
+    @field_validator("resolve_at")
+    @classmethod
+    def resolve_at_in_future(cls, v: float) -> float:
+        now = _time.time()
+        if v <= now:
+            raise ValueError("resolve_at must be in the future")
+        if v > now + MAX_MARKET_HORIZON_S:
+            raise ValueError(
+                f"resolve_at не дальше {MAX_MARKET_HORIZON_S // 86_400} лет от сегодня"
+            )
+        return v
+
+
+class CreatePriceMarket(CreateMarketBase):
+    # market_id Lighter — неотрицательный индекс книги; отрицательный означал бы
+    # рынок, свечей которого нет, и резолюция падала бы на дедлайне.
+    lighter_market_id: int = Field(ge=0)
+    threshold: float = Field(gt=0, allow_inf_nan=False)
     comparator: Literal[">=", "<=", ">", "<"]
-    resolve_at: float
-    b: float = 100
-
-    @field_validator("resolve_at")
-    @classmethod
-    def resolve_at_in_future(cls, v: float) -> float:
-        if v <= _time.time():
-            raise ValueError("resolve_at must be in the future")
-        return v
-
-    @field_validator("b")
-    @classmethod
-    def b_positive(cls, v: float) -> float:
-        if v <= 0:
-            raise ValueError("b must be positive")
-        return v
 
 
-class CreateEventMarket(BaseModel):
-    question: str
-    resolve_at: float
-    b: float = 100
-
-    @field_validator("resolve_at")
-    @classmethod
-    def resolve_at_in_future(cls, v: float) -> float:
-        if v <= _time.time():
-            raise ValueError("resolve_at must be in the future")
-        return v
-
-    @field_validator("b")
-    @classmethod
-    def b_positive(cls, v: float) -> float:
-        if v <= 0:
-            raise ValueError("b must be positive")
-        return v
+class CreateEventMarket(CreateMarketBase):
+    pass
 
 
 class TradeRequest(BaseModel):
     outcome: Literal["yes", "no"]
-    shares: float
+    shares: float = Field(allow_inf_nan=False, ge=-MAX_SHARES, le=MAX_SHARES)
 
     @field_validator("shares")
     @classmethod
     def shares_nonzero(cls, v: float) -> float:
-        if v == 0 or not math.isfinite(v):
+        if v == 0:
             raise ValueError("shares — ненулевое конечное число")
         return v
 
 
 class ResolveEventRequest(BaseModel):
+    """resolved_by и evidence_url ограничены по длине: обе строки попадают в
+    аудит и в интерфейс рынка, где их читает каждый посетитель."""
+
     outcome: str
-    resolved_by: str
-    evidence_url: str
+    resolved_by: str = Field(min_length=1, max_length=120)
+    evidence_url: str = Field(min_length=1, max_length=2000)
 
 
 class ResolvePriceRequest(BaseModel):
@@ -204,7 +212,7 @@ async def preview_trade(market_id: str, outcome: Literal["yes", "no"], shares: f
     m = await pdb.get_market(market_id)
     if m is None:
         raise HTTPException(status_code=404, detail="рынок не найден")
-    if not math.isfinite(shares) or shares == 0:
+    if not math.isfinite(shares) or shares == 0 or abs(shares) > MAX_SHARES:
         raise HTTPException(status_code=400, detail="shares — ненулевое конечное число")
     amm = LMSRMarket(b=m["b"], q_yes=m["q_yes"], q_no=m["q_no"])
     try:
@@ -346,9 +354,17 @@ async def resolve_price(
         )
     except RuntimeError as e:
         raise HTTPException(status_code=502, detail=str(e))
-    resolution = resolve_price_market(
-        observed, m["threshold"], Comparator(m["comparator"])
-    )
+    try:
+        comparator = Comparator(m["comparator"])
+    except ValueError:
+        # Строка могла появиться только через прямую правку в базе: создать рынок
+        # с другим значением не даёт Literal на модели. Ответ — 409 с текстом, а
+        # не 500 на ValueError из enum.
+        raise HTTPException(
+            status_code=409,
+            detail=f"рынок создан с неизвестным условием сравнения {m['comparator']!r}",
+        )
+    resolution = resolve_price_market(observed, m["threshold"], comparator)
     try:
         await pdb.resolve_market(
             market_id, resolution.outcome, "auto:lighter_mark_price", None

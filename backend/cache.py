@@ -5,6 +5,7 @@
 В проде заменить на Redis или аналог.
 """
 
+import functools
 import inspect
 import time
 import threading
@@ -58,6 +59,7 @@ def cached(prefix: str, ttl: int = DEFAULT_TTL):
     mainnet-данные."""
 
     def decorator(func):
+        @functools.wraps(func)
         def wrapper(*args, **kwargs):
             key = f"{prefix}:{_key_suffix(func, args, kwargs)}"
             cached_value = get(key)

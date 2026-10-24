@@ -84,7 +84,6 @@ class EventResolution:
     resolved_by: str  # идентификатор куратора — обязателен, не опционален
     resolved_at: float  # unix timestamp
     evidence_url: str  # ссылка на источник — обязательна, не опциональна
-    disputed: bool = False
 
 
 def resolve_event_market(

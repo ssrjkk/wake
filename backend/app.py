@@ -34,6 +34,7 @@ REST-слой Wake backend. Тонкий файл: создаёт FastAPI, по�
 """
 
 import logging
+import math
 from contextlib import asynccontextmanager
 
 import sentry_sdk
@@ -233,19 +234,29 @@ async def http_exception_handler(request: Request, exc: HTTPException):
     return JSONResponse(status_code=exc.status_code, content=payload)
 
 
-def _validation_details(exc: RequestValidationError) -> list[dict]:
-    """Сообщения валидации, пригодные для JSON.
+def _json_safe(value):
+    """Значение, которое json.dumps точно возьмёт.
 
-    Pydantic кладёт в ctx исходный ValueError из field_validator, и json.dumps на
-    нём падает: без этой правки любой 422 с кастомной проверкой полей отдавался бы
-    как 500, а клиент видел бы «внутреннюю ошибку» вместо того, что он вбил."""
-    details = []
-    for error in exc.errors():
-        ctx = error.get("ctx")
-        if ctx:
-            error["ctx"] = {key: str(value) for key, value in ctx.items()}
-        details.append(error)
-    return details
+    Pydantic кладёт в `input` ровно то, что прислал клиент, — и NaN или Infinity
+    проходят в словарь ошибок как настоящие float. Starlette сериализует ответ с
+    allow_nan=False, поэтому такой 422 падал сам по себе: клиент получал 500 и не
+    видел ни кода ошибки, ни поля, из-за которого его отвергли. То же касается
+    `ctx` с ValueError из field_validator и любых вложенных списков."""
+    if isinstance(value, float) and not math.isfinite(value):
+        return repr(value)  # "nan" / "inf" / "-inf" — читаемо и сериализуемо
+    if isinstance(value, dict):
+        return {str(key): _json_safe(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return [_json_safe(item) for item in value]
+    if isinstance(value, (str, bool, int, float)) or value is None:
+        return value
+    return str(value)
+
+
+def _validation_details(exc: RequestValidationError) -> list[dict]:
+    """Сообщения валидации, пригодные для JSON: каждое поле пройдёт через
+    _json_safe, чтобы отказ не превращался во внутреннюю ошибку."""
+    return [_json_safe(error) for error in exc.errors()]
 
 
 @app.exception_handler(RequestValidationError)

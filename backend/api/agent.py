@@ -62,7 +62,13 @@ class AgentStepRequest(BaseModel):
 
 
 def _market_constraints(market_id: int) -> dict:
-    """Шаг и минимум рынка из живой книги (кэш 30 с, cache.py)."""
+    """market_id -> шаг и минимум рынка из живой книги (кэш 30 с, cache.py).
+
+    Активный рынок без любого из двух decimals — это 502, а не 500: поля
+    приходят из ответа Lighter, и `int()` от отсутствующего или кривого значения
+    бросило бы KeyError/ValueError наружу из обработчика. В leader_listener.py
+    build_constraints() такие строки просто отсеивает, здесь рынок один и
+    отсеивать нечего — остаётся честно сказать, что данных нет."""
     for book in lighter_rest.get_order_books(LIGHTER_NETWORK):
         try:
             if int(book["market_id"]) != market_id:
@@ -75,11 +81,19 @@ def _market_constraints(market_id: int) -> dict:
                 "MARKET_NOT_ACTIVE",
                 f"рынок {market_id} не активен — ордер в него поставить нельзя",
             )
-        return {
-            "size_decimals": int(book["supported_size_decimals"]),
-            "price_decimals": int(book["supported_price_decimals"]),
-            "symbol": str(book.get("symbol", "")),
-        }
+        try:
+            return {
+                "size_decimals": int(book["supported_size_decimals"]),
+                "price_decimals": int(book["supported_price_decimals"]),
+                "symbol": str(book.get("symbol", "")),
+            }
+        except (KeyError, TypeError, ValueError):
+            raise deny(
+                502,
+                "MARKET_DATA_UNUSABLE",
+                f"у активного рынка {market_id} в книге Lighter нет supported_size_"
+                "decimals / supported_price_decimals — масштаб ордера неизвестен",
+            ) from None
     raise deny(404, "MARKET_NOT_FOUND", f"рынка {market_id} нет в книге Lighter")
 
 

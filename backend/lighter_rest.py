@@ -11,8 +11,10 @@ requests/httpx, чтобы это можно было гонять где уго
 
 import json
 import logging
+import math
 import time
 import random
+import urllib.parse
 import urllib.request
 import urllib.error
 from concurrent.futures import ThreadPoolExecutor
@@ -108,8 +110,12 @@ def get_account_index_by_l1(
     индекс, извлечённый здесь, а не присланный клиентом. Иначе «опубликовать
     лидера» можно было бы чужим индексом аккаунта, и Discover показывал бы чужую
     статистику под чужим handle.
-    """
-    data = _get(f"{_base(network)}/account?by=l1_address&value={l1_address}")
+
+    Адрес кодируется явно. today он всегда checksum- HEX из wallet_auth, но
+    функция строит URL, а не проверяет вход: без quote() значение с & или #
+    уехало бы в query и изменило бы сам запрос."""
+    value = urllib.parse.quote(str(l1_address), safe="")
+    data = _get(f"{_base(network)}/account?by=l1_address&value={value}")
     accounts = data.get("accounts") or []
     return int(accounts[0]["index"]) if accounts else None
 
@@ -169,25 +175,59 @@ def get_candles(
 def get_price_at(
     market_id: int, when_s: float, network: str = LIGHTER_NETWORK
 ) -> float:
-    """Цена закрытия минуты, в которую попал момент `when_s`.
+    """Цена закрытия последней минуты, которая закончилась не позже `when_s`.
 
     Для резолюции price-рынка это единственный корректный оракул: исход «BTC
     выше 100k на 1 октября» обязан решаться ценой 1 октября. Прежний
     get_mark_price брал последнюю свечу НА МОМЕНТ ЗАПРОСА, и пока резолвер был
     жив (тик 300 с) это было почти верно, но пропуск на сутки-неделю превращал
     исход в цену совсем другого дня — а по этим исходам люди получают выплаты.
-    Окно заканчивается дедлайном, так что ответ не зависит от того, когда
-    процесс проснулся."""
+
+    Окно заканчивается дедлайном, поэтому ответ не зависит от того, когда процесс
+    проснулся. Ровно дедлайн — нижняя граница: по замеру mainnet 2026-10-24 `t`
+    свечи — начало интервала (t кратно 60000, самая свежая свеча начинается
+    текущей минутой), так что свеча с t = дедлайн покрывает [дедлайн,
+    дедлайн+1мин) — это уже цены ПОСЛЕ дедлайна, и при разрешении внутри минуты
+    ещё и незакрытая свеча. Такая свеча в расчёт не берётся: исход не может
+    решаться будущим движением цены."""
     interval_ms = RESOLUTION_MS["1m"]
     when_ms = int(when_s * 1000)
     candles = get_candles(market_id, "1m", 6, network, end_ms=when_ms + interval_ms)
-    # Свеча покрывает [t, t+1м): нужна последняя с t <= when_ms.
-    covering = [c for c in candles if int(c["t"]) <= when_ms]
-    if not covering:
+    completed = [c for c in candles if int(c["t"]) + interval_ms <= when_ms]
+    if not completed:
         raise RuntimeError(
-            f"нет свечей, покрывающих момент {when_s}, для market_id={market_id}"
+            f"нет закрытых минутных свечей к моменту {when_s} для market_id={market_id}"
         )
-    return float(covering[-1]["c"])
+    return float(completed[-1]["c"])
+
+
+def usable_candles(candles: list) -> list:
+    """Свечи, из которых можно считать деньги: o, h, l, c — конечные
+    положительные числа, V — конечное неотрицательное.
+
+    Это граница, а не недоверие: поля приходят строками из чужого HTTP-ответа,
+    а одно "NaN" или null стоило бы 500 на всё — JSONResponse у Starlette
+    сериализует с allow_nan=False и бросает ValueError на первом же неконечном
+    числе (проверено на этой версии Starlette), то есть отравленным оказывался
+    бы весь обзор рынка и список в боте, а не один рынок. Другой читатель того
+    же /candles (api/agent.py::_candle_closes) ряд уже фильтрует — здесь это
+    расхождение и закрывается. На замере mainnet 2026-10-24 по 65 активным
+    перпам (выборка по всей книге плюс 20 самых свежих листингов) мусора не
+    нашлось, но цена одной такой строки не должна зависеть от того, заметим мы
+    её или нет."""
+    out = []
+    for c in candles:
+        try:
+            values = [float(c[k]) for k in ("o", "h", "l", "c", "V")]
+        except (KeyError, TypeError, ValueError):
+            continue
+        if not all(math.isfinite(v) for v in values):
+            continue
+        open_, high, low, close, volume = values
+        if open_ <= 0 or high <= 0 or low <= 0 or close <= 0 or volume < 0:
+            continue
+        out.append(c)
+    return out
 
 
 def stats_from_candles(candles: list) -> dict:
@@ -199,19 +239,22 @@ def stats_from_candles(candles: list) -> dict:
     24ч» из тех же 24 часов, а не из другого окна.
 
     Самая свежая свеча ещё формируется, поэтому high/low включают её текущий
-    максимум: это диапазон наблюдавшихся цен, а не закрытых часов."""
-    if not candles:
+    максимум: это диапазон наблюдавшихся цен, а не закрытых часов.
+    `candles_used` — сколько свечей реально посчитано, а не прислано: рынок, у
+    которого отброшены строки, не должен выглядеть полным."""
+    rows = usable_candles(candles)
+    if not rows:
         return {}
-    first_open = float(candles[0]["o"])
-    last_close = float(candles[-1]["c"])
+    first_open = float(rows[0]["o"])
+    last_close = float(rows[-1]["c"])
     return {
         "price": last_close,
-        "change_24h": (last_close / first_open - 1) if first_open > 0 else 0.0,
-        "quote_volume_24h": sum(float(c["V"]) for c in candles),
-        "high_24h": max(float(c["h"]) for c in candles),
-        "low_24h": min(float(c["l"]) for c in candles),
-        "closes": [float(c["c"]) for c in candles],
-        "candles_used": len(candles),
+        "change_24h": last_close / first_open - 1,
+        "quote_volume_24h": sum(float(c["V"]) for c in rows),
+        "high_24h": max(float(c["h"]) for c in rows),
+        "low_24h": min(float(c["l"]) for c in rows),
+        "closes": [float(c["c"]) for c in rows],
+        "candles_used": len(rows),
     }
 
 

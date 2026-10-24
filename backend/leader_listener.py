@@ -64,6 +64,21 @@ LIGHTER_HTTP_URL = LIGHTER_BASE_URL
 WS_URL = LIGHTER_WS_URL
 
 
+def _key_store() -> EncryptedKeyStore | None:
+    """Хранилище ключей подписчиков или None.
+
+    Конструктор бросает RuntimeError, если WAKE_MASTER_KEY не задан, а
+    `_read()` — если файл не расшифровывается. Вызов идёт из цикла вебсокета,
+    где любое исключение читается как обрыв соединения: одна опечатка в env
+    стоила бы зеркалирования всем подписчикам лидера, вместо того чтобы
+    оставить честную строчку «keystore_unavailable» в mirror_log."""
+    try:
+        return EncryptedKeyStore()
+    except RuntimeError as e:
+        logger.error("хранилище ключей недоступно: %s", e)
+        return None
+
+
 def build_order_args(
     order: MirrorOrder,
     event_price: float,
@@ -190,9 +205,25 @@ async def handle_leader_event(
             )
             continue
 
-        key_store = (
-            EncryptedKeyStore()
-        )  # шифрование на диске — см. encrypted_key_store.py, всё ещё НЕ HSM-эквивалент
+        key_store = _key_store()
+        if key_store is None:
+            # Хранилище недоступно целиком (нет WAKE_MASTER_KEY, файл не
+            # расшифровывается). Это отказ по всем ордерам, но не исключение:
+            # для цикла вебсокета исключение равносильно обрыву стрима, и
+            # подписчики лишились бы зеркалирования из-за конфигурации процесса.
+            logger.error("исполнение невозможно: хранилище ключей недоступно")
+            await db.log_mirror_result(
+                log_id,
+                follow_row["follow_id"],
+                order.market_id,
+                order.side.value,
+                order.base_amount,
+                order.reduce_only,
+                "failed",
+                "keystore_unavailable",
+            )
+            continue
+
         key = key_store.get_key(order.follower_id)
         if not key:
             logger.error(

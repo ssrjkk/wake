@@ -26,7 +26,14 @@ type Decision = {
   confidence: number;
   size_usd: number;
   reasoning: string;
-  execution: { status: string; reason?: string; error?: string; tx_hash?: string } | null;
+  execution: {
+    status: string;
+    reason?: string;
+    error?: string;
+    tx_hash?: string;
+    // Приходит только при статусе unknown: по нему ордер находится в Lighter.
+    client_order_index?: number;
+  } | null;
   volume_today_usd: number;
   // Что бэкенд реально положил в основу решения: ряд цен и шаг рынка он берёт из
   // Lighter сам, поэтому сверять надо с этим, а не с тем, что насчитала панель.
@@ -41,8 +48,10 @@ type Decision = {
 
 const RESOLUTIONS: Resolution[] = ["5m", "15m", "1h", "4h", "1d"];
 
-// Тот же горизонт, что считает эвристика: решение берётся по последним 10 закрытиями,
-// но в бэкенд уходит больше точек, чтобы память LLM-ветки видела контекст.
+// Тот же горизонт, что считает эвристика: решение берётся по всему ряду,
+// который запрашивается здесь же, — но сам ряд читает бэкенд из Lighter, а не из
+// тела запроса (см. backend/api/agent.py), поэтому эти точки нужны графику и
+// сверке, а не решению.
 const POINTS_SENT = 40;
 
 const EXECUTION_STYLE: Record<string, { bg: string; color: string; border?: string }> = {
@@ -51,6 +60,9 @@ const EXECUTION_STYLE: Record<string, { bg: string; color: string; border?: stri
   blocked_by_risk_limit: { bg: "#2a2000", color: "#fbbf24", border: "#3d3000" },
   skipped: { bg: "#1a1a1a", color: "#a0a0a0" },
   failed: { bg: "#2a0a0a", color: "#ef4444", border: "#3d1a1a" },
+  // Не «не удалось», а «неизвестно»: запрос мог дойти до сервиса подписи, и
+  // повтор шага — это второй ордер. Цвет тот же, что у отказа, смысл другой.
+  unknown: { bg: "#2a1a0a", color: "#f59e0b", border: "#4d3310" },
 };
 
 export default function Agent({ signedIn, subscription, currentMarket, setToast, startTrial }: AgentProps) {
@@ -259,6 +271,11 @@ export default function Agent({ signedIn, subscription, currentMarket, setToast,
                 <p style={{ fontSize: "12px", color: "var(--text-muted)", margin: 0 }}>{lastDecision.reasoning}</p>
                 {lastDecision.execution?.reason && <p style={{ fontSize: "12px", color: "#fbbf24", margin: "4px 0 0" }}>{lastDecision.execution.reason}</p>}
                 {lastDecision.execution?.error && <p style={{ fontSize: "12px", color: "#ef4444", margin: "4px 0 0" }}>{String(lastDecision.execution.error).slice(0, 160)}</p>}
+                {lastDecision.execution?.client_order_index != null && (
+                  <p style={{ fontSize: "12px", color: "var(--text-muted)", fontFamily: "JetBrains Mono, monospace", margin: "4px 0 0" }}>
+                    ордер #{lastDecision.execution.client_order_index} — по нему видно в Lighter, исполнился он или нет
+                  </p>
+                )}
                 {lastDecision.execution?.tx_hash && (
                   <p style={{ fontSize: "12px", color: "var(--text-muted)", fontFamily: "JetBrains Mono, monospace", margin: "4px 0 0" }}>tx {String(lastDecision.execution.tx_hash).slice(0, 18)}…</p>
                 )}
@@ -314,7 +331,11 @@ export default function Agent({ signedIn, subscription, currentMarket, setToast,
             <code style={{ color: "#a0a0a0" }}>risk_limits.check_order()</code>. При <code style={{ color: "#a0a0a0" }}>WAKE_DRY_RUN=true</code>{" "}
             (по умолчанию) ордер на Lighter не отправляется — статус <code style={{ color: "#a0a0a0" }}>dry_run</code>, но сделка записывается в память
             агента, чтобы ветка с закрытием и win_rate тоже были живыми. Память и дневной объём читаются из таблицы{" "}
-            <code style={{ color: "#a0a0a0" }}>agent_trades</code>: рестарт сервиса их не обнуляет.
+            <code style={{ color: "#a0a0a0" }}>agent_trades</code>: рестарт сервиса их не обнуляет. Ордер больше лимита на транзакцию{" "}
+            <code style={{ color: "#a0a0a0" }}>check_order()</code> не урезает, а отклоняет (статус{" "}
+            <code style={{ color: "#a0a0a0" }}>blocked_by_risk_limit</code>); под оставшийся дневный объём и под остаток лимита позиции размер
+            урезается. Если сервис подписи оборвал соединение, шаг получает <code style={{ color: "#a0a0a0" }}>unknown</code>: ордер мог
+            исполниться, повтор шага — это второй ордер с новым индексом, поэтому в память и в дневной объём такой шаг не попадает.
           </p>
         </div>
       )}

@@ -43,12 +43,18 @@ class EncryptedKeyStore:
             )
         self.fernet = Fernet(master_key.encode())
         self.path = path
-        if not os.path.exists(path):
-            self._write({})
+        # Файл намеренно НЕ создаётся здесь: конструктор не должен оставлять
+        # пустое хранилище по опечатке в WAKE_KEYSTORE_PATH, пока настоящая
+        # таблица ключей лежит рядом под другим именем.
 
     def _read(self) -> dict:
-        with open(self.path, "rb") as f:
-            blob = f.read()
+        try:
+            with open(self.path, "rb") as f:
+                blob = f.read()
+        except FileNotFoundError:
+            # Нет файла — нет и ключей. Это пустое хранилище, а не авария:
+            # вызывающий код уже умеет отвечать None на отсутствующего подписчика.
+            return {}
         if not blob:
             return {}
         try:
@@ -60,10 +66,28 @@ class EncryptedKeyStore:
         return json.loads(plaintext)
 
     def _write(self, data: dict):
-        plaintext = json.dumps(data).encode()
-        blob = self.fernet.encrypt(plaintext)
-        with open(self.path, "wb") as f:
-            f.write(blob)
+        """Атомарная запись и права только владельцу.
+
+        Прежний `open(path, "wb")` сначала усекал файл до нуля и только потом
+        писал: процесс, умерший между этими двумя шагами, оставлял пустое
+        хранилище, то есть терялись ключи ВСЕХ подписчиков разом, и копи-движок
+        отвечал «no_key» на каждый ордер. os.replace меняет файл целиком, поэтому
+        прежнее содержимое живёт на диске до успешной записи нового."""
+        tmp = f"{self.path}.tmp"
+        blob = self.fernet.encrypt(json.dumps(data).encode())
+        try:
+            with open(tmp, "wb") as f:
+                os.chmod(tmp, 0o600)
+                f.write(blob)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, self.path)
+        finally:
+            # Неудачная замена не должна оставлять лишний файл с ключами:
+            # содержимое то же, что у настоящего хранилища, и доступ к нему
+            # ничем не защищён.
+            if os.path.exists(tmp):
+                os.unlink(tmp)
 
     def set_key(self, follower_id: str, api_key_index: int, private_key: str):
         data = self._read()

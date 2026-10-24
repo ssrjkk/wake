@@ -18,6 +18,7 @@ asyncpg привязано к циклу, в котором открыто, — 
 """
 
 import hashlib
+import math
 import hmac
 import json
 import logging
@@ -1965,6 +1966,198 @@ class TestRateLimitBucket(HttpCase):
             self.assertEqual(self.last[0], "user:tg_9101")
         finally:
             net.TRUSTED_PROXY_IPS = original
+
+
+class TestPredictMarketBoundary(HttpCase):
+    """Граница создания рынков предсказаний.
+
+    JSON умеет переносить NaN и Infinity (это не валидный по RFC 7159 ответ
+    браузера, но curl и любой Python-клиент — да), а Starlette сериализует
+    ответ с allow_nan=False. Поэтому пропущенное внутрь NaN стоит не «пустую
+    карточку рынка», а 500 на публичный GET /predict/markets для всех сразу."""
+
+    CURATOR_JSON = {
+        "X-Curator-Token": testsupport.CURATOR_TOKEN,
+        "Content-Type": "application/json",
+    }
+
+    async def create(self, body: str):
+        return await self.client.post(
+            "/predict/markets/price", content=body.encode(), headers=self.CURATOR_JSON
+        )
+
+    async def test_public_list_survives_a_rejected_market(self):
+        r = await self.create(
+            '{"question":"BTC above 100k?","lighter_market_id":1,"threshold": NaN,'
+            '"comparator":">=","resolve_at":1999999999,"b":100}'
+        )
+        self.assertEqual(r.status_code, 422, r.text[:200])
+        r = await self.create(
+            '{"question":"BTC above 100k?","lighter_market_id":1,"threshold":100000,'
+            '"comparator":">=","resolve_at": NaN,"b":100}'
+        )
+        self.assertEqual(r.status_code, 422)
+        r = await self.create(
+            '{"question":"BTC above 100k?","lighter_market_id":1,"threshold":100000,'
+            '"comparator":">=","resolve_at":1999999999,"b": Infinity}'
+        )
+        self.assertEqual(r.status_code, 422)
+
+        r = await self.client.get("/predict/markets")
+        self.assertEqual(r.status_code, 200, "список не должен падать из-за отказа")
+        self.assertEqual(r.json(), [])
+
+    async def test_valid_market_still_creates_and_lists(self):
+        r = await self.create(
+            '{"question":"BTC above 100k?","lighter_market_id":1,"threshold":100000,'
+            '"comparator":">=","resolve_at":1999999999,"b":100}'
+        )
+        self.assertEqual(r.status_code, 200, r.text[:200])
+        rows = (await self.client.get("/predict/markets")).json()
+        self.assertEqual(len(rows), 1)
+        self.assertTrue(math.isfinite(rows[0]["price_yes"]))
+        self.assertAlmostEqual(rows[0]["price_yes"] + rows[0]["price_no"], 1.0)
+
+    async def test_out_of_range_numbers_are_refused(self):
+        for body in (
+            # дедлайн в прошлом и слишком далеко
+            '{"question":"q?","lighter_market_id":1,"threshold":100000,"comparator":">=","resolve_at":1000000000,"b":100}',
+            '{"question":"q?","lighter_market_id":1,"threshold":100000,"comparator":">=","resolve_at":999999999999,"b":100}',
+            # порог цены обязан быть положительным
+            '{"question":"q?","lighter_market_id":1,"threshold":0,"comparator":">=","resolve_at":1999999999,"b":100}',
+            '{"question":"q?","lighter_market_id":1,"threshold":-5,"comparator":">=","resolve_at":1999999999,"b":100}',
+            # Infinity проходит проверку `gt=0` (он больше нуля), поэтому у
+            # threshold нужен именно allow_inf_nan=False: без него рынок
+            # создаётся, а публичный список после этого падает на сериализации
+            '{"question":"q?","lighter_market_id":1,"threshold": Infinity,"comparator":">=","resolve_at":1999999999,"b":100}',
+            '{"question":"q?","lighter_market_id":1,"threshold": NaN,"comparator":">=","resolve_at":1999999999,"b":100}',
+            '{"question":"q?","lighter_market_id":1,"threshold":100,"comparator":">=","resolve_at":1999999999,"b": Infinity}',
+            # индекс книги Lighter не бывает отрицательным
+            '{"question":"q?","lighter_market_id":-7,"threshold":100,"comparator":">=","resolve_at":1999999999,"b":100}',
+            # ликвидность без потолка = резерв маркетмейкера без потолка
+            '{"question":"q?","lighter_market_id":1,"threshold":100,"comparator":">=","resolve_at":1999999999,"b":1e30}',
+            # вопрос обязано можно прочитать в карточке
+            '{"question":"","lighter_market_id":1,"threshold":100,"comparator":">=","resolve_at":1999999999,"b":100}',
+            '{"question":"'
+            + "д" * 400
+            + '","lighter_market_id":1,"threshold":100,"comparator":">=","resolve_at":1999999999,"b":100}',
+            # сторона не из списка
+            '{"question":"q?","lighter_market_id":1,"threshold":100,"comparator":"=>","resolve_at":1999999999,"b":100}',
+        ):
+            with self.subTest(body=body[:60]):
+                r = await self.create(body)
+                self.assertEqual(r.status_code, 422, r.text[:120])
+        r = await self.client.get("/predict/markets")
+        self.assertEqual(r.json(), [])
+
+    async def test_event_market_shares_the_same_boundary(self):
+        r = await self.client.post(
+            "/predict/markets/event",
+            content=b'{"question":"Who wins?","resolve_at": Infinity,"b":100}',
+            headers={
+                "X-Curator-Token": testsupport.CURATOR_TOKEN,
+                "Content-Type": "application/json",
+            },
+        )
+        self.assertEqual(r.status_code, 422, r.text[:200])
+        r = await self.client.post(
+            "/predict/markets/event",
+            json={"question": "", "resolve_at": 1999999999, "b": 100},
+            headers={"X-Curator-Token": testsupport.CURATOR_TOKEN},
+        )
+        self.assertEqual(r.status_code, 422, "пустой вопрос — не рынок")
+
+    async def test_trade_shares_are_bounded(self):
+        trader = await self.sign_in_telegram(6101)
+        r = await self.client.post(
+            "/predict/markets/price",
+            json={
+                "question": "BTC above 100k?",
+                "lighter_market_id": 1,
+                "threshold": 100000,
+                "comparator": ">=",
+                "resolve_at": 1999999999,
+                "b": 100,
+            },
+            headers={"X-Curator-Token": testsupport.CURATOR_TOKEN},
+        )
+        market_id = r.json()["market_id"]
+        for shares in ("NaN", "Infinity", "1e30", "-1e30", "0"):
+            with self.subTest(shares=shares):
+                r = await self.client.post(
+                    f"/predict/markets/{market_id}/trade",
+                    content=f'{{"outcome":"yes","shares":{shares}}}'.encode(),
+                    headers={**trader, "Content-Type": "application/json"},
+                )
+                self.assertEqual(r.status_code, 422)
+        r = await self.client.get(
+            f"/predict/markets/{market_id}/preview",
+            params={"outcome": "yes", "shares": "NaN"},
+        )
+        self.assertEqual(r.status_code, 400, "preview считает цену тем же правилом")
+
+    async def test_nan_in_any_float_field_answers_422_not_500(self):
+        """Общий случай, не только Predict: поле с allow_inf_nan=False отдаёт
+        ошибку валидации, в `input` которой лежит тот самый NaN. До санитизации
+        такой ответ не сериализовался, и отказ выглядел как 500."""
+        r = await self.client.post(
+            "/predict/markets/event",
+            content=b'{"question":"Who wins?","resolve_at": NaN,"b":100}',
+            headers={
+                "X-Curator-Token": testsupport.CURATOR_TOKEN,
+                "Content-Type": "application/json",
+            },
+        )
+        self.assertEqual(r.status_code, 422, r.text[:200])
+        body = r.json()
+        self.assertEqual(body["error"]["code"], "VALIDATION_ERROR")
+        detail = body["error"]["details"][0]
+        self.assertEqual(detail["loc"][-1], "resolve_at")
+        self.assertEqual(detail["input"], "nan", "NaN в ответе — строка, не float")
+
+    async def test_broken_comparator_row_is_409_not_500(self):
+        """Создать рынок с другим условием Literal не даёт, поэтому строка с
+        битым comparator — это прямая правка в базе. Резолюция обязана ответить
+        409, а не ValueError наружу."""
+        import lighter_rest
+        from sqlalchemy import text as sa_text
+        from database import async_session_factory
+
+        r = await self.client.post(
+            "/predict/markets/price",
+            json={
+                "question": "BTC above 100k?",
+                "lighter_market_id": 1,
+                "threshold": 100000,
+                "comparator": ">=",
+                "resolve_at": 1999999999,
+                "b": 100,
+            },
+            headers={"X-Curator-Token": testsupport.CURATOR_TOKEN},
+        )
+        market_id = r.json()["market_id"]
+        async with async_session_factory() as session:
+            await session.execute(
+                sa_text(
+                    "UPDATE predict_markets SET comparator = '=>', "
+                    "resolve_at = now() - interval '1 hour' WHERE id = :id"
+                ),
+                {"id": market_id},
+            )
+            await session.commit()
+
+        original = lighter_rest.get_price_at
+        lighter_rest.get_price_at = lambda mid, when, network: 120_000.0
+        try:
+            r = await self.client.post(
+                f"/predict/markets/{market_id}/resolve-price",
+                json={"network": "mainnet"},
+                headers={"X-Curator-Token": testsupport.CURATOR_TOKEN},
+            )
+        finally:
+            lighter_rest.get_price_at = original
+        self.assertEqual(r.status_code, 409, r.text[:200])
+        self.assertIn("=>", r.json()["error"]["message"])
 
 
 if __name__ == "__main__":

@@ -163,7 +163,12 @@ answered with the first one's tx_hash.
 
 `backend/encrypted_key_store.py` stores follower keys as a Fernet
 (AES-128-CBC + HMAC) blob at `WAKE_KEYSTORE_PATH`, keyed by `WAKE_MASTER_KEY`.
-That is encryption at rest, and it is honest about its limit: the master key sits
+The blob is rewritten atomically — temp file, `fsync`, `os.replace` — with
+owner-only `0600` permissions, and the constructor never creates the file: an
+interrupted write cannot leave a truncated keystore, because losing this file
+means losing every follower's key at once, and a mistyped path must not conjure
+an empty store next to the real one. That is encryption at rest, and it is
+honest about its limit: the master key sits
 in the environment of the same host that decrypts it, so a host compromise
 yields both. An HSM or KMS keeps signing inside a hardware or IAM boundary and
 never hands the raw key to the process; that is infrastructure, not tidier
@@ -419,7 +424,12 @@ tx_hash первого, не отправив второй.
 ### Хранение ключей
 
 `backend/encrypted_key_store.py` хранит ключи подписчиков как Fernet-блоб
-(AES-128-CBC + HMAC) по пути `WAKE_KEYSTORE_PATH` под `WAKE_MASTER_KEY`. Это
+(AES-128-CBC + HMAC) по пути `WAKE_KEYSTORE_PATH` под `WAKE_MASTER_KEY`. Блоб
+перезаписывается атомарно — временный файл, `fsync`, `os.replace` — с правами
+`0600` только для владельца, и конструктор файл не создаёт: оборванная запись не
+может оставить обрезанное хранилище, потому что потеря этого файла означает
+одномоментную потерю ключей всех подписчиков, а опечатка в пути не должна
+породить пустое хранилище рядом с настоящим. Это
 шифрование at rest, и оно честно про свою границу: мастер-ключ лежит в окружении
 того же хоста, который его расшифровывает, поэтому компрометация хоста даёт
 атакующему и данные, и ключ. HSM или KMS держат подпись внутри аппаратного или
