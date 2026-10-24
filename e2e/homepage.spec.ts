@@ -127,6 +127,80 @@ test.describe("Оболочка приложения", () => {
     expect(errors).toEqual([]);
   });
 
+  test("переключатель публикации пишет в базу и выключает зеркалирование", async ({ page }) => {
+    // Публикация лидера — единственная кнопка в Терминале, у которой есть
+    // денежное последствие для чужих счетов: mirror_engine читает подписки по
+    // строке leaders. Проверка фиксирует и что контрол существует, и что он
+    // ходит на PATCH /leaders/{id}/active, а не просто меняет надпись.
+    await page.addInitScript(() => {
+      localStorage.setItem("wake.session.v1", JSON.stringify({
+        token: "test-only-session", userId: "0xwallet", expiresAt: Date.now() / 1000 + 3600,
+        lighterAccountIndex: 7, label: "@vega", via: "wallet",
+      }));
+    });
+    await page.route("**/health", (route) => route.fulfill({ json: { status: "ok", network: "mainnet", dry_run: true } }));
+    await page.route("**/ready", (route) => route.fulfill({ json: { status: "ready" } }));
+    await page.route("**/follows", (route) => route.fulfill({ json: [] }));
+    await page.route("**/subscription", (route) => route.fulfill({ json: { tier: "free", has_ai_agent: false, has_copy_trading: true, has_predict_markets: true } }));
+    await page.route("**/api/v1/account?*", (route) => route.fulfill({ json: { sub_accounts: [] } }));
+    await page.route("**/api/v1/orderBooks?*", (route) => route.fulfill({ json: { order_books: [{
+      symbol: "BTC", market_id: 0, market_type: "perp", status: "active", taker_fee: "0", maker_fee: "0",
+      min_base_amount: "0.00001", min_quote_amount: "10", supported_price_decimals: 1,
+      supported_size_decimals: 5, open_interest: "370.84",
+    }] } }));
+    await page.route("**/api/v1/candles?*", (route) => route.fulfill({ json: { c: [] } }));
+    await page.route("**/api/v1/funding-rates", (route) => route.fulfill({ json: { funding_rates: [] } }));
+
+    const seen: string[] = [];
+    await page.route("**/leaders/mine", (route) => {
+      seen.push("mine");
+      return route.fulfill({ json: { leader: null } });
+    });
+    await page.route("**/leaders", (route) => {
+      seen.push("register");
+      return route.fulfill({ json: { leader_id: "leader-1", active: true } });
+    });
+    await page.route("**/leaders/leader-1/active", (route) => {
+      seen.push(`patch:${route.request().postDataJSON()?.active}`);
+      return route.fulfill({ json: { leader_id: "leader-1", active: false } });
+    });
+
+    const switcher = page.getByRole("button", { name: "Публиковать мои сделки" });
+    await page.goto("/");
+    await nav(page).getByRole("button", { name: "Терминал" }).click();
+
+    await expect(switcher).toHaveAttribute("aria-pressed", "false");
+    await switcher.click();
+    await expect(switcher).toHaveAttribute("aria-pressed", "true");
+    await expect(page.getByRole("status")).toContainText("Публикация включена");
+
+    await switcher.click();
+    await expect(switcher).toHaveAttribute("aria-pressed", "false");
+    // StrictMode в dev-сборке вызывает эффект дважды, поэтому подряд идущие
+    // повторы сворачиваем: важен порядок обращений, а не их число в dev.
+    expect(seen.filter((entry, i) => entry !== seen[i - 1])).toEqual([
+      "mine",
+      "register",
+      "patch:false",
+    ]);
+  });
+
+  test("чип подписания показывает состояние локального signing service", async ({ page }) => {
+    // Ордер из браузера подписывает не сайт, а локальный процесс, и без этой
+    // строки человек тыкал бы «Открыть long» вслепую, получая «Failed to fetch».
+    await page.route("**/api/v1/orderBooks?*", (route) => route.fulfill({ json: { order_books: [{
+      symbol: "BTC", market_id: 0, market_type: "perp", status: "active", taker_fee: "0", maker_fee: "0",
+      min_base_amount: "0.00001", min_quote_amount: "10", supported_price_decimals: 1,
+      supported_size_decimals: 5, open_interest: "370.84",
+    }] } }));
+    await page.route("**/api/v1/candles?*", (route) => route.fulfill({ json: { c: [] } }));
+    await page.route("**/api/v1/funding-rates", (route) => route.fulfill({ json: { funding_rates: [] } }));
+    await page.route("http://localhost:8787/health", (route) => route.fulfill({ status: 200, json: { status: "ok" } }));
+    await page.goto("/");
+    await nav(page).getByRole("button", { name: "Терминал" }).click();
+    await expect(page.getByText("подписание: отвечает")).toBeVisible();
+  });
+
   test("без ответа Lighter в Терминале — сообщение об отсутствии данных, а не пустые цифры", async ({ page }) => {
     await page.goto("/");
     await nav(page).getByRole("button", { name: "Терминал" }).click();

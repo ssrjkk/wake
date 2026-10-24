@@ -313,13 +313,13 @@ export default function Dashboard({ setTab, setAsset }: DashboardProps) {
           <table style={{ width: "100%", fontSize: "12px", borderCollapse: "collapse", minWidth: "700px" }} aria-label="Таблица данных">
             <thead>
               <tr style={{ textAlign: "left", fontSize: "11px", color: "var(--text-muted)", borderBottom: "1px solid #1e1e1e", background: "rgba(26, 26, 26, 0.3)" }}>
-                <th style={{ padding: "10px 16px", fontWeight: 500 }}>#</th>
-                <th style={{ padding: "10px 8px", fontWeight: 500 }}>Актив</th>
-                <th style={{ padding: "10px 8px", fontWeight: 500 }}>Тип</th>
-                <th style={{ padding: "10px 8px", fontWeight: 500, textAlign: "right" }}>Mid-цена</th>
-                <th style={{ padding: "10px 8px", fontWeight: 500, textAlign: "right" }}>Tick size</th>
-                <th style={{ padding: "10px 8px", fontWeight: 500, textAlign: "right" }}>Step size</th>
-                <th style={{ padding: "10px 8px", fontWeight: 500 }}>Статус</th>
+                <th scope="col" style={{ padding: "10px 16px", fontWeight: 500 }}>#</th>
+                <th scope="col" style={{ padding: "10px 8px", fontWeight: 500 }}>Актив</th>
+                <th scope="col" style={{ padding: "10px 8px", fontWeight: 500 }}>Тип</th>
+                <th scope="col" style={{ padding: "10px 8px", fontWeight: 500, textAlign: "right" }}>Mid-цена</th>
+                <th scope="col" style={{ padding: "10px 8px", fontWeight: 500, textAlign: "right" }}>Tick size</th>
+                <th scope="col" style={{ padding: "10px 8px", fontWeight: 500, textAlign: "right" }}>Step size</th>
+                <th scope="col" style={{ padding: "10px 8px", fontWeight: 500 }}>Статус</th>
               </tr>
             </thead>
             <tbody>
@@ -443,7 +443,8 @@ export default function Dashboard({ setTab, setAsset }: DashboardProps) {
           <Users style={{ width: "14px", height: "14px", color: "#3b82f6", marginBottom: "8px" }} />
           <div style={{ color: "#fafafa", fontWeight: 500, fontSize: "13px", marginBottom: "4px" }}>Копирование сделок</div>
           <div style={{ color: "var(--text-muted)", fontSize: "11px", lineHeight: 1.5 }}>
-            Лидер торгует своим депозитом; его сделка повторяется пропорционально аллокации. Комиссия — б.п. от профита.
+            Лидер торгует своим депозитом; его сделка повторяется пропорционально аллокации. Комиссия — б.п. от скопированной сделки,
+            в базе она объявлена и пока не списывается.
           </div>
         </button>
         <button onClick={() => setTab("risk")} style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", padding: "12px", textAlign: "left", cursor: "pointer", transition: "border-color 0.15s" }}

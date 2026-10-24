@@ -109,6 +109,18 @@ curl -X POST http://localhost:8000/follows \
 
 `POST /leaders` takes no account index: it is read from the follower record the wallet sign-in wrote, so a leader card cannot show someone else's statistics. The Lighter index appears there only if the address was found on Lighter at sign-in — hence 403 `LIGHTER_ACCOUNT_NOT_LINKED` for a Telegram-only session.
 
+Publication is database state, not browser state:
+
+```bash
+curl -s http://localhost:8000/leaders/mine -H "Authorization: Bearer $TOKEN"
+curl -X PATCH http://localhost:8000/leaders/<leader_id>/active \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"active": false}'
+```
+
+`GET /leaders` (the Discover feed) returns published leaders only, which is why the owner's own record is read through `/leaders/mine`: without the `active` flag there, "turned off" and "never published" are the same empty answer. `PATCH /leaders/{id}/active` is gated on owning the leader, and the body must be a JSON boolean — `1` and `"yes"` are rejected rather than silently read as true. A deactivated leader drops out of Discover and `active_follows_for_leader()` returns no rows, which is the one query both `leader_listener.py` and `POST /simulate-mirror` take their followers from: the leader row, the subscriptions and the mirror log all survive, and no new order is derived from his trades. Re-running `POST /leaders` publishes the same record again. In the UI this is the "Публиковать мои сделки" switch in the Terminal tab; the switch reads and writes the server, so a page reload shows what the copy engine actually sees.
+
 The listener that turns a leader's position changes into follower orders runs per leader:
 
 ```bash
@@ -206,7 +218,7 @@ Price markets close themselves at the deadline only while this process runs; oth
 # backend — run from backend/; needs a scratch PostgreSQL database
 createdb wake_test
 export WAKE_TEST_DATABASE_URL=postgresql+asyncpg://wake:wake@localhost:5432/wake_test
-python -m unittest discover        # 404 tests, all through discovery
+python -m unittest discover        # 420 tests, all through discovery
 python -m pytest -q                # the same set under pytest (+ Allure in CI)
 
 # frontend

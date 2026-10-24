@@ -88,6 +88,14 @@ class UpdateLeaderFee(BaseModel):
         return v
 
 
+class UpdateLeaderActive(BaseModel):
+    """`active` — строго bool. В мягком режиме pydantic превращает в истину
+    «yes», «1» и «on», и запрос, который человек писал как «выключить», стал бы
+    включением: строка в JSON-поле — это не то же самое, что false."""
+
+    active: bool = Field(strict=True)
+
+
 class SimulateMirrorRequest(BaseModel):
     """Вход ручного прогона mirror_engine.
 
@@ -147,6 +155,21 @@ async def list_leaders():
     return await db.all_leaders()
 
 
+@router.get("/leaders/mine")
+async def own_leader(user_id: str = Depends(require_user)):
+    """Свой лидер — вместе с выключенными публикациями.
+
+    Публичный GET /leaders отдаёт только активных, поэтому по нему интерфейс не
+    может восстановить положение рубильника после перезагрузки страницы: выключен
+    лидер или его никогда не было. Здесь ответ — строка целиком, с active.
+    """
+    account_index = await _own_account_index(user_id)
+    if account_index is None:
+        return {"leader": None}
+    row = await db.leader_by_account_index(account_index)
+    return {"leader": row}
+
+
 @router.get("/follows/by-leader/{leader_id}")
 async def list_follows_for_leader(leader_id: str):
     """Публичная витрина лидера: сколько людей и какой капитал.
@@ -202,7 +225,13 @@ async def register_leader(req: RegisterLeader, user_id: str = Depends(require_us
 
     existing = await db.leader_by_account_index(account_index)
     if existing:
-        return {"leader_id": existing["id"]}
+        if not existing["active"]:
+            # «Стать лидером» на уже существующей записи включает её: иначе
+            # человек нажал бы включатель, получил бы leader_id и уверенность,
+            # что публикуется, а mirror_engine по-прежнему не видел бы ни одного
+            # подписчика.
+            await db.set_leader_active(existing["id"], True)
+        return {"leader_id": existing["id"], "active": True}
 
     leader_id = str(uuid.uuid4())
     try:
@@ -214,7 +243,7 @@ async def register_leader(req: RegisterLeader, user_id: str = Depends(require_us
         existing = await db.leader_by_account_index(account_index)
         if existing is None:
             raise
-        return {"leader_id": existing["id"]}
+        return {"leader_id": existing["id"], "active": existing["active"]}
     await al.log_action(
         al.AuditEntry(
             actor=user_id,
@@ -228,7 +257,32 @@ async def register_leader(req: RegisterLeader, user_id: str = Depends(require_us
             success=True,
         )
     )
-    return {"leader_id": leader_id}
+    return {"leader_id": leader_id, "active": True}
+
+
+@router.patch("/leaders/{leader_id}/active")
+async def update_leader_active(
+    leader_id: str, req: UpdateLeaderActive, user_id: str = Depends(require_user)
+):
+    """Включить и выключить публикацию сделок.
+
+    Право на неё решает владение лидером (_owned_leader), а не знание id.
+    Выключение останавливает зеркалирование: active_follows_for_leader()
+    перестаёт отдавать подписчиков, и leader_listener больше не двигает чужие
+    счета по сигналам того, кто сказал «я больше не публикую». Подписки и
+    mirror_log не трогаются — это состояние человека, а не его история."""
+    row = await _owned_leader(user_id, leader_id)
+    await db.set_leader_active(leader_id, req.active)
+    await al.log_action(
+        al.AuditEntry(
+            actor=user_id,
+            action="leader_activated" if req.active else "leader_deactivated",
+            resource=f"leader:{leader_id}",
+            details={"active": req.active, "handle": row["handle"]},
+            success=True,
+        )
+    )
+    return {"leader_id": leader_id, "active": req.active}
 
 
 @router.patch("/leaders/{leader_id}/fee")

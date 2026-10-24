@@ -109,6 +109,18 @@ curl -X POST http://localhost:8000/follows \
 
 `POST /leaders` не принимает индекс аккаунта: он берётся из записи follower, которую создал вход кошельком, — иначе карточка лидера показывала бы чужую статистику. Индекс Lighter появляется там, только если адрес нашёлся на Lighter при входе, поэтому Telegram-сессия без кошелька получает 403 `LIGHTER_ACCOUNT_NOT_LINKED`.
 
+Публикация — состояние в базе, а не в памяти вкладки:
+
+```bash
+curl -s http://localhost:8000/leaders/mine -H "Authorization: Bearer $TOKEN"
+curl -X PATCH http://localhost:8000/leaders/<leader_id>/active \
+  -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"active": false}'
+```
+
+Публичный `GET /leaders` (витрина Discover) отдаёт только опубликованных лидеров — поэтому свою запись читают через `/leaders/mine`: без флага `active` «выключен» и «никогда не публиковался» были бы одним пустым ответом. `PATCH /leaders/{id}/active` доступен владельцу лидера, и в теле обязан быть JSON-boolean: `1` и `"yes"` отвергаются, а не читаются как истина. Выключенный лидер уходит из Discover, а `active_follows_for_leader()` не отдаёт строк — это единственный запрос, из которого подписчиков берут и `leader_listener.py`, и `POST /simulate-mirror`. Строка лидера, подписки и mirror_log при этом остаются, но новых ордеров из его сделок не выводится. Повторный `POST /leaders` публикует ту же запись снова. В интерфейсе это переключатель «Публиковать мои сделки» во вкладке «Терминал»: он читает сервер и пишет на сервер, поэтому перезагрузка страницы показывает то же, что видит копи-движок.
+
 Листенер, который превращает изменения позиции лидера в ордера подписчиков, запускается на каждого лидера:
 
 ```bash
@@ -206,7 +218,7 @@ Price-рынки закрываются по дедлайну только по�
 # бэкенд — из backend/; нужна отдельная PostgreSQL-база для тестов
 createdb wake_test
 export WAKE_TEST_DATABASE_URL=postgresql+asyncpg://wake:wake@localhost:5432/wake_test
-python -m unittest discover        # 404 теста, всё через discover
+python -m unittest discover        # 420 тестов, всё через discover
 python -m pytest -q                # тот же набор под pytest (в CI ещё и Allure)
 
 # фронтенд

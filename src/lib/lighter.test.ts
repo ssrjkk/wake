@@ -1,7 +1,31 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { BACKEND_URL } from './config'
 import { jsonBody } from '../test/request'
-import { setNetwork, getNetwork, getOrderBooks, getCandles, getRecentTrades, getAccountByL1Address, getMarketOverview, listOwnFollows, createFollow, setFollowPaused, deleteFollow, getMirrorLog, registerLeader, toBaseUnits, toPriceTicks, randomClientOrderIndex } from './lighter'
+import { setNetwork, getNetwork, getOrderBooks, getCandles, getRecentTrades, getAccountByL1Address, getMarketOverview, listOwnFollows, createFollow, setFollowPaused, deleteFollow, getMirrorLog, registerLeader, getMyLeader, setLeaderActive, openInterestUsd, toBaseUnits, toPriceTicks, randomClientOrderIndex, type OrderBook } from './lighter'
+
+describe('открытый интерес в долларах', () => {
+  // Живой /orderBooks (mainnet, 2026-10-24) отдаёт open_interest_usd СТРОКОЙ
+  // ("9920884.729544"), у 16 из 225 активных рынков — "0.000000". На типе
+  // «number» работал только случайный coercion в < и -, а `?.toFixed()` на
+  // строке падал бы уже в рантайме.
+  const book = (over: Partial<OrderBook>) =>
+    ({ symbol: 'BTC', market_id: 0, market_type: 'perp', status: 'active', ...over }) as OrderBook
+
+  it('считает доллары из строки книги', () => {
+    expect(openInterestUsd(book({ open_interest_usd: '9920884.729544' }))).toBeCloseTo(9920884.729544, 4)
+  })
+
+  it('нулевой и отсутствующий интерес дают 0, а не NaN', () => {
+    expect(openInterestUsd(book({ open_interest_usd: '0.000000' }))).toBe(0)
+    expect(openInterestUsd(book({}))).toBe(0)
+    expect(openInterestUsd(book({ open_interest_usd: '' }))).toBe(0)
+    expect(openInterestUsd(book({ open_interest_usd: 'не число' }))).toBe(0)
+  })
+
+  it('не возвращает отрицательное значение, которое перемешало бы сортировку', () => {
+    expect(openInterestUsd(book({ open_interest_usd: '-5' }))).toBe(0)
+  })
+})
 
 describe('масштабирование ордера под рынок', () => {
   it('не теряет шаг цены на float-шуме', () => {
@@ -299,13 +323,40 @@ describe('lighter', () => {
     // Индекс аккаунта в теле отсутствует сознательно: его берёт из записи входа
     // бэкенд, и присланный клиентом индекс позволил бы опубликовать чужой аккаунт.
     it('publishes a leader by handle and fee only', async () => {
-      const fetchMock = ok({ leader_id: 'l7' })
+      const fetchMock = ok({ leader_id: 'l7', active: true })
 
       await expect(registerLeader('@sergey', 12)).resolves.toBe('l7')
       const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
       expect(url).toBe(`${BACKEND_URL}/leaders`)
       expect(init.method).toBe('POST')
       expect(jsonBody(init)).toEqual({ handle: '@sergey', fee_bps: 12 })
+    })
+
+    // Публикация — состояние в базе, а не в памяти вкладки. /leaders отдаёт
+    // только активных, поэтому для восстановления рубильника нужен /leaders/mine:
+    // иначе «выключен» неотличим от «никогда не публиковался».
+    it('reads own leader including the deactivated one', async () => {
+      const fetchMock = ok({ leader: { id: 'l7', handle: '@sergey', fee_bps: 12, active: false } })
+
+      await expect(getMyLeader()).resolves.toEqual({ id: 'l7', handle: '@sergey', fee_bps: 12, active: false })
+      expect(fetchMock.mock.calls[0][0]).toBe(`${BACKEND_URL}/leaders/mine`)
+    })
+
+    it('reads null leader when the account was never published', async () => {
+      ok({ leader: null })
+      await expect(getMyLeader()).resolves.toBeNull()
+    })
+
+    it('switches publication with a boolean on a dedicated route', async () => {
+      const fetchMock = ok({ leader_id: 'l7', active: false })
+
+      await setLeaderActive('l 7', false)
+      const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+      expect(url).toBe(`${BACKEND_URL}/leaders/l%207/active`)
+      expect(init.method).toBe('PATCH')
+      // не «1»/«yes»: бэкенд принимает только JSON-bool, иначе выключение
+      // прочиталось бы включением
+      expect(jsonBody(init)).toEqual({ active: false })
     })
 
     it('refuses to read follows when the session expired', async () => {

@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest'
-import { avatarColor, fmt, fmtPrice, fmtPct, fmtUsdCompact, shortHandle, usd } from './utils'
+import { avatarColor, categorizeMarket, fmt, fmtPrice, fmtPct, fmtUsdCompact, shortHandle, usd } from './utils'
+import { COMMODITY_SYMBOLS, FOREX_SYMBOLS, STOCK_SYMBOLS } from './types'
+import type { OrderBook } from '../lib/lighter'
 
 // Случаи взяты те же, что в backend/test_telegram_bot.py: смысл этих функций не в
 // том, чтобы «красиво печатать», а в том, чтобы Telegram и сайт показывали одно
@@ -52,7 +54,19 @@ describe('components/utils', () => {
   describe('avatarColor', () => {
     it('is stable per handle and drawn from the existing palette', () => {
       expect(avatarColor('@northstar')).toBe(avatarColor('@northstar'))
-      expect(avatarColor('@northstar')).toMatch(/^bg-/)
+      // Цвет, а не имя класса: панели красят аватар через style={{ background }},
+      // и «bg-cyan-500» браузер отбрасывает как невалидное значение — круг был
+      // прозрачным.
+      expect(avatarColor('@northstar')).toMatch(/^#[0-9a-f]{6}$/)
+    })
+
+    it('stays inside the declared palette', () => {
+      const handles = ['@a', '@northstar', '@vega.eth', '@driftking', '@x1', '@мимо', '', '@qqqqqq']
+      const hexes = handles.map(avatarColor)
+      for (const h of hexes) expect(h).toMatch(/^#[0-9a-f]{6}$/)
+      // Разные handle обязаны иногда давать разные цвета, иначе палитра из шести
+      // значений — декорация: проверка на фикстурном наборе, а не «в среднем».
+      expect(new Set(hexes).size).toBeGreaterThan(1)
     })
   })
 
@@ -88,5 +102,50 @@ describe('components/utils', () => {
       expect(fmtPct(0.002)).toBe('+0.20%')
       expect(fmtPct(-0.002)).toBe('-0.20%')
     })
+  })
+})
+
+describe('категория рынка по живым символам книги Lighter', () => {
+  // У /orderBooks нет поля «тип инструмента» (market_deployer у всех "lighter",
+  // base_asset_id/quote_asset_id/multiplier не различают классы — проверено на
+  // живом ответе 2026-10-24), поэтому категория считается по списку тикеров.
+  // Список обязан покрывать то, что в книге есть: «BRENT», «GOLD» и «SILVER»
+  // никогда не совпадали ни с одной строкой, а BRENTOIL, XPT и USDHKD в книге
+  // есть и падали в Crypto.
+  const book = (symbol: string, market_type: 'perp' | 'spot' = 'perp'): OrderBook =>
+    ({ symbol, market_id: 1, market_type, status: 'active' }) as OrderBook
+
+  it('разводит классы, которые реально торгуются', () => {
+    expect(categorizeMarket(book('BTC'))).toBe('Crypto')
+    expect(categorizeMarket(book('AAPL'))).toBe('Stocks')
+    expect(categorizeMarket(book('SPY'))).toBe('Stocks')
+    expect(categorizeMarket(book('US10Y'))).toBe('Stocks')
+    expect(categorizeMarket(book('EURUSD'))).toBe('Forex')
+    expect(categorizeMarket(book('USDHKD'))).toBe('Forex')
+    expect(categorizeMarket(book('XAU'))).toBe('Commodities')
+    expect(categorizeMarket(book('BRENTOIL'))).toBe('Commodities')
+    expect(categorizeMarket(book('XPT'))).toBe('Commodities')
+  })
+
+  it('спот — это спот, каким бы тикером он ни был', () => {
+    expect(categorizeMarket(book('ETH/USDC', 'spot'))).toBe('Spot')
+    expect(categorizeMarket(book('AAPL/USDC', 'spot'))).toBe('Spot')
+  })
+
+  it('списки классов не пересекаются: один тикер не может быть и акцией, и валютой', () => {
+    const sets = [FOREX_SYMBOLS, COMMODITY_SYMBOLS, STOCK_SYMBOLS]
+    for (let i = 0; i < sets.length; i++) {
+      for (let j = i + 1; j < sets.length; j++) {
+        expect([...sets[i]].filter((s) => sets[j].has(s))).toEqual([])
+      }
+    }
+  })
+
+  it('в списках нет символа длиннее того, что принимает диплинк', () => {
+    // src/lib/deeplink.ts допускает asset из 1–12 знаков [A-Z0-9$]; тикер
+    // длиннее нельзя ни открыть ссылкой, ни найти в фильтре по-человечески.
+    for (const s of [...FOREX_SYMBOLS, ...COMMODITY_SYMBOLS, ...STOCK_SYMBOLS]) {
+      expect(s).toMatch(/^[A-Z0-9$]{1,12}$/)
+    }
   })
 })

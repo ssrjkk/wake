@@ -65,10 +65,21 @@ export type OrderBook = {
   // любое сравнение требует Number() и явной подписи "в активе".
   open_interest: string;
   // Рядом с open_interest Lighter отдаёт и тот же интерес в долларах (замер
-  // 2026-10-23: поле есть у всех 246 строк книги). Именно он сопоставим между
-  // BTC и DOGE, поэтому ранжирование кандидатов на хедж идёт по нему.
-  open_interest_usd?: number;
+  // 2026-10-24: ключ есть у всех 225 активных рынков, у 16 из них значение
+  // "0.000000" — новый рынок без открытого интереса). Формат — строка вида
+  // "9920884.729544". Именно это поле сопоставимо между BTC и DOGE, поэтому по
+  // нему ранжируются кандидаты на хедж. Тип — string, как у min_base_amount:
+  // объявить его числом значило бы брать `toFixed` со строки и полагаться на то,
+  // что `<` и `-` случайно приводят строку к числу.
+  open_interest_usd?: string;
 };
+
+/** Открытый интерес в долларах числом. Пустое поле и мусор дают 0: рынок просто
+ *  не попадёт в отбор, тогда как NaN в сортировке ведёт себя как «больше всех». */
+export function openInterestUsd(m: OrderBook): number {
+  const v = Number(m.open_interest_usd);
+  return Number.isFinite(v) && v > 0 ? v : 0;
+}
 
 export async function getOrderBooks(filter: "all" | "spot" | "perp" = "perp"): Promise<OrderBook[]> {
   const res = await fetch(`${BASE_URL()}/orderBooks?filter=${filter}`);
@@ -358,12 +369,40 @@ export async function getMirrorLog(limit = 50): Promise<MirrorLogRow[]> {
 // кошелька, сам бэкенд. Присланный индекс позволил бы опубликовать лидера под
 // чужим аккаунтом и чужой статистикой.
 export async function registerLeader(handle: string, feeBps = 8): Promise<string> {
-  const data = await backendJson<{ leader_id: string }>("/leaders", {
+  const data = await backendJson<{ leader_id: string; active: boolean }>("/leaders", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ handle, fee_bps: feeBps }),
   });
   return data.leader_id;
+}
+
+export type OwnLeader = {
+  id: string;
+  handle: string;
+  fee_bps: number;
+  active: boolean;
+};
+
+/** Свой лидер — включая выключенного.
+
+    Публичный listLeaders() отдаёт только опубликованных, поэтому по нему нельзя
+    восстановить положение рубильника после перезагрузки страницы: «выключен» и
+    «никогда не публиковался» сливаются в один пустой ответ. */
+export async function getMyLeader(): Promise<OwnLeader | null> {
+  const data = await backendJson<{ leader: OwnLeader | null }>("/leaders/mine");
+  return data.leader;
+}
+
+/** Выключить и включить публикацию. Пока не ответит бэкенд, интерфейс не
+ *  показывает переключатель в новом положении: выключение, которое база не
+ *  приняла, оставило бы человека верить, что его сделки больше не копируют. */
+export async function setLeaderActive(leaderId: string, active: boolean): Promise<void> {
+  await backendJson(`/leaders/${encodeURIComponent(leaderId)}/active`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ active }),
+  });
 }
 
 export type LeaderStats = { follower_count: number; total_aum_usd: number };

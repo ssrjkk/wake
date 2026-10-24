@@ -1,6 +1,8 @@
 import { useState, useEffect } from "react";
 import { X, Loader2 } from "lucide-react";
-import { getCandles, type OrderBook } from "../lib/lighter";
+import { getCandles, openInterestUsd, type OrderBook } from "../lib/lighter";
+import { backendJson, errorText } from "../lib/backend";
+import type { RiskAnalysis, HedgeSuggestion, RiskPosition } from "./types";
 
 /** Простые доходности по закрытиям. Нулевое закрытие — отсутствующие данные:
  *  деление на него даёт Infinity, а Infinity в ряду превращает волатильность
@@ -15,8 +17,6 @@ function closesToReturns(closes: number[]): number[] {
   }
   return out;
 }
-import { backendJson, errorText } from "../lib/backend";
-import type { RiskAnalysis, HedgeSuggestion, RiskPosition } from "./types";
 
 interface RiskProps {
   markets: OrderBook[];
@@ -26,8 +26,10 @@ interface RiskProps {
 export default function Risk({ markets, setToast }: RiskProps) {
   const [riskPositions, setRiskPositions] = useState<RiskPosition[]>([]);
   const [riskPickerOpen, setRiskPickerOpen] = useState(false);
+  const [pickerQuery, setPickerQuery] = useState("");
   const [riskResult, setRiskResult] = useState<RiskAnalysis | null>(null);
-  const [hedgeResult, setHedgeResult] = useState<{ suggestion: HedgeSuggestion | null } | null>(null);
+  const [hedgeResult, setHedgeResult] = useState<{ target: RiskPosition; suggestion: HedgeSuggestion | null } | null>(null);
+  const [hedgeTarget, setHedgeTarget] = useState(0);
   const [riskBusy, setRiskBusy] = useState(false);
 
   useEffect(() => {
@@ -39,14 +41,24 @@ export default function Risk({ markets, setToast }: RiskProps) {
     return () => window.removeEventListener("keydown", onKey);
   }, [riskPickerOpen]);
 
+  // Поиск по списку: 225 живых рынков и «первые 60 в порядке книги» — это не
+  // выбор, а лотерея. Cap оставлен, но считается уже по совпадениям.
+  const pickerMatches = (() => {
+    const q = pickerQuery.trim().toUpperCase();
+    const base = q ? markets.filter((m) => m.symbol.toUpperCase().includes(q)) : markets;
+    return base.slice(0, 60);
+  })();
+
   function addRiskPosition(m: OrderBook, side: "long" | "short") {
     setRiskPositions((p) => [...p, { marketId: m.market_id, symbol: m.symbol, notionalUsd: 1000, side }]);
     setRiskPickerOpen(false);
+    setPickerQuery("");
   }
 
   function removeRiskPosition(i: number) {
     setRiskPositions((p) => p.filter((_, idx) => idx !== i));
     setRiskResult(null);
+    setHedgeResult(null);
   }
 
   async function analyzePortfolioRisk() {
@@ -91,17 +103,25 @@ export default function Risk({ markets, setToast }: RiskProps) {
 
   async function findHedge() {
     if (riskPositions.length === 0) return;
-    const target = riskPositions[0];
+    // Цель хеджа выбирается явно и подписана в карточке результата: молча хеджировать
+    // riskPositions[0] значило бы, что при пяти позициях человек получал предложение
+    // для первой из них, никак об этом не узнав.
+    const target = riskPositions[Math.min(hedgeTarget, riskPositions.length - 1)];
     setRiskBusy(true);
+    setHedgeResult(null);
     try {
-      // вселенная кандидатов — 15 рынков с наибольшим открытым интересом в
+      // Вселенная кандидатов — 15 рынков с наибольшим открытым интересом в
       // долларах, а не «первые 15 по индексу книги»: best hedge зависел от того,
       // какие строки Lighter вернул раньше, и в списке без ликвидного контрагента
-      // предложение было бы недостижимым.
-      const pool = [...markets]
-        .filter((m) => m.status === "active" && (m.open_interest_usd ?? 0) > 0)
-        .sort((a, b) => (b.open_interest_usd ?? 0) - (a.open_interest_usd ?? 0))
-        .slice(0, 15);
+      // предложение было бы недостижимым. Interest считается из строки книги один
+      // раз, а не по два раза на каждое сравнение.
+      const pool = markets
+        .filter((m) => m.status === "active")
+        .map((m) => ({ market: m, interest: openInterestUsd(m) }))
+        .filter((row) => row.interest > 0)
+        .sort((a, b) => b.interest - a.interest)
+        .slice(0, 15)
+        .map((row) => row.market);
       const series = await Promise.all(
         pool.map(async (m) => {
           const candles = await getCandles(m.market_id, "1h", 30);
@@ -114,7 +134,7 @@ export default function Risk({ markets, setToast }: RiskProps) {
         returnsByMarket[String(m.market_id)] = returns;
         if (m.market_id !== target.marketId) candidates.push([m.market_id, m.symbol]);
       }
-      setHedgeResult(await backendJson<{ suggestion: HedgeSuggestion | null }>("/portfolio/hedge", {
+      const data = await backendJson<{ suggestion: HedgeSuggestion | null }>("/portfolio/hedge", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -122,7 +142,10 @@ export default function Risk({ markets, setToast }: RiskProps) {
           candidates,
           returns_by_market: returnsByMarket,
         }),
-      }));
+      });
+      // Цель запоминается вместе с предложением: если человек после расчёта
+      // переключит селектор, карточка не должна начинать врать, к кому она.
+      setHedgeResult({ target, suggestion: data.suggestion });
     } catch (e) {
       setToast(`Поиск хеджа недоступен: ${errorText(e)}`);
     } finally {
@@ -165,6 +188,9 @@ export default function Risk({ markets, setToast }: RiskProps) {
                   <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
                     <input
                       type="number"
+                      aria-label={`Нотионал позиции ${p.symbol}, USD`}
+                      min={0}
+                      step={100}
                       value={p.notionalUsd}
                       onChange={(e) => {
                         const raw = e.target.valueAsNumber;
@@ -182,11 +208,11 @@ export default function Risk({ markets, setToast }: RiskProps) {
             </div>
           )}
           {riskPositions.length > 0 && (
-            <div style={{ display: "flex", gap: "8px", marginTop: "12px" }}>
+            <div style={{ display: "flex", gap: "8px", marginTop: "12px", flexWrap: "wrap", alignItems: "center" }}>
               <button
                 onClick={() => void analyzePortfolioRisk()}
                 disabled={riskBusy}
-                style={{ flex: 1, background: riskBusy ? "#333" : "#3b82f6", color: "#fff", fontSize: "13px", fontWeight: 600, padding: "12px 8px", borderRadius: "4px", border: "none", cursor: riskBusy ? "not-allowed" : "pointer", minHeight: "44px" }}
+                style={{ flex: 1, minWidth: "160px", background: riskBusy ? "#333" : "#3b82f6", color: "#fff", fontSize: "13px", fontWeight: 600, padding: "12px 8px", borderRadius: "4px", border: "none", cursor: riskBusy ? "not-allowed" : "pointer", minHeight: "44px" }}
               >
                 {riskBusy ? (
                   <span style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "6px" }}>
@@ -195,10 +221,27 @@ export default function Risk({ markets, setToast }: RiskProps) {
                   </span>
                 ) : "Проанализировать"}
               </button>
+              {riskPositions.length > 1 && (
+                <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11px", color: "var(--text-muted)" }}>
+                  хедж для
+                  <select
+                    aria-label="Позиция, для которой ищется хедж"
+                    value={Math.min(hedgeTarget, riskPositions.length - 1)}
+                    onChange={(e) => setHedgeTarget(Number(e.target.value))}
+                    style={{ background: "#0a0a0a", color: "#fafafa", border: "1px solid #2a2a2a", borderRadius: "4px", padding: "8px", fontFamily: "JetBrains Mono, monospace", fontSize: "12px", minHeight: "var(--touch)" }}
+                  >
+                    {riskPositions.map((p, i) => (
+                      <option key={`${p.marketId}:${i}`} value={i}>
+                        {p.symbol} · {p.side}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
               <button
                 onClick={() => void findHedge()}
-                disabled={riskBusy}
-                style={{ flex: 1, background: riskBusy ? "#333" : "#1a1a1a", color: "#fafafa", fontSize: "13px", fontWeight: 600, padding: "12px 8px", borderRadius: "4px", border: "none", cursor: riskBusy ? "not-allowed" : "pointer", minHeight: "44px" }}
+                disabled={riskBusy || riskPositions.length < 1}
+                style={{ flex: 1, minWidth: "140px", background: riskBusy ? "#333" : "#1a1a1a", color: "#fafafa", fontSize: "13px", fontWeight: 600, padding: "12px 8px", borderRadius: "4px", border: "1px solid #2a2a2a", cursor: riskBusy ? "not-allowed" : "pointer", minHeight: "44px" }}
               >
                 Найти хедж
               </button>
@@ -230,18 +273,31 @@ export default function Risk({ markets, setToast }: RiskProps) {
 
       {hedgeResult && (
         <div style={{ background: "#1a1500", border: "1px solid #3d3000", borderRadius: "6px", padding: "16px" }}>
-          <div style={{ fontSize: "11px", color: "#fbbf24", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "8px" }}>Предложение хеджа</div>
+          <div style={{ fontSize: "11px", color: "#fbbf24", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "8px" }}>
+            Хедж к {hedgeResult.target.symbol} ({hedgeResult.target.side})
+          </div>
           {hedgeResult.suggestion ? (
             <div>
-              <p style={{ color: "#fafafa", fontSize: "13px", marginBottom: "4px", margin: 0 }}>
-                {hedgeResult.suggestion.hedge_notional_usd < 0 ? "Short" : "Long"} <span style={{ fontFamily: "JetBrains Mono, monospace" }}>${Math.abs(hedgeResult.suggestion.hedge_notional_usd).toFixed(0)}</span> {hedgeResult.suggestion.symbol}
+              <p style={{ color: "#fafafa", fontSize: "13px", margin: "0 0 4px" }}>
+                {hedgeResult.suggestion.hedge_notional_usd < 0 ? "Short" : "Long"}{" "}
+                <span style={{ fontFamily: "JetBrains Mono, monospace" }}>
+                  ${Math.abs(hedgeResult.suggestion.hedge_notional_usd).toFixed(0)}
+                </span>{" "}
+                {hedgeResult.suggestion.symbol}
               </p>
               <p style={{ color: "var(--text-muted)", fontSize: "12px", margin: 0 }}>
-                Корреляция {(hedgeResult.suggestion.correlation_to_target * 100).toFixed(0)}%, остаточный риск ${hedgeResult.suggestion.resulting_portfolio_vol_usd.toFixed(0)}
+                Корреляция {(hedgeResult.suggestion.correlation_to_target * 100).toFixed(0)}% · риск позиции{" "}
+                <span style={{ fontFamily: "JetBrains Mono, monospace" }}>${hedgeResult.suggestion.unhedged_vol_usd.toFixed(0)}</span> → с хеджем{" "}
+                <span style={{ fontFamily: "JetBrains Mono, monospace", color: "#10b981" }}>
+                  ${hedgeResult.suggestion.resulting_portfolio_vol_usd.toFixed(0)}
+                </span>{" "}
+                на час
               </p>
             </div>
           ) : (
-            <p style={{ color: "var(--text-muted)", fontSize: "13px", margin: 0 }}>Хорошего хеджа среди доступных рынков не нашлось</p>
+            <p style={{ color: "var(--text-muted)", fontSize: "13px", margin: 0 }}>
+              Среди 15 рынков с наибольшим открытым интересом нет такого, рядом с которым риск этой позиции снижается.
+            </p>
           )}
         </div>
       )}
@@ -258,8 +314,22 @@ export default function Risk({ markets, setToast }: RiskProps) {
                 <X style={{ width: "20px", height: "20px" }} />
               </button>
             </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-              {markets.slice(0, 60).map((m) => (
+            <input
+              type="text"
+              autoFocus
+              value={pickerQuery}
+              onChange={(e) => setPickerQuery(e.target.value)}
+              placeholder="Поиск по символу…"
+              aria-label="Поиск рынка для добавления"
+              style={{ width: "100%", boxSizing: "border-box", background: "#0a0a0a", color: "#fafafa", border: "1px solid #2a2a2a", borderRadius: "4px", padding: "10px 12px", marginBottom: "10px", fontFamily: "JetBrains Mono, monospace", fontSize: "12px", outline: "none" }}
+            />
+            <div style={{ display: "flex", flexDirection: "column", gap: "6px", maxHeight: "50vh", overflowY: "auto" }}>
+              {pickerMatches.length === 0 && (
+                <p style={{ color: "var(--text-muted)", fontSize: "13px", textAlign: "center", padding: "24px 0", margin: 0 }}>
+                  {markets.length === 0 ? "Рынки ещё загружаются" : `По «${pickerQuery}» совпадений нет`}
+                </p>
+              )}
+              {pickerMatches.map((m) => (
                 <div key={m.market_id} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: "#1a1a1a", borderRadius: "4px", padding: "8px 12px" }}>
                   <span style={{ color: "#fafafa", fontSize: "13px" }}>{m.symbol}</span>
                   <div style={{ display: "flex", gap: "6px" }}>
@@ -280,7 +350,6 @@ export default function Risk({ markets, setToast }: RiskProps) {
                   </div>
                 </div>
               ))}
-              {markets.length === 0 && <p style={{ color: "var(--text-muted)", fontSize: "13px", textAlign: "center", padding: "24px 0", margin: 0 }}>Рынки ещё загружаются</p>}
             </div>
           </div>
         </div>

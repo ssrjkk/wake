@@ -131,6 +131,10 @@ export default function Funding({ markets, setToast }: FundingProps) {
       setToast(`Для ${row.symbol} нет спот-двойника — вторую ногу построить нечем`);
       return;
     }
+    if (!(capital > 0)) {
+      setToast("Капитал должен быть больше нуля: на каждую ногу берётся половина суммы");
+      return;
+    }
     setBusy(true);
     try {
       const candles = await getCandles(row.marketId, "1h", 2);
@@ -359,8 +363,15 @@ export default function Funding({ markets, setToast }: FundingProps) {
                   <span style={{ color: "var(--text-muted)", marginRight: "4px" }}>$</span>
                   <input
                     type="number"
+                    min={0}
                     value={capital}
-                    onChange={(e) => setCapital(Number(e.target.value))}
+                    onChange={(e) => {
+                      // Тот же valueAsNumber, что у порога APR выше: у «-» и «1e»
+                      // Number(...) даёт NaN, и NaN уходил в capital_usd — бэкенд
+                      // отвечал 422, а в панели стояла пустая строка вместо числа.
+                      const raw = e.target.valueAsNumber;
+                      setCapital(Number.isFinite(raw) ? Math.max(0, raw) : 0);
+                    }}
                     style={{ background: "transparent", color: "#fafafa", fontFamily: "'JetBrains Mono', monospace", border: "none", outline: "none", width: "100px" }}
                   />
                 </div>

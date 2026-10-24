@@ -75,6 +75,21 @@ async def upsert_leader(
         await session.commit()
 
 
+async def set_leader_active(id_: str, active: bool) -> None:
+    """Включить и выключить публикацию лидера.
+
+    Выключенный лидер не отдаёт подписчиков ни листенеру, ни витрине: строка
+    leaders остаётся (вместе с ней держатся follows и mirror_log), но
+    зеркалирование его сделок останавливается. Без этого рубильник в интерфейсе
+    был бы косметикой — подписчики продолжали бы копировать человека, который
+    объявил, что больше не публикуется."""
+    async with async_session_factory() as session:
+        await session.execute(
+            update(Leader).where(Leader.id == id_).values(active=active)
+        )
+        await session.commit()
+
+
 async def upsert_follower(
     id_: str,
     l1_address: str,
@@ -184,7 +199,11 @@ async def active_follows_for_leader(leader_id: str) -> list[dict]:
 
     deleted_at IS NULL здесь обязателен: отписавшийся подписчик остаётся в
     таблице ровно ради своего журнала, и без этого фильтра движок продолжал бы
-    зеркалить человека, который вышел."""
+    зеркалить человека, который вышел.
+
+    Leader.active — то же по смыслу для другой стороны: выключивший публикацию
+    лидер не имеет права двигать чужие счета, пока его строка в leaders не
+    удалена."""
     async with async_session_factory() as session:
         rows = (
             await session.execute(
@@ -197,10 +216,12 @@ async def active_follows_for_leader(leader_id: str) -> list[dict]:
                     Follower.lighter_account_index.label("follower_account_index"),
                 )
                 .join(Follower, Follower.id == Follow.follower_id)
+                .join(Leader, Leader.id == Follow.leader_id)
                 .where(
                     Follow.leader_id == leader_id,
                     Follow.paused.is_(False),
                     Follow.deleted_at.is_(None),
+                    Leader.active.is_(True),
                 )
             )
         ).mappings()
@@ -275,9 +296,18 @@ async def mirror_log_for_follower(follower_id: str, limit: int) -> list[dict]:
 
 
 async def all_leaders() -> list[dict]:
+    """Витрина Discover: только опубликованные лидеры.
+
+    Выключивший публикацию исчезает отсюда, но остаётся в таблице — подписки и
+    журнал никуда не деваются, а «мой лидер есть в базе, но не опубликован»
+    читается отдельным запросом (leader_by_account_index)."""
     async with async_session_factory() as session:
         rows = (
-            await session.scalars(select(Leader).order_by(Leader.created_at.desc()))
+            await session.scalars(
+                select(Leader)
+                .where(Leader.active.is_(True))
+                .order_by(Leader.created_at.desc())
+            )
         ).all()
         return [
             {
@@ -328,11 +358,25 @@ async def follower(id_: str) -> dict | None:
 
 
 async def leader_by_account_index(lighter_account_index: int) -> dict | None:
+    """Карточка «чей это лидер» по индексу аккаунта Lighter.
+
+    Отдаёт и active: по этому ответу интерфейс восстанавливает положение
+    рубильника после перезагрузки страницы, поэтому «не опубликован» здесь —
+    данные, а не отсутствие записи."""
     async with async_session_factory() as session:
         row = await session.scalar(
             select(Leader).where(Leader.lighter_account_index == lighter_account_index)
         )
-        return {"id": row.id} if row else None
+        return (
+            {
+                "id": row.id,
+                "handle": row.handle,
+                "fee_bps": row.fee_bps,
+                "active": row.active,
+            }
+            if row
+            else None
+        )
 
 
 async def leader(id_: str) -> dict | None:
@@ -344,6 +388,7 @@ async def leader(id_: str) -> dict | None:
             "id": row.id,
             "lighter_account_index": row.lighter_account_index,
             "handle": row.handle,
+            "active": row.active,
         }
 
 

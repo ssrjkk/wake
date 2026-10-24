@@ -86,7 +86,7 @@ alembic check
 
 ## Tests
 
-**Backend** — one command, 404 tests, against a real PostgreSQL:
+**Backend** — one command, 420 tests, against a real PostgreSQL:
 
 ```bash
 cd backend
@@ -107,7 +107,7 @@ Three rules the suite enforces on itself, from `backend/testsupport.py`:
 npm ci
 npm run lint                      # ESLint over src/, e2e/ and the config files
 npx tsc --noEmit
-npm run test:run                  # vitest: 111 tests in 12 files
+npm run test:run                  # vitest: 122 tests in 12 files
 npm run build
 PW_PORT=5178 npx playwright test  # first run needs `npx playwright install chromium`
 ```
@@ -290,7 +290,7 @@ alembic check
 
 ## Тесты
 
-**Бэкенд** — одна команда, 404 теста, против настоящего PostgreSQL:
+**Бэкенд** — одна команда, 420 тестов, против настоящего PostgreSQL:
 
 ```bash
 cd backend
@@ -311,7 +311,7 @@ python -m pytest . -q
 npm ci
 npm run lint                      # ESLint по src/, e2e/ и конфигам
 npx tsc --noEmit
-npm run test:run                  # vitest: 111 тестов в 12 файлах
+npm run test:run                  # vitest: 122 теста в 12 файлах
 npm run build
 PW_PORT=5178 npx playwright test  # первый прогон требует `npx playwright install chromium`
 ```

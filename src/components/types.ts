@@ -38,13 +38,16 @@ export type RiskAnalysis = {
   diversification_score: number;
 };
 
-// POST /portfolio/hedge: suggestion null, когда хеджа не нашлось
+// POST /portfolio/hedge: suggestion null, когда хеджа не нашлось.
+// unhedged_vol_usd — риск цели без хеджа: без него «результирующие 800$» не
+// читаются никак, и панель предлагала бы хедж, который риск увеличил.
 export type HedgeSuggestion = {
   market_id: number;
   symbol: string;
   hedge_notional_usd: number;
   correlation_to_target: number;
   resulting_portfolio_vol_usd: number;
+  unhedged_vol_usd: number;
 };
 
 // POST /funding-arb/check (backend/api/funding.py): opportunity null —
@@ -93,6 +96,28 @@ export type Tab = "dashboard" | "terminal" | "discover" | "portfolio" | "earn" |
 
 export type MarketCategory = "Crypto" | "Stocks" | "Forex" | "Commodities" | "Spot";
 
-export const FOREX_SYMBOLS = new Set(["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF", "NZDUSD", "EURGBP", "EURJPY", "GBPJPY"]);
-export const COMMODITY_SYMBOLS = new Set(["XAU", "XAG", "WTI", "BRENT", "NATGAS", "GOLD", "SILVER"]);
-export const STOCK_SYMBOLS = new Set(["AAPL", "TSLA", "NVDA", "GOOGL", "META", "AMZN", "MSFT", "NFLX", "AMD", "COIN", "MSTR"]);
+// Категории — единственный случай, где сайт называет класс актива: у книги
+// Lighter нет поля «тип инструмента» (market_deployer у всех "lighter",
+// base_asset_id/quote_asset_id/multiplier ничего не различают — проверено на
+// живом /orderBooks 2026-10-24). Поэтому это курируемый список по тикеру, а не
+// правило, и всё, чего в списке нет, показывается как Crypto: среди 225
+// активных рынков книги крипто-перпов большинство, но для отдельной строки это
+// допущение, а не факт — в фильтре об этом сказано прямо.
+//
+// Список сверян с живым /orderBooks?filter=all 2026-10-24. Мусорные значения,
+// которых в книге нет и которые никогда не были тикерами Lighter ("GOLD",
+// "SILVER", "BRENT" — по факту XAU, XAG, BRENTOIL), из него убраны: строка,
+// которая ни с чем не сопоставляется, выглядит как покрытие, которого нет.
+//
+// SAMSUNGUSD / HYUNDAIUSD / SKHYNIXUSD в Forex не добавлены сознательно: по
+// форме это похоже на валютную пару, но по смыслу — акция в долларах, а чем
+// именно они являются у Lighter, по книге не определить.
+export const FOREX_SYMBOLS = new Set(["EURUSD", "GBPUSD", "USDJPY", "AUDUSD", "USDCAD", "USDCHF", "NZDUSD", "EURGBP", "EURJPY", "GBPJPY", "USDHKD", "USDKRW"]);
+export const COMMODITY_SYMBOLS = new Set(["XAU", "XAG", "XPT", "XPD", "XCU", "WTI", "BRENTOIL", "NATGAS"]);
+export const STOCK_SYMBOLS = new Set([
+  "AAPL", "TSLA", "NVDA", "GOOGL", "META", "AMZN", "MSFT", "NFLX", "AMD", "COIN", "MSTR",
+  // из живого списка Lighter: акции, ADS и биржевые фонды с известными тикерами
+  "AAOI", "ARM", "ASML", "AXTI", "BABA", "BB", "DELL", "GEV", "GME", "HOOD", "IBM", "INTC",
+  "MRNA", "MRVL", "MU", "NOK", "NOW", "ORCL", "PLTR", "QCOM", "RKLB", "SNDK", "TSM", "TTWO",
+  "WDC", "EWY", "IWM", "QQQ", "SPY", "SOXL", "SOXS", "SPX", "US100", "US500", "US10Y", "TUR30",
+]);

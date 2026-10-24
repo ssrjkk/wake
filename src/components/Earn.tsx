@@ -3,10 +3,8 @@ import { Radio, ChevronRight, Users, DollarSign, TrendingUp, TrendingDown, Perce
 import { listLeaders, listOwnLeaderFollowers, setLeaderFee, type LeaderFollowRow } from "../lib/lighter";
 import { errorText } from "../lib/backend";
 import { buildLeader } from "../lib/leaders";
-import type { Leader } from "./types";
+import type { Leader, Tab } from "./types";
 import { fmt, shortHandle, avatarColor, usd } from "./utils";
-
-type Tab = "terminal" | "discover" | "portfolio" | "earn" | "predict" | "agent" | "risk" | "funding";
 
 interface EarnProps {
   isCopyable: boolean;

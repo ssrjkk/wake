@@ -57,6 +57,9 @@ export default function Predict({ signedIn, setToast, onConnect }: PredictProps)
   const [marketsError, setMarketsError] = useState<string | null>(null);
   const [positions, setPositions] = useState<PredictPosition[] | null>(null);
   const [positionsError, setPositionsError] = useState<string | null>(null);
+  // Выплата — один сет на рынок: без блокировки второй клик долетал до бэкенда
+  // и человек видел «уже забрано» вместо своей суммы.
+  const [claimingId, setClaimingId] = useState<string | null>(null);
   const [nonce, setNonce] = useState(0);
   const [trade, setTrade] = useState<{ market: PredictMarket; outcome: "yes" | "no"; held: number } | null>(null);
   const [sellMode, setSellMode] = useState(false);
@@ -191,13 +194,16 @@ export default function Predict({ signedIn, setToast, onConnect }: PredictProps)
   }
 
   async function claim(p: PredictPosition) {
-    if (!signedIn) return;
+    if (!signedIn || claimingId !== null) return;
+    setClaimingId(p.market_id);
     try {
       const data = await claimPredictMarket(p.market_id);
       setToast(`Забрано ${money(data.payout_usd)} по «${p.question}»`);
       setNonce((n) => n + 1);
     } catch (e) {
       setToast(`Выигрыш не начислен: ${errorText(e)}`);
+    } finally {
+      setClaimingId(null);
     }
   }
 
@@ -325,8 +331,10 @@ export default function Predict({ signedIn, setToast, onConnect }: PredictProps)
                         {p.claimable_usd > 0 && !p.claimed && (
                           <button
                             onClick={() => void claim(p)}
-                            style={{ background: "linear-gradient(135deg, #10b981 0%, #34d399 100%)", color: "#0a0a0a", fontSize: "11px", fontWeight: 600, padding: "8px 12px", border: "none", borderRadius: "4px", cursor: "pointer", transition: "all 0.15s", boxShadow: "0 1px 2px rgba(16, 185, 129, 0.2)", minHeight: "var(--touch)" }}
+                            disabled={claimingId !== null}
+                            style={{ background: "linear-gradient(135deg, #10b981 0%, #34d399 100%)", color: "#0a0a0a", fontSize: "11px", fontWeight: 600, padding: "8px 12px", border: "none", borderRadius: "4px", cursor: claimingId === null ? "pointer" : "default", transition: "all 0.15s", boxShadow: "0 1px 2px rgba(16, 185, 129, 0.2)", minHeight: "var(--touch)", opacity: claimingId === p.market_id ? 0.6 : 1 }}
                             onMouseEnter={(e) => {
+                              if (claimingId !== null) return;
                               e.currentTarget.style.filter = "brightness(1.1)";
                               e.currentTarget.style.boxShadow = "0 2px 4px rgba(16, 185, 129, 0.3)";
                             }}
@@ -335,7 +343,7 @@ export default function Predict({ signedIn, setToast, onConnect }: PredictProps)
                               e.currentTarget.style.boxShadow = "0 1px 2px rgba(16, 185, 129, 0.2)";
                             }}
                           >
-                            Забрать {money(p.claimable_usd)}
+                            {claimingId === p.market_id ? "Забираю…" : `Забрать ${money(p.claimable_usd)}`}
                           </button>
                         )}
                       </td>

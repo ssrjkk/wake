@@ -10,6 +10,39 @@ from the commit history rather than from a release.
 ## [Unreleased]
 
 ### Added
+- `leaders.active` (migration `004_leader_active`), `PATCH /leaders/{id}/active`
+  and `GET /leaders/mine`, plus the "Публиковать мои сделки" switch in the
+  Terminal. The switch existed as three user-facing instructions and zero
+  controls: `Terminal.tsx` declared `isCopyable`/`toggleCopyable` in its props
+  and never destructured them, and the only "off" was a `useState` reset — the
+  leader row stayed live, `active_follows_for_leader()` kept returning his
+  followers, and the engine went on trading other people's accounts. Publication
+  is now server state, read back on every session so a reload cannot disagree
+  with the engine.
+- `probeSigner()` in the Terminal: the order path signs in a local
+  `signing_service.py`, and the button used to be enabled regardless of whether
+  that process is reachable from this origin. A chip now says
+  "подписание: отвечает / недоступно / проверяю", is re-checked before each
+  confirmation, and the failure toast no longer prints a bare `localhost:8787`
+  at a production user.
+- `openInterestUsd()` in `src/lib/lighter.ts` and `unhedged_vol_usd` in the
+  `HedgeSuggestion` type: the backend has been sending the unhedged baseline all
+  along, and without it "resulting volatility $800" reads as nothing.
+- `failure_card()` / `safe_payload()` in `backend/telegram_bot.py` and handler
+  tests on `Message`/`CallbackQuery` doubles: `/markets`, `/funding` and `/price`
+  previously let `lighter_rest` exceptions escape into aiogram, so a Lighter
+  outage made the bot silent — indistinguishable from "no such market". The
+  callback is now acknowledged before the data is fetched, because a multi-second
+  fetch past Telegram's window answers `query is too old` and sends nothing.
+- Backend tests for the publication lifecycle (5 in `test_db.py`, one HTTP cycle
+  in `test_api_smoke.py` including the simulate-mirror proof that an inactive
+  leader plans no orders); frontend tests for `/leaders/mine`, the active switch,
+  `openInterestUsd`, market categories against live symbol forms, and the avatar
+  palette; two browser tests for the switch and the signing chip (420 backend,
+  122 unit, 17 browser).
+- `min={0}`/`valueAsNumber` on the remaining numeric inputs (copy allocation,
+  carry capital) and a single in-flight guard on the Predict claim button, whose
+  second click used to return "already claimed" where the user expected his money.
 - `snapshot()` helper in the position-tracker tests: the findings that matter
   here are about a snapshot containing some markets and not others, which a
   one-position builder cannot express.
@@ -252,6 +285,40 @@ from the commit history rather than from a release.
   claim of an "optional KMS mode", which the removed file could not deliver.
 
 ### Fixed
+- The Terminal's price change was computed over all 48 hourly candles and
+  labelled "/ 24ч" — a two-day move presented as a daily one, with the up/down
+  colour derived from it. It now uses the same last-24 window as the high/low and
+  turnover rows and prints the number of hours actually covered.
+- `avatarColor()` returned Tailwind class names. `App.tsx` put them in
+  `className` (worked), `Portfolio.tsx` and `Earn.tsx` put them in
+  `style={{ background }}` (browser discarded the value, so the avatars were
+  transparent circles), and `Discover.tsx` used a hard-coded blue instead — three
+  renderings of the same trader. It returns a hex colour now and all four sites
+  use it.
+- `Discover` ranked leaders by `... || b.aumUsd - b.aumUsd`: always zero, so the
+  documented AUM tie-break never fired. Comparison is against the backend
+  contract now, and the panel reports when the list could not be loaded instead
+  of printing "no leaders yet" over a dead backend.
+- `OrderBook.open_interest_usd` was typed `number` while the live `/orderBooks`
+  returns the string `"9920884.729544"`. The hedge candidate pool only worked
+  because `<` and `-` coerce strings; it is typed `string` and parsed explicitly.
+- `Portfolio` indexed `STATUS_STYLE[r.status]` with no fallback: `mirror_log.status`
+  is a plain `String` column, and a status the frontend does not know crashed the
+  whole panel — the panel that exists to show what the engine did to a person's
+  money.
+- A failed `GET /follows` produced an empty subscription list, which reads as "you
+  copy nobody" and invites a duplicate follow. The error is surfaced as its own
+  strip now.
+- `Risk`'s "Найти хедж" silently hedged `riskPositions[0]`, and the result card
+  showed only the resulting volatility. The target is selectable and named in the
+  card, which now shows baseline → hedged, and the market picker has a search box
+  instead of the first 60 rows of the book.
+- Four inline styles declared `marginTop`/`marginBottom` and then `margin: 0` in
+  the same object — the later key won, so the reason/error/tx lines in Agent and
+  the hedge line in Risk sat flush against the text above them.
+- `README` and `Discover`/`Earn` copy about the fee: `fee_bps` is per copied
+  trade, applied to turnover in the projection, and nothing charges it yet —
+  "б.п. от профита" described a performance fee that does not exist in the code.
 - A leader whose position **leaves the snapshot** produced no event at all.
   `leader_position_tracker.apply_position_update()` compared only the markets
   present in `msg["positions"]`, so if Lighter drops a flattened position from

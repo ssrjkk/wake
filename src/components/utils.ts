@@ -18,9 +18,13 @@ export function fmt(n: number, d = 0): string {
   return v.toLocaleString("en-US", { maximumFractionDigits: d, minimumFractionDigits: d });
 }
 
-const AVATAR_COLORS = ["bg-cyan-500", "bg-violet-500", "bg-amber-500", "bg-emerald-500", "bg-sky-500", "bg-rose-500"];
+const AVATAR_COLORS = ["#06b6d4", "#8b5cf6", "#f59e0b", "#10b981", "#0ea5e9", "#f43f5e"];
 
-// Same handle always gets the same colour, without storing anything on the leader.
+// Один и тот же handle — один и тот же цвет в Discover, «Моих подписках» и
+// модалке копирования, без состояния на лидере. Значение — цвет, а не имя
+// класса Tailwind: три из четырёх мест красят аватар через style={{ background }},
+// куда «bg-cyan-500» не применим — браузер отбрасывал невалидное значение, и
+// аватар был прозрачным кругом с белой буквой.
 export function avatarColor(handle: string): string {
   let h = 0;
   for (let i = 0; i < handle.length; i++) h = (h * 31 + handle.charCodeAt(i)) >>> 0;

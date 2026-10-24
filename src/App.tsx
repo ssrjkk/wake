@@ -9,6 +9,8 @@ import {
   setFollowPaused,
   deleteFollow,
   registerLeader,
+  getMyLeader,
+  setLeaderActive,
   setNetwork as setLighterNetwork,
   type LighterAccount,
   type LighterNetwork,
@@ -64,7 +66,12 @@ export default function App() {
   const [markets, setMarkets] = useState<OrderBook[]>([]);
   const [dataError, setDataError] = useState<string | null>(null);
   const [isCopyable, setIsCopyable] = useState(false);
+  const [copySwitchBusy, setCopySwitchBusy] = useState(false);
   const [following, setFollowing] = useState<Following[]>([]);
+  // «Нет подписок» и «бэкенд не отдал подписки» — разные ответы: во втором
+  // Portfolio печатал бы пустой список, и человек подписался бы второй раз,
+  // получив 409 вместо объяснения.
+  const [followsError, setFollowsError] = useState<string | null>(null);
   const [copyModal, setCopyModal] = useState<Leader | null>(null);
   const [allocation, setAllocation] = useState(250);
   const [copyLeverage, setCopyLeverage] = useState(3);
@@ -105,6 +112,7 @@ export default function App() {
     listOwnFollows()
       .then((rows) => {
         if (!live) return;
+        setFollowsError(null);
         setFollowing(
           rows.map((r) => ({
             followId: r.id,
@@ -117,7 +125,37 @@ export default function App() {
           }))
         );
       })
-      .catch(() => { if (live) setFollowing([]); });
+      .catch((e) => {
+        if (!live) return;
+        setFollowing([]);
+        setFollowsError(errorText(e));
+      });
+    return () => { live = false; };
+  }, [userId]);
+
+  // Положение рубильника публикации живёт в базе (leaders.active), а не в памяти
+  // вкладки: перезагрузка страницы обязана показать то же, что видит copy-движок.
+  // Публичный GET /leaders для этого не годится — он отдаёт только активных, и
+  // «выключен» сливался бы с «никогда не публиковался».
+  //
+  // Входа нет — и читать нечего: состояние уже пусто, его обнуляют applySignIn,
+  // signOut и обработчик 401. Эффект не должен чинить то, что починили они, —
+  // иначе из его тела торчит синхронный setState.
+  useEffect(() => {
+    if (!userId) return;
+    let live = true;
+    getMyLeader()
+      .then((row) => {
+        if (!live) return;
+        setLeaderId(row ? row.id : null);
+        setIsCopyable(!!row && row.active);
+        if (row) setLeaderFeeBps(row.fee_bps);
+      })
+      .catch(() => {
+        if (!live) return;
+        setIsCopyable(false);
+        setLeaderId(null);
+      });
     return () => { live = false; };
   }, [userId]);
 
@@ -219,6 +257,7 @@ export default function App() {
   function applySignIn(res: SignInResponse, via: "wallet" | "telegram", label: string | null) {
     setSession(saveSession(res, { via, label }));
     setFollowing([]);
+    setFollowsError(null);
     setSubscription(null);
     setLeaderId(null);
     setIsCopyable(false);
@@ -306,6 +345,7 @@ export default function App() {
     function onSignedOut() {
       setSession(null);
       setFollowing([]);
+      setFollowsError(null);
       setSubscription(null);
       setIsCopyable(false);
       setLeaderId(null);
@@ -321,6 +361,7 @@ export default function App() {
     if (isConnected) disconnect();
     setSession(null);
     setFollowing([]);
+    setFollowsError(null);
     setSubscription(null);
     setIsCopyable(false);
     setLeaderId(null);
@@ -376,9 +417,21 @@ export default function App() {
   }
 
   async function toggleCopyable() {
-    if (isCopyable) {
-      setIsCopyable(false);
-      setLeaderId(null);
+    if (copySwitchBusy) return;
+    // Выключение — запись в базу, а не сброс useState: строка leaders это то,
+    // что читает copy-движок, и без PATCH /leaders/{id}/active выключенный
+    // лидер продолжал бы двигать счета своих подписчиков.
+    if (isCopyable && leaderId) {
+      setCopySwitchBusy(true);
+      try {
+        await setLeaderActive(leaderId, false);
+        setIsCopyable(false);
+        setToast("Публикация выключена: mirror_engine больше не строит план по твоим сделкам");
+      } catch (e) {
+        setToast(`Бэкенд не принял выключение: ${errorText(e)}`);
+      } finally {
+        setCopySwitchBusy(false);
+      }
       return;
     }
     // Переключатель не включается, пока публикация заранее обречена: бэкенд берёт
@@ -395,14 +448,17 @@ export default function App() {
       setToast("Нужен индекс аккаунта Lighter: подтверди вход кошельком в меню профиля");
       return;
     }
-    setIsCopyable(true);
+    setCopySwitchBusy(true);
     try {
       const id = await registerLeader(identityLabel ?? userId ?? "wake", leaderFeeBps);
       setLeaderId(id);
-      setToast(`Стал лидером: индекс Lighter #${session.lighterAccountIndex}, комиссия ${(leaderFeeBps / 100).toFixed(2)}% за сделку`);
+      setIsCopyable(true);
+      setToast(`Публикация включена: индекс Lighter #${session.lighterAccountIndex}, комиссия ${(leaderFeeBps / 100).toFixed(2)}% за сделку`);
     } catch (e) {
       setIsCopyable(false);
       setToast(`Не удалось записаться в leaders: ${errorText(e)}`);
+    } finally {
+      setCopySwitchBusy(false);
     }
   }
 
@@ -770,6 +826,7 @@ export default function App() {
                   dataError={dataError}
                   setToast={setToast}
                   isCopyable={isCopyable}
+                  copySwitchBusy={copySwitchBusy}
                   toggleCopyable={() => void toggleCopyable()}
                   setMarketPickerOpen={setMarketPickerOpen}
                   network={network}
@@ -789,6 +846,7 @@ export default function App() {
                 <Portfolio
                   key={`${userId}:${network}:${lighterAccountIndex}`}
                   following={following}
+                  followsError={followsError}
                   setTab={setTab}
                   togglePause={togglePause}
                   unfollow={unfollow}
@@ -884,6 +942,10 @@ export default function App() {
               ))}
             </div>
             <div className="flex-1 overflow-y-auto space-y-1">
+              <p style={{ fontSize: "10px", color: "var(--text-muted)", margin: "0 0 6px", lineHeight: 1.5 }}>
+                Категория определяется по списку тикеров: у книги Lighter нет поля «тип инструмента». Всё, чего в списке нет,
+                показывается как Crypto — для отдельной строки это допущение, а не факт.
+              </p>
               {filteredMarkets.length === 0 && <p className="text-[color:var(--text-muted)] text-sm text-center py-8 font-mono">Ничего не найдено</p>}
               {filteredMarkets.map((m) => (
                 <button
@@ -915,7 +977,8 @@ export default function App() {
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-2">
                 <div
-                  className={`w-9 h-9 rounded-full ${avatarColor(copyModal.handle)} flex items-center justify-center text-sm font-bold text-white`}
+                  className="w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold text-white"
+                  style={{ background: avatarColor(copyModal.handle) }}
                 >
                   {shortHandle(copyModal.handle)}
                 </div>
@@ -956,9 +1019,16 @@ export default function App() {
               <input
                 id="copy-allocation"
                 type="number"
-                min={10}
+                min={1}
+                step={1}
                 value={allocation}
-                onChange={(e) => setAllocation(Number(e.target.value))}
+                onChange={(e) => {
+                  // valueAsNumber, а не Number(...): у «1e» и «-» это NaN, и NaN
+                  // проходил бы в запрос, где бэкенд отбивает его валидацией —
+                  // человек получил бы 422 вместо понятного «сумма не число».
+                  const raw = e.target.valueAsNumber;
+                  setAllocation(Number.isFinite(raw) ? Math.max(0, raw) : 0);
+                }}
                 className="input-mono bg-transparent outline-none w-full"
               />
             </div>

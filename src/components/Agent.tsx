@@ -257,10 +257,10 @@ export default function Agent({ signedIn, subscription, currentMarket, setToast,
                   )}
                 </div>
                 <p style={{ fontSize: "12px", color: "var(--text-muted)", margin: 0 }}>{lastDecision.reasoning}</p>
-                {lastDecision.execution?.reason && <p style={{ fontSize: "12px", color: "#fbbf24", marginTop: "4px", margin: 0 }}>{lastDecision.execution.reason}</p>}
-                {lastDecision.execution?.error && <p style={{ fontSize: "12px", color: "#ef4444", marginTop: "4px", margin: 0 }}>{String(lastDecision.execution.error).slice(0, 160)}</p>}
+                {lastDecision.execution?.reason && <p style={{ fontSize: "12px", color: "#fbbf24", margin: "4px 0 0" }}>{lastDecision.execution.reason}</p>}
+                {lastDecision.execution?.error && <p style={{ fontSize: "12px", color: "#ef4444", margin: "4px 0 0" }}>{String(lastDecision.execution.error).slice(0, 160)}</p>}
                 {lastDecision.execution?.tx_hash && (
-                  <p style={{ fontSize: "12px", color: "var(--text-muted)", fontFamily: "JetBrains Mono, monospace", marginTop: "4px", margin: 0 }}>tx {String(lastDecision.execution.tx_hash).slice(0, 18)}…</p>
+                  <p style={{ fontSize: "12px", color: "var(--text-muted)", fontFamily: "JetBrains Mono, monospace", margin: "4px 0 0" }}>tx {String(lastDecision.execution.tx_hash).slice(0, 18)}…</p>
                 )}
               </div>
             )}

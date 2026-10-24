@@ -18,6 +18,9 @@ Telegram-бот Wake: карточки рынков, funding, Predict-рынки
   - Текст-формообразователи (price_report/markets_report/predict_report/
     funding_report/sparkline) — чистые функции, прогнаны тестами на фикстурах
     ФОРМЫ живого ответа: test_telegram_bot.py.
+  - Обвязка хендлеров прогоняется на двойниках Message/CallbackQuery: проверяется
+    граница ошибок (источник данных молча не имеет права обрывать ответ бота) и
+    порядок вызовов (callback подтверждается до долгого обращения к Lighter).
   - НЕ прогонялся отсюда сам цикл Telegram: polling требует токен от @BotFather и
     процесс 24/7. Поэтому Bot создаётся лениво в main() — модуль импортируется и
     тестируется без токена, а хендлеры остаются тонкой обвязкой над тестированными
@@ -533,18 +536,52 @@ def help_text() -> str:
     )
 
 
-async def _answer(message: Message, payload: tuple[str, InlineKeyboardMarkup]) -> None:
+def failure_card(stage: str, exc: BaseException) -> str:
+    """Ответ пользователю на сбой источника данных.
+
+    До этой функции хендлеры не имели границы: lighter_rest бросает RuntimeError
+    на пустом ответе Lighter и на битой строке, /markets и /price падали внутри
+    aiogram, и бот молчал — человек не получал ни карточки, ни причины. Формат
+    карточки совпадает с остальными: тип и текст исключения это то, что человек
+    может показать оператору, а «попробуй через минуту» — единственное, что он
+    может сделать сам."""
+    log.exception("%s: источник данных не ответил", stage)
+    return card(
+        f"{stage}: данные не получены",
+        f"{type(exc).__name__}: {str(exc)[:200] or 'без текста ошибки'}\n"
+        f"Lighter API ({LIGHTER_NETWORK}) отвечает нештатно — это сбой источника, "
+        "а не «рынка нет». Попробуй через минуту.",
+    )
+
+
+async def safe_payload(stage: str, build) -> tuple[str, InlineKeyboardMarkup]:
+    """Вызвать собирателя карточки и не дать его исключению уйти в aiogram.
+
+    Граница намеренно одна и на уровне хендлера: внутри price_payload/funding_payload
+    уже различают «данных нет» (честная пустая карточка) и «источник упал»
+    (исключение), и второе должно превращаться в текст, а не в тишину."""
+    try:
+        return await build()
+    except Exception as e:
+        return failure_card(stage, e), nav_keyboard()
+
+
+async def _answer(message: Message, stage: str, build) -> None:
     await message.answer_chat_action("typing")
-    await message.answer(*payload)
+    await message.answer(*await safe_payload(stage, build))
 
 
-async def _reply(
-    callback: CallbackQuery, payload: tuple[str, InlineKeyboardMarkup]
-) -> None:
+async def _reply(callback: CallbackQuery, stage: str, build) -> None:
+    """Сначала подтвердить callback, потом считать данные.
+
+    Порядок важен: карточка собирается секунды (18 свечных запросов на /markets),
+    а Telegram живёт ответом на callback ограниченным окном. Подтверждение после
+    работы давало «query is too old» и кнопку, которая ждёт крутилку до конца
+    жизни сообщения, а потом не присылает ничего."""
     await callback.answer()
     if callback.message is None:
         return
-    await callback.message.answer(*payload)
+    await callback.message.answer(*await safe_payload(stage, build))
 
 
 @dp.message(Command("start", "help"))
@@ -563,17 +600,17 @@ async def cmd_price(message: Message, command: CommandObject):
             )
         )
         return
-    await _answer(message, await price_payload(ticker))
+    await _answer(message, f"Карточка {ticker}", lambda: price_payload(ticker))
 
 
 @dp.message(Command("markets"))
 async def cmd_markets(message: Message):
-    await _answer(message, await markets_payload())
+    await _answer(message, "Список рынков", markets_payload)
 
 
 @dp.message(Command("funding"))
 async def cmd_funding(message: Message):
-    await _answer(message, await funding_payload())
+    await _answer(message, "Funding", funding_payload)
 
 
 @dp.message(Command("spread"))
@@ -587,7 +624,7 @@ async def cmd_spread(message: Message, command: CommandObject):
             )
         )
         return
-    await _answer(message, await spread_payload(ticker))
+    await _answer(message, f"Спред {ticker}", lambda: spread_payload(ticker))
 
 
 @dp.message(Command("predict"))
@@ -595,7 +632,8 @@ async def cmd_predict(message: Message, command: CommandObject):
     status = (command.args or "").strip().lower()
     await _answer(
         message,
-        await predict_payload(
+        "Predict",
+        lambda: predict_payload(
             status if status in ("open", "resolved", "all") else "open"
         ),
     )
@@ -626,12 +664,12 @@ async def cb_price(callback: CallbackQuery):
             "Кнопка из старой версии — список рынков: /markets", show_alert=True
         )
         return
-    await _reply(callback, await price_payload(ticker))
+    await _reply(callback, f"Карточка {ticker}", lambda: price_payload(ticker))
 
 
 @dp.callback_query(F.data == "c:markets")
 async def cb_markets(callback: CallbackQuery):
-    await _reply(callback, await markets_payload())
+    await _reply(callback, "Список рынков", markets_payload)
 
 
 @dp.callback_query(F.data.startswith("m:"))
@@ -643,17 +681,17 @@ async def cb_markets_page(callback: CallbackQuery):
     except ValueError:
         await callback.answer("Не понял страницу — открой /markets", show_alert=True)
         return
-    await _reply(callback, await markets_payload(offset))
+    await _reply(callback, "Список рынков", lambda: markets_payload(offset))
 
 
 @dp.callback_query(F.data == "c:funding")
 async def cb_funding(callback: CallbackQuery):
-    await _reply(callback, await funding_payload())
+    await _reply(callback, "Funding", funding_payload)
 
 
 @dp.callback_query(F.data == "c:predict")
 async def cb_predict(callback: CallbackQuery):
-    await _reply(callback, await predict_payload())
+    await _reply(callback, "Predict", predict_payload)
 
 
 @dp.callback_query()
@@ -667,7 +705,7 @@ async def cb_unknown(callback: CallbackQuery):
 async def fallback(message: Message):
     ticker = parse_ticker(message.text or "")
     if ticker:
-        await _answer(message, await price_payload(ticker))
+        await _answer(message, f"Карточка {ticker}", lambda: price_payload(ticker))
         return
     await message.answer(
         card(

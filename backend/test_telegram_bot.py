@@ -848,5 +848,152 @@ class TestTelegramLineWidth(unittest.TestCase):
         self.assertEqual(self._long_lines(tb.spread_report("1000PEPE", venues)), [])
 
 
+class _Command:
+    """Двойник CommandObject aiogram: хендлерам нужен только атрибут args."""
+
+    def __init__(self, args: str = ""):
+        self.args = args
+
+
+class _FakeMessage:
+    """Двойник сообщения ровно на двух методах, которые зовёт обвязка, плюс
+    text — его читает fallback, чтобы опознать тикер вместо команды."""
+
+    def __init__(self, log=None, text: str = "BTC"):
+        self.log = log if log is not None else []
+        self.texts = []
+        self.text = text
+
+    async def answer_chat_action(self, action):
+        self.log.append("typing")
+
+    async def answer(self, text, reply_markup=None):
+        self.log.append("answer")
+        self.texts.append(text)
+
+
+class _FakeCallback:
+    def __init__(self, data: str, message=None, log=None):
+        self.data = data
+        self.message = message
+        self.log = log if log is not None else []
+
+    async def answer(self, *args, **kwargs):
+        self.log.append("acknowledged")
+
+
+class TestHandlerFailureBoundary(unittest.TestCase):
+    """Хендлер обязан ответить и когда источник данных упал.
+
+    Без границы lighter_rest.RuntimeError (пустой ответ Lighter, битая строка)
+    уходил в aiogram: бот молчал, человек не получал ни карточки, ни причины, а
+    «молчание» неотличимо от «такого рынка нет»."""
+
+    def setUp(self):
+        cache.clear()
+        self.addCleanup(cache.clear)
+
+    def test_markets_handler_answers_when_lighter_fails(self):
+        msg = _FakeMessage()
+        with patch.object(
+            tb.lighter_rest, "get_market_overview", _raise_runtime("Lighter HTTP 500")
+        ):
+            asyncio.run(tb.cmd_markets(msg))
+        self.assertEqual(len(msg.texts), 1, "бот обязан ответить, а не промолчать")
+        self.assertIn("данные не получены", msg.texts[0])
+        self.assertIn("Lighter HTTP 500", msg.texts[0], "причина — внутри карточки")
+
+    def test_price_handler_survives_a_broken_book(self):
+        msg = _FakeMessage()
+        with patch.object(tb, "find_perp", _raise_runtime("Expecting value")):
+            asyncio.run(tb.cmd_price(msg, _Command(args="btc")))
+        self.assertIn("данные не получены", msg.texts[0])
+
+    def test_funding_handler_survives_a_failed_rates_call(self):
+        msg = _FakeMessage()
+        with patch.object(
+            tb.lighter_rest, "get_funding_rates", _raise_runtime("connection reset")
+        ):
+            asyncio.run(tb.cmd_funding(msg))
+        self.assertIn("данные не получены", msg.texts[0])
+
+    def test_predict_handler_survives_an_unexpected_backend_shape(self):
+        """predict_report ждёт список рынков. Если бэкенд вернёт другую форму,
+        полетит TypeError/KeyError, а не httpx.HTTPError, и прежний except в
+        predict_payload этого не ловил — хендлер падал."""
+
+        async def wrong_shape(path):
+            return {"detail": "это не список"}
+
+        msg = _FakeMessage()
+        with patch.object(tb, "_get_json", wrong_shape):
+            asyncio.run(tb.cmd_predict(msg, _Command(args="")))
+        self.assertEqual(len(msg.texts), 1)
+        self.assertIn("данные не получены", msg.texts[0])
+
+    def test_plain_ticker_message_survives_a_failed_candles_call(self):
+        msg = _FakeMessage()
+        with (
+            patch.object(tb, "find_perp", lambda symbol: BOOK),
+            patch.object(
+                tb.lighter_rest, "get_24h_stats", _raise_runtime("нет свечей")
+            ),
+        ):
+            asyncio.run(tb.fallback(msg))
+        self.assertIn("данные не получены", msg.texts[0])
+
+    def test_failure_card_escapes_exception_text(self):
+        card = tb.failure_card("Карточка BTC", RuntimeError("<b>разметка</b> & прочее"))
+        self.assertIn("&lt;b&gt;", card, "текст исключения уходит в HTML-сообщение")
+        self.assertNotIn("<b>разметка</b>", card)
+
+    def test_unknown_callback_still_answers_and_does_not_raise(self):
+        callback = _FakeCallback("p:БТС-НЕ-ТИКЕР")
+        asyncio.run(tb.cb_price(callback))
+        self.assertEqual(callback.log, ["acknowledged"])
+
+
+class TestCallbackOrder(unittest.TestCase):
+    """Порядок вызовов обвязки — часть контракта Telegram, а не деталь кода."""
+
+    def test_callback_is_acknowledged_before_the_data_is_fetched(self):
+        log = []
+        callback = _FakeCallback("c:markets", message=_FakeMessage(log=log), log=log)
+
+        async def slow_build():
+            log.append("fetch")
+            return tb.card("Заголовок", "тело"), tb.nav_keyboard()
+
+        asyncio.run(tb._reply(callback, "Список рынков", slow_build))
+        self.assertEqual(
+            log[:2],
+            ["acknowledged", "fetch"],
+            "медленный Lighter не имеет права удерживать не отвеченный callback: "
+            "окно ответа ограничено, и позже Telegram отвечает «query is too old»",
+        )
+
+    def test_message_replies_typing_then_the_card(self):
+        log = []
+        msg = _FakeMessage(log=log)
+
+        async def build():
+            log.append("fetch")
+            return tb.card("Заголовок", "тело"), tb.nav_keyboard()
+
+        asyncio.run(tb._answer(msg, "Список рынков", build))
+        self.assertEqual(log, ["typing", "fetch", "answer"])
+
+    def test_message_with_a_failing_builder_still_sends_one_answer(self):
+        log = []
+        msg = _FakeMessage(log=log)
+
+        async def boom():
+            raise RuntimeError("Lighter HTTP 502")
+
+        asyncio.run(tb._answer(msg, "Funding", boom))
+        self.assertEqual(log, ["typing", "answer"])
+        self.assertIn("данные не получены", msg.texts[0])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

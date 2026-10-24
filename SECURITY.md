@@ -81,6 +81,15 @@ what mirrored size) moved to `GET /leaders/{id}/followers` behind ownership of
 the leader: an operator tool that reads the same rows is curator-gated, so
 leaving them open here contradicted the project's own classification of them.
 
+`GET /leaders/mine` is the owner's own leader record including a deactivated
+one, and `PATCH /leaders/{id}/active` flips publication — both gated on the
+same ownership check (`_owned_leader`: 404 if the record does not exist, 403 if
+the Lighter account behind it was confirmed by somebody else's wallet sign-in).
+This is not a cosmetic flag: `active` is what `active_follows_for_leader()`
+filters on, which is the single query the mirror engine reads a leader's
+followers from, so turning it off is what actually stops other people's accounts
+from trading on his signals.
+
 Curator operations — market creation and resolution, manual copy-engine runs —
 require `X-Curator-Token` compared with `hmac.compare_digest` over bytes, and
 answer 500 when the server has no token configured rather than running

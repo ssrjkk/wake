@@ -24,6 +24,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    text,
 )
 from sqlalchemy.orm import (
     DeclarativeBase,
@@ -61,6 +62,12 @@ class Leader(Base):
     lighter_account_index: Mapped[int] = mapped_column(Integer, nullable=False)
     handle: Mapped[str] = mapped_column(String, nullable=False)
     fee_bps: Mapped[int] = mapped_column(Integer, nullable=False, default=8)
+    # Публикация, которую лидер выключает сам. Без этого флага «выключить копи-
+    # режим» в интерфейсе не значил бы ничего: строка leaders остаётся, а
+    # leader_listener продолжает двигать деньги подписчиков.
+    active: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=True, server_default=text("true")
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

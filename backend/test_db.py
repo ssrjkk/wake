@@ -80,10 +80,97 @@ class TestFollowersAndLeaders(DbCase):
         self.assertEqual(row["lighter_account_index"], 101)
 
     def test_leader_by_account_index(self):
-        self.assertEqual(_run(db.leader_by_account_index(42)), {"id": self.leader_id})
+        self.assertEqual(
+            _run(db.leader_by_account_index(42)),
+            {
+                "id": self.leader_id,
+                "handle": "@driftking",
+                "fee_bps": 10,
+                "active": True,
+            },
+            "по этому ответу фронт восстанавливает положение рубильника",
+        )
         self.assertIsNone(_run(db.leader_by_account_index(4242)))
         self.assertEqual(_run(db.leader(self.leader_id))["handle"], "@driftking")
         self.assertIsNone(_run(db.leader("nope")))
+
+
+class TestLeaderActivation(DbCase):
+    """Публикация лидера — состояние в базе, а не в памяти вкладки браузера.
+
+    До этой колонки «выключить копи-режим» существовало только как useState в
+    App.tsx: строка leaders оставалась, листенер продолжал читать позиции и
+    зеркалить сделки на счета подписчиков."""
+
+    def test_new_leader_is_published_by_default(self):
+        row = _run(db.leader(self.leader_id))
+        self.assertTrue(row["active"])
+        self.assertIn(self.leader_id, [r["id"] for r in _run(db.all_leaders())])
+
+    def test_deactivation_hides_the_leader_but_keeps_the_row(self):
+        _run(db.set_leader_active(self.leader_id, False))
+        self.assertFalse(_run(db.leader(self.leader_id))["active"])
+        self.assertNotIn(
+            self.leader_id,
+            [r["id"] for r in _run(db.all_leaders())],
+            "выключенный лидер не должен светиться в Discover",
+        )
+        # Свой-то он себе виден: иначе интерфейс не отличает «выключен» от
+        # «никогда не публиковался».
+        self.assertEqual(
+            _run(db.leader_by_account_index(42)),
+            {
+                "id": self.leader_id,
+                "handle": "@driftking",
+                "fee_bps": 10,
+                "active": False,
+            },
+        )
+
+    def test_deactivation_stops_mirroring_and_reactivation_resumes_it(self):
+        follow_id = self.follow(self.add_follower(1), 1000)
+
+        _run(db.set_leader_active(self.leader_id, False))
+        self.assertEqual(
+            _run(db.active_follows_for_leader(self.leader_id)),
+            [],
+            "единственный вход mirror_engine: по выключенному лидеру движок не "
+            "должен видеть ни одной подписки",
+        )
+
+        _run(db.set_leader_active(self.leader_id, True))
+        rows = _run(db.active_follows_for_leader(self.leader_id))
+        self.assertEqual([r["follow_id"] for r in rows], [follow_id])
+
+    def test_fee_change_does_not_republish_a_stopped_leader(self):
+        _run(db.set_leader_active(self.leader_id, False))
+        # PATCH /leaders/{id}/fee идёт через upsert_leader — смена комиссии не
+        # имеет права превратиться в «снова публикуешься».
+        _run(db.upsert_leader(self.leader_id, 42, "@driftking", fee_bps=25))
+        row = _run(db.leader(self.leader_id))
+        self.assertEqual(row["handle"], "@driftking")
+        self.assertFalse(
+            row["active"], "изменение комиссии не включает публикацию заново"
+        )
+
+    def test_deactivation_keeps_follows_and_their_journal(self):
+        follower_id = self.add_follower(1)
+        follow_id = self.follow(follower_id, 1000)
+        _run(
+            db.log_mirror_result(
+                str(uuid.uuid4()), follow_id, 1, "long", 0.5, False, "dry_run"
+            )
+        )
+
+        _run(db.set_leader_active(self.leader_id, False))
+        self.assertEqual(
+            [r["id"] for r in _run(db.follows_for_follower(follower_id))], [follow_id]
+        )
+        self.assertEqual(
+            len(_run(db.mirror_log_for_follower(follower_id, 10))),
+            1,
+            "выключение лидера не отменяет и не стирает уже исполненное",
+        )
 
 
 class TestFollows(DbCase):

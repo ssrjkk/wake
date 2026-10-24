@@ -2,13 +2,15 @@ import { useState, useEffect } from "react";
 import { ChevronRight, Pause, Play, Wallet, X } from "lucide-react";
 import { getAccountByIndex, getMirrorLog, type LighterAccount, type MirrorLogRow, type OrderBook } from "../lib/lighter";
 import { errorText } from "../lib/backend";
-import type { Following } from "./types";
+import type { Following, Tab } from "./types";
 import { avatarColor, shortHandle, fmt, usd } from "./utils";
-
-type Tab = "terminal" | "discover" | "portfolio" | "earn" | "predict" | "agent" | "risk" | "funding";
 
 interface PortfolioProps {
   following: Following[];
+  // Отдельно от пустого списка: «подписок нет» и «бэкенд их не отдал» — разные
+  // экраны. На пустом списке без этой строки человек подписывался бы второй раз
+  // и получал 409 там, где база просто не ответила.
+  followsError: string | null;
   setTab: (tab: Tab) => void;
   togglePause: (followId: string) => void;
   unfollow: (followId: string) => void;
@@ -26,7 +28,17 @@ const STATUS_STYLE: Record<MirrorLogRow["status"], { bg: string; color: string; 
   failed: { bg: "#2a0a0a", color: "#ef4444", border: "#3d1a1a" },
 };
 
-export default function Portfolio({ following, setTab, togglePause, unfollow, signedIn, lighterAccountIndex, hasWallet, markets }: PortfolioProps) {
+// mirror_log.status — обычная колонка String, новый статус в неё может попасть
+// раньше, чем этот файл узнает о ней. Неизвестный статус обязан отличаться от
+// «failed» и не имеет права ронять панель: статус = единственное, чем человек
+// проверяет, что движок сделал с его деньгами.
+const UNKNOWN_STATUS = { bg: "#1a1a1a", color: "#a0a0a0" };
+
+function statusStyle(status: string) {
+  return STATUS_STYLE[status as MirrorLogRow["status"]] ?? UNKNOWN_STATUS;
+}
+
+export default function Portfolio({ following, followsError, setTab, togglePause, unfollow, signedIn, lighterAccountIndex, hasWallet, markets }: PortfolioProps) {
   const [account, setAccount] = useState<LighterAccount | null>(null);
   const [accountError, setAccountError] = useState<string | null>(null);
   const [mirrorLog, setMirrorLog] = useState<MirrorLogRow[] | null>(null);
@@ -97,6 +109,11 @@ export default function Portfolio({ following, setTab, togglePause, unfollow, si
           <h2 style={{ fontSize: "16px", fontWeight: 600, color: "#fafafa", margin: 0 }}>Мои подписки</h2>
           <span style={{ fontSize: "11px", color: "var(--text-muted)", fontFamily: "JetBrains Mono, monospace" }}>таблица follows</span>
         </div>
+        {followsError && (
+          <div style={{ padding: "10px 16px", background: "rgba(239, 68, 68, 0.08)", border: "1px solid rgba(239, 68, 68, 0.2)", borderRadius: "6px", fontSize: "12px", color: "#ef4444", marginBottom: "12px" }}>
+            Подписки не загружены: {followsError}. Пустой список ниже — не ответ базы, а её отсутствие.
+          </div>
+        )}
         {following.length === 0 ? (
           <div className="empty-state">
             <p style={{ fontSize: "14px", color: "#a0a0a0", marginBottom: "4px" }}>
@@ -308,7 +325,7 @@ export default function Portfolio({ following, setTab, togglePause, unfollow, si
                         <td style={{ padding: "10px 0", fontFamily: "JetBrains Mono, monospace", fontSize: "12px", color: r.side === "long" ? "#10b981" : "#ef4444" }}>{r.side.toUpperCase()}</td>
                         <td style={{ padding: "10px 0", fontFamily: "JetBrains Mono, monospace", color: "#a0a0a0" }}>{fmt(r.base_amount, 4)}</td>
                         <td style={{ padding: "10px 0" }}>
-                          <span style={{ fontSize: "11px", padding: "2px 8px", borderRadius: "3px", fontFamily: "JetBrains Mono, monospace", background: STATUS_STYLE[r.status].bg, color: STATUS_STYLE[r.status].color, border: STATUS_STYLE[r.status].border ? `1px solid ${STATUS_STYLE[r.status].border}` : "none" }}>{r.status}</span>
+                          <span style={{ fontSize: "11px", padding: "2px 8px", borderRadius: "3px", fontFamily: "JetBrains Mono, monospace", background: statusStyle(r.status).bg, color: statusStyle(r.status).color, border: statusStyle(r.status).border ? `1px solid ${statusStyle(r.status).border}` : "none" }}>{r.status}</span>
                           {r.reason && <span style={{ marginLeft: "8px", fontSize: "12px", color: "var(--text-muted)" }}>{r.reason}</span>}
                           {r.tx_hash && (
                             <span style={{ marginLeft: "8px", fontSize: "12px", color: "var(--text-muted)", fontFamily: "JetBrains Mono, monospace" }} title={r.tx_hash}>

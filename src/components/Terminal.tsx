@@ -14,6 +14,7 @@ interface TerminalProps {
   dataError: string | null;
   setToast: (toast: string | null) => void;
   isCopyable: boolean;
+  copySwitchBusy: boolean;
   toggleCopyable: () => void;
   setMarketPickerOpen: (open: boolean) => void;
   network: LighterNetwork;
@@ -58,9 +59,23 @@ async function getTicker(marketId: number): Promise<Ticker | null> {
   }
 }
 
+// Ответ GET /health сервиса подписи. Нужен не для красоты: ордер из браузера
+// подписывает НЕ сайт, а локальный signing_service.py, и если он не запущен
+// (или его CORS-политика не знает этот источник), кнопка «Открыть long» была
+// обречена, а человек узнавал об этом только после клика и «Failed to fetch».
+// Проверка живёт здесь, а не в App: это свойство именно пути исполнения ордера.
+async function probeSigner(): Promise<boolean> {
+  try {
+    const res = await fetch(`${SIGNING_SERVICE_URL}/health`, { signal: AbortSignal.timeout(2000) });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 const pct = (v: number | null) => (v == null ? "—" : `${v >= 0 ? "+" : ""}${(v * 100).toFixed(2)}%`);
 
-export default function Terminal({ asset, setAsset, markets, dataError, setToast, setMarketPickerOpen, network, accountEquityUsd }: TerminalProps) {
+export default function Terminal({ asset, setAsset, markets, dataError, setToast, isCopyable, copySwitchBusy, toggleCopyable, setMarketPickerOpen, network, accountEquityUsd }: TerminalProps) {
   const [candles, setCandles] = useState<Candle[]>([]);
   const [trades, setTrades] = useState<Trade[]>([]);
   const [side, setSide] = useState<"long" | "short">("long");
@@ -83,6 +98,8 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
      страницы, а не на смене числа. */
   const [tick, setTick] = useState<{ dir: "up" | "down" | null; serial: number }>({ dir: null, serial: 0 });
   const lastTick = useRef<{ id: number; price: number } | null>(null);
+  // null — «ещё не проверяли», чтобы чип не врал «недоступно» до первого ответа.
+  const [signerUp, setSignerUp] = useState<boolean | null>(null);
 
   const currentMarket = markets.find((m) => m.symbol === asset);
   const marketId = currentMarket?.market_id;
@@ -177,15 +194,35 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
     return () => { live = false; };
   }, [visibleIds, nonce]);
 
+  // Сервис подписи спрашиваем при входе на вкладку и при смене сети; перед
+  // подтверждением ордера — ещё раз, потому что локальный процесс могут поднять
+  // через минуту после того, как страница уже всё показала.
+  useEffect(() => {
+    let live = true;
+    void probeSigner().then((up) => {
+      if (live) setSignerUp(up);
+    });
+    return () => {
+      live = false;
+    };
+  }, [network]);
+
   useEffect(() => {
     const id = setInterval(() => setNonce((n) => n + 1), TICKER_TTL_MS);
     return () => clearInterval(id);
   }, []);
 
   const lastCandle = candles[candles.length - 1];
-  const firstCandle = candles[0];
   const price = lastCandle?.c ?? null;
-  const change = lastCandle && firstCandle ? (lastCandle.c - firstCandle.o) / firstCandle.o : null;
+  /* Окно изменения — те же последние 24 часовые свечи, что и подписи «Макс/Мин
+     24ч» ниже, а не весь ряд: 48 свечей это двое суток, и «+8,4% / 24ч» при
+     настоящем суточном ходе в 3% — это не округление, а другая цифра. На новом
+     рынке свечей меньше 24, и подпись адаптируется по фактическому числу. */
+  const windowStart = candles[Math.max(0, candles.length - 24)];
+  const windowHours = Math.min(candles.length, 24);
+  const change = lastCandle && windowStart && candles.length >= 2
+    ? (lastCandle.c - windowStart.o) / windowStart.o
+    : null;
   const up = (change ?? 0) >= 0;
   const chartData = candles.map((c, i) => ({ i, t: c.t, v: c.c }));
 
@@ -300,6 +337,11 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
       setToast(`Минимальный ордер по этому рынку — ${minQuote} USDC`);
       return;
     }
+    // Перед подтверждением переспрашиваем сервис подписи: если человек поднял
+    // его уже после загрузки страницы, прошлый «недоступно» не должен его
+    // блокировать, а «доступно» прошлой проверки не гарантирует, что процесс не
+    // умер минуту назад.
+    void probeSigner().then(setSignerUp);
     setShowOrderConfirm(true);
   }
 
@@ -310,17 +352,29 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
     }
     setShowOrderConfirm(false);
     setOrderSending(true);
-    setToast(`Отправляю на signing service (${SIGNING_SERVICE_URL})…`);
+    // Адрес сервиса в тосте не печатаем: на продакшен-сайте это выглядит как
+    // отладочная строчка, а человек, который его настраивал, видит адрес в
+    // подсказке чипа «подписание».
+    setToast("Отправляю на сервис подписи…");
     try {
       const result = await placeOrderViaSigningService(currentMarket, side, size, price);
+      setSignerUp(true);
       if (result.dry_run) {
         setToast("Сервис подписи работает в сухом режиме: ордер в Lighter не ушёл");
         return;
       }
       setToast(`Ордер отправлен: ${result.tx_hash}`);
     } catch (e) {
+      // TypeError — это «запрос не дошёл»: сервис не запущен, источник не в его
+      // CORS-списке, или сети нет. Ошибка с HTTP-кодом означает обратное —
+      // сервис жив и сам объяснил отказ, и вешать на него «недоступен» значило
+      // бы отправить человека искать причину не там.
+      const unreachable = e instanceof TypeError;
+      setSignerUp(!unreachable);
       setToast(
-        `Ордер не отправлен: ${errorText(e)}. Подпишите и запустите backend/signing_service.py, затем повторите.`
+        unreachable
+          ? `Ордер не отправлен: сервис подписи не отвечает. Адрес и причину показывает чип «подписание».`
+          : `Ордер не отправлен: ${errorText(e)}`
       );
     } finally {
       setOrderSending(false);
@@ -350,7 +404,9 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
             >
               {price == null ? "—" : `$${fmt(price, decimals)}`}
             </span>
-            <span className={`chip ${change == null ? "" : up ? "chip-up" : "chip-down"}`}>{pct(change)} / 24ч</span>
+            <span className={`chip ${change == null ? "" : up ? "chip-up" : "chip-down"}`}>
+              {change == null ? "нет закрытий" : `${pct(change)} / ${windowHours}ч`}
+            </span>
           </div>
 
           <div className="desk-stats">
@@ -565,6 +621,48 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
             {network === "mainnet" ? "mainnet" : "testnet"}
             {accountEquityUsd != null ? `, баланс счёта ${usd(accountEquityUsd, 0)}` : ", баланс счёта не подключён"}.
           </p>
+
+          <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
+            <span
+              className={signerUp === null ? "chip chip-info" : signerUp ? "chip chip-up" : "chip chip-warn"}
+              title={
+                `Сервис подписи: ${SIGNING_SERVICE_URL}. Он не опубликован вместе с сайтом — это локальный процесс, ` +
+                "который держит твой API-ключ Lighter и спрашивает WAKE_DRY_RUN. Красный чип означает, что запрос из " +
+                "этого источника не дошёл: сервис не запущен или адрес сайта не добавлен в его WAKE_CORS_ORIGINS."
+              }
+            >
+              {signerUp === null ? "подписание: проверяю…" : signerUp ? "подписание: отвечает" : "подписание: недоступно"}
+            </span>
+          </div>
+
+          {/* Копи-режим — не украшение тикета, а запись в базе: publish — это
+              leaders.active, по которому mirror_engine вообще видит подписки. */}
+          <div style={{ borderTop: "1px solid var(--line)", paddingTop: "10px", display: "grid", gap: "6px" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px" }}>
+              <span className="label">Публиковать мои сделки</span>
+              <button
+                onClick={toggleCopyable}
+                disabled={copySwitchBusy}
+                aria-pressed={isCopyable}
+                aria-label="Публиковать мои сделки"
+                className="btn-ghost"
+                style={{ display: "flex", alignItems: "center", gap: "6px", minHeight: "var(--touch)" }}
+                title={
+                  isCopyable
+                    ? "Выключить публикацию: строка leaders остаётся, но копи-движок перестаёт строить план по твоим сделкам"
+                    : "Включить публикацию: бэкенд возьмёт индекс аккаунта Lighter из твоего подтверждённого входа"
+                }
+              >
+                {isCopyable && <span aria-hidden="true" className="live-indicator" />}
+                {copySwitchBusy ? "Записываю…" : isCopyable ? "включено" : "выключено"}
+              </button>
+            </div>
+            <p className="fineprint">
+              {isCopyable
+                ? "Ты в списке лидеров: подписчики копируют каждую твою сделку пропорционально своей аллокации. Выключение останавливает зеркалирование, но не отменяет подписки."
+                : "Нужен вход, подтверждённый кошельком: индекс аккаунта Lighter берётся из записи входа, а не из запроса."}
+            </p>
+          </div>
         </div>
 
         <div style={{ padding: "0 12px 10px" }}>

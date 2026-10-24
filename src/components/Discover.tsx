@@ -3,7 +3,7 @@ import { Users, DollarSign, Copy as CopyIcon, Wallet, TrendingUp, TrendingDown }
 import { listLeaders } from "../lib/lighter";
 import { errorText } from "../lib/backend";
 import { buildLeader } from "../lib/leaders";
-import { fmt, shortHandle, usd } from "./utils";
+import { fmt, shortHandle, usd, avatarColor } from "./utils";
 import type { Leader } from "./types";
 
 interface DiscoverProps {
@@ -13,15 +13,20 @@ interface DiscoverProps {
 export default function Discover({ setCopyModal }: DiscoverProps) {
   const [leaders, setLeaders] = useState<Leader[] | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
   useEffect(() => {
+    // Витрина собирается по каждому лидеру отдельно: список из leaders один, а
+    // каптал и PnL — публичный ответ Lighter на строку (buildLeader). Поэтому
+    // вкладка не работает без бэкенда: список лидеров взять неоткуда.
     async function load() {
       try {
         const rows = await listLeaders();
         const built = await Promise.all(rows.map(buildLeader));
         const rank = (t: Leader) => (t.exchange ? t.exchange.realizedPnlUsd : -1e12);
-        setLeaders(built.sort((a, b) => rank(b) - rank(a) || b.aumUsd - b.aumUsd));
+        setLeaders(built.sort((a, b) => rank(b) - rank(a) || b.aumUsd - a.aumUsd));
         setError(null);
+        setLastUpdated(new Date());
       } catch (e) {
         setError(errorText(e));
         setLeaders([]);
@@ -36,11 +41,28 @@ export default function Discover({ setCopyModal }: DiscoverProps) {
     <div className="terminal-layout terminal-stack">
       <div className="terminal-main">
         <div className="terminal-header" style={{ flexDirection: "column", alignItems: "flex-start" }}>
-          <h2 style={{ fontSize: "16px", fontWeight: 600, color: "#fafafa", margin: 0 }}>Кого копируют</h2>
+          <div style={{ display: "flex", alignItems: "center", gap: "12px", width: "100%" }}>
+            <h2 style={{ fontSize: "16px", fontWeight: 600, color: "#fafafa", margin: 0 }}>Кого копируют</h2>
+            {lastUpdated && (
+              <span
+                style={{ marginLeft: "auto", fontSize: "10px", color: "var(--text-muted)", fontFamily: "'JetBrains Mono', monospace" }}
+                title="Список лидеров и ответ Lighter обновляются раз в 20 секунд"
+              >
+                обновлено {lastUpdated.toLocaleTimeString("ru-RU", { hour12: false })}
+              </span>
+            )}
+          </div>
           <p style={{ fontSize: "12px", color: "var(--text-muted)", margin: "8px 0 0 0", maxWidth: "800px" }}>
             Лидеры — из таблицы leaders, подписчики и AUM — из follows. Капитал, реализованный PnL и открытые позиции — публичный ответ Lighter GET /api/v1/account?by=index по аккаунту лидера.
+            Порядок: по реализованному PnL, при равенстве — по AUM; у кого Lighter не ответил, тот в конце списка.
           </p>
         </div>
+
+        {error && (
+          <div style={{ padding: "10px 16px", background: "rgba(239, 68, 68, 0.08)", border: "1px solid rgba(239, 68, 68, 0.2)", borderRadius: "6px", fontSize: "12px", color: "#ef4444" }}>
+            Список лидеров не загружен: {error}
+          </div>
+        )}
 
         {leaders === null ? (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: "8px" }}>
@@ -51,16 +73,15 @@ export default function Discover({ setCopyModal }: DiscoverProps) {
               </div>
             ))}
           </div>
-        ) : leaders.length === 0 ? (
+        ) : leaders.length === 0 && !error ? (
           <div className="empty-state">
             <Users style={{ width: "24px", height: "24px", color: "var(--text-muted)", marginBottom: "12px" }} />
             <p style={{ fontSize: "12px", color: "#ccc", margin: "0 0 4px 0" }}>В базе пока нет ни одного лидера</p>
             <p style={{ fontSize: "10px", color: "var(--text-muted)", margin: 0, maxWidth: "500px", marginLeft: "auto", marginRight: "auto" }}>
               Лидер появляется сам: в Терминале включи «Публиковать мои сделки».
-              {error && <span style={{ color: "#fbbf24", marginTop: "8px", display: "block" }}>Бэкенд ответил: {error}</span>}
             </p>
           </div>
-        ) : (
+        ) : leaders.length === 0 ? null : (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: "8px" }}>
             {leaders.map((t) => {
               const pnl = t.exchange?.realizedPnlUsd ?? null;
@@ -72,7 +93,7 @@ export default function Discover({ setCopyModal }: DiscoverProps) {
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px" }}>
                     <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
                       <div
-                        style={{ width: "40px", height: "40px", borderRadius: "50%", background: "#3b82f6", display: "flex", alignItems: "center", justifyContent: "center", fontSize: "14px", fontWeight: 700, color: "#fff" }}
+                        style={{ width: "40px", height: "40px", borderRadius: "50%", background: avatarColor(t.handle), display: "flex", alignItems: "center", justifyContent: "center", fontSize: "14px", fontWeight: 700, color: "#fff" }}
                       >
                         {shortHandle(t.handle)}
                       </div>

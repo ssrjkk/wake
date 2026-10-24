@@ -455,6 +455,113 @@ class TestApiSmoke(HttpCase):
         self.assertEqual(r.json()["follower_count"], 0)
         self.assertEqual(r.json()["total_aum_usd"], 0)
 
+    async def test_leader_publication_is_backend_state(self):
+        """Рубильник публикации — в базе, а не в памяти вкладки.
+
+        До колонки leaders.active выключение публикации существовало только как
+        useState: строка leaders оставалась активной, и единственный вход
+        mirror_engine (active_follows_for_leader) продолжал отдавать подписчиков
+        выключившегося лидера. Проверка на «движок больше ничего не планирует»
+        сделана через POST /simulate-mirror — тот же путь, которым идёт план по
+        реальным подпискам из базы."""
+        leader_headers, _ = await self.sign_in_wallet(900)
+        follower_headers = await self.sign_in_telegram(9001)
+
+        r = await self.client.post(
+            "/leaders", json={"handle": "@switch", "fee_bps": 8}, headers=leader_headers
+        )
+        self.assertEqual(r.status_code, 200, r.text)
+        leader_id = r.json()["leader_id"]
+        self.assertTrue(r.json()["active"])
+
+        r = await self.client.post(
+            "/follows",
+            json={"leader_id": leader_id, "allocation_usd": 1000},
+            headers=follower_headers,
+        )
+        self.assertEqual(r.status_code, 200, r.text)
+
+        simulate = {
+            "leader_id": leader_id,
+            "market_id": 1,
+            "side": "long",
+            "is_increase": True,
+            "size_delta": 0.5,
+            "price": 100000,
+            "price_decimals": 2,
+            "leader_equity_usd": 50000,
+        }
+        curator = {"X-Curator-Token": testsupport.CURATOR_TOKEN}
+
+        r = await self.client.post("/simulate-mirror", json=simulate, headers=curator)
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(
+            len(r.json()["orders"]), 1, "по активному лидеру подписчик копируется"
+        )
+
+        r = await self.client.patch(
+            f"/leaders/{leader_id}/active",
+            json={"active": False},
+            headers=leader_headers,
+        )
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertFalse(r.json()["active"])
+
+        # Витрина лидера закрывает, своя карточка — показывает: иначе фронт не
+        # отличит «выключен» от «никогда не публиковался».
+        r = await self.client.get("/leaders")
+        self.assertNotIn(leader_id, [x["id"] for x in r.json()])
+        r = await self.client.get("/leaders/mine", headers=leader_headers)
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertFalse(r.json()["leader"]["active"])
+
+        r = await self.client.post("/simulate-mirror", json=simulate, headers=curator)
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(
+            r.json()["orders"],
+            [],
+            "выключенный лидер не имеет права двигать счета подписчиков",
+        )
+
+        # Включается тем же POST /leaders: второй клик по включателю на уже
+        # существующей записи обязан публиковать, а не молча вернуть старый id.
+        r = await self.client.post(
+            "/leaders", json={"handle": "@switch", "fee_bps": 8}, headers=leader_headers
+        )
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertEqual(r.json()["leader_id"], leader_id)
+        self.assertTrue(r.json()["active"])
+        r = await self.client.post("/simulate-mirror", json=simulate, headers=curator)
+        self.assertEqual(len(r.json()["orders"]), 1, "публикация возобновилась")
+
+        # Право на переключение — владение лидером, а не знание его id.
+        stranger_headers, _ = await self.sign_in_wallet(901)
+        r = await self.client.patch(
+            f"/leaders/{leader_id}/active",
+            json={"active": False},
+            headers=stranger_headers,
+        )
+        self.assertEqual(r.status_code, 403)
+        r = await self.client.patch(
+            "/leaders/нет-такого/active", json={"active": False}, headers=leader_headers
+        )
+        self.assertEqual(r.status_code, 404)
+
+        # Вход без подтверждённого кошелька: своего лидера нет в природе.
+        r = await self.client.get("/leaders/mine", headers=follower_headers)
+        self.assertEqual(r.status_code, 200, r.text)
+        self.assertIsNone(r.json()["leader"])
+
+        # active — булево поле модели, а не разбор строки: «yes»/«1» не должны
+        # превращаться в «выключить».
+        for bad in ("yes", "1", ""):
+            r = await self.client.patch(
+                f"/leaders/{leader_id}/active",
+                json={"active": bad},
+                headers=leader_headers,
+            )
+            self.assertEqual(r.status_code, 422, f"active={bad!r} — не bool")
+
     async def test_predict_cycle(self):
         curator = {"X-Curator-Token": testsupport.CURATOR_TOKEN}
         trader = await self.sign_in_telegram(6001)
