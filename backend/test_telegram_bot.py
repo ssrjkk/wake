@@ -63,13 +63,14 @@ class TestImportIsTokenFree(unittest.TestCase):
         self.assertIsNotNone(tb.dp)
         self.assertEqual(
             len(tb.dp.message.handlers),
-            8,
-            "/start /price /markets /funding /spread /predict /wake и fallback",
+            9,
+            "/start /help /price /markets /funding /spread /predict /wake и fallback",
         )
         self.assertEqual(
             len(tb.dp.callback_query.handlers),
-            6,
-            "тикер, три раздела, страница списка и нераспознанный callback последним",
+            7,
+            "тикер, три раздела, страница списка, карточка Predict-рынка "
+            "и нераспознанный callback последним",
         )
         self.assertEqual(
             [h.callback.__name__ for h in tb.dp.callback_query.handlers][-1],
@@ -122,12 +123,28 @@ class TestPriceReport(unittest.TestCase):
         self.assertIn("84,408.70", got)
         self.assertIn("-0.20%", got)
         self.assertIn("$847.8M", got)
-        self.assertIn("market_id 1", got)
+        self.assertIn(
+            "рынок #1",
+            got,
+            "market_id — то, по чему рынок ищут в самом Lighter",
+        )
         self.assertIn(
             "0.00007",
             got,
             "минимальный размер — из книги, он определяет, что вообще исполнимо",
         )
+
+    def test_price_and_change_share_one_line(self):
+        """Цена без изменения читается как «всё спокойно», а изменение без цены —
+        как «что-то упало». Пара живёт в одной строке, глаз не ищет её по
+        всему блоку."""
+        line = next(
+            line
+            for line in tb.price_report("BTC", BOOK, STATS, FUNDING).splitlines()
+            if line.startswith("Цена:")
+        )
+        self.assertIn("84,408.70", line)
+        self.assertIn("-0.20%", line)
 
     def test_funding_payer_follows_sign(self):
         """ "платят лонги" при direction="long" — именно так cash-and-carry и
@@ -434,6 +451,12 @@ class TestHtmlCard(unittest.TestCase):
         вызова ниже — туда передаются только константы этого модуля."""
         got = tb.card("t", "body", "доля <code>YES</code>")
         self.assertTrue(got.endswith("доля <code>YES</code>"))
+
+    def test_note_starts_on_its_own_line(self):
+        """Сноска — не строка таблицы: приклеенная к последнему ряду <pre>, она
+        читается как его продолжение."""
+        got = tb.card("t", "одна\nдве", "ссылка")
+        self.assertIn("</pre>\n\nссылка", got)
 
     def test_predict_question_cannot_inject_markup(self):
         """Вопрос рынка набирает куратор. Без экранирования его текст стал бы
@@ -786,6 +809,295 @@ class TestSpread(unittest.TestCase):
             text, _ = asyncio.run(tb.spread_payload("btc"))
         self.assertIn("bybit", text)
         self.assertIn("hyperliquid", text)
+
+
+MARKET_ID = "3f0a6d2c-9b1e-4c7a-8d5f-2e6b1a0c9d44"
+
+PREDICT_MARKET = {
+    "id": MARKET_ID,
+    "kind": "price",
+    "question": "BTC выше 90k к 5 октября?",
+    "lighter_market_id": 1,
+    "threshold": 90000.0,
+    "comparator": ">=",
+    "resolve_at": 1_760_000_000.0,
+    "b": 100.0,
+    "q_yes": 12.0,
+    "q_no": -8.0,
+    "status": "open",
+    "outcome": None,
+    "resolved_by": None,
+    "evidence_url": None,
+    "price_yes": 0.5498,
+    "price_no": 0.4502,
+    "max_subsidy": 69.31,
+    "volume_usd": 1234.5,
+    "trade_count": 7,
+}
+
+
+class TestPredictMarketCard(unittest.TestCase):
+    """Карточка одного Predict-рынка: то, чего нет в списке."""
+
+    NOW = datetime.datetime(2026, 10, 3, 12, 0, tzinfo=datetime.timezone.utc)
+
+    def test_open_market_shows_both_sides_and_the_condition(self):
+        got = tb.predict_market_report(PREDICT_MARKET, now=self.NOW)
+        self.assertIn("Состояние: открыт", got)
+        self.assertIn("YES 55¢ · NO 45¢", got)
+        self.assertIn(">= 90,000", got, "порог — из таблицы, а не из текста вопроса")
+        self.assertIn("рынок #1", got)
+        self.assertIn("сделок 7", got)
+        self.assertIn("$1.2K", got)
+
+    def test_resolved_market_shows_outcome_instead_of_price(self):
+        """Цена закрытого рынка читается как «ещё можно зайти», а зайти нельзя:
+        бэкенд отказывает по дедлайну."""
+        closed = dict(
+            PREDICT_MARKET,
+            status="resolved",
+            outcome="yes",
+            resolved_by="curator",
+        )
+        got = tb.predict_market_report(closed, now=self.NOW)
+        self.assertIn("Состояние: закрыт", got)
+        self.assertIn("Исход: yes", got)
+        self.assertIn("Закрыл: curator", got)
+        self.assertNotIn("YES 55¢", got)
+        self.assertNotIn("До закрытия", got)
+
+    def test_event_market_has_no_fake_condition(self):
+        event = dict(PREDICT_MARKET, kind="event", threshold=None, comparator=None)
+        self.assertNotIn("Условие:", tb.predict_market_report(event, now=self.NOW))
+
+    def test_evidence_note_only_for_https_and_shows_the_same_address(self):
+        got = tb.evidence_note("https://example.com/report")
+        self.assertIn('href="https://example.com/report"', got)
+        self.assertIn(">https://example.com/report<", got)
+
+    def test_evidence_note_refuses_to_hide_a_link(self):
+        # Не-https и адрес с кавычкой/пробелом не становятся разметкой: текст
+        # набирает куратор.
+        for url in (
+            "",
+            None,
+            "http://example.com",
+            "javascript:alert(1)",
+            'https://x"onmouseover="y',
+        ):
+            self.assertEqual(tb.evidence_note(url), "", url)
+
+    def test_buttons_carry_the_market_id_and_a_readable_label(self):
+        rows = tb.predict_buttons([PREDICT_MARKET])
+        self.assertEqual(len(rows), 1, "вопрос длинный — по одной кнопке в ряду")
+        button = rows[0][0]
+        self.assertEqual(button.callback_data, f"k:{MARKET_ID}")
+        self.assertLessEqual(len(button.text), 64, "лимит текста inline-кнопки")
+
+    def test_buttons_skip_a_market_with_an_unsafe_id(self):
+        """id возвращается клиентом в callback_data и попадает и в запрос, и в
+        ссылку на вебвью — мусорный id не должен доходить ни до одного."""
+        bad = dict(PREDICT_MARKET, id="../../admin")
+        self.assertEqual(tb.predict_buttons([bad]), [])
+
+    def test_payload_asks_for_one_market_and_links_to_it(self):
+        async def ok(path):
+            assert path == f"/predict/markets/{MARKET_ID}", path
+            return PREDICT_MARKET
+
+        url = tb.WAKE_MINIAPP_URL
+        tb.WAKE_MINIAPP_URL = "https://wake-7k6.pages.dev/"
+        self.addCleanup(setattr, tb, "WAKE_MINIAPP_URL", url)
+        with patch.object(tb, "_get_json", ok):
+            text, keyboard = asyncio.run(tb.predict_market_payload(MARKET_ID))
+        self.assertIn("BTC выше 90k", text)
+        app = [b for row in keyboard.inline_keyboard for b in row if b.web_app]
+        self.assertEqual(len(app), 1)
+        self.assertIn(f"tab=predict&market={MARKET_ID}", app[0].web_app.url)
+
+    def test_payload_names_the_backend_when_it_cannot_reach_it(self):
+        async def fail(path):
+            raise httpx.ConnectError("connection refused")
+
+        with patch.object(tb, "_get_json", fail):
+            text, _ = asyncio.run(tb.predict_market_payload(MARKET_ID))
+        self.assertIn("Predict-рынок недоступен", text)
+        self.assertIn("WAKE_BACKEND_URL", text)
+
+    def test_callback_refuses_an_id_that_is_not_a_uuid(self):
+        """callback_data возвращает клиент, и из этого id строятся и запрос к
+        бэкенду, и адрес вебвью: до проверки профиля он не должен дойти ни до
+        чего."""
+        message = _FakeMessage()
+        callback = _FakeCallback("k:../../admin", message=message)
+        asyncio.run(tb.cb_predict_market(callback))
+        self.assertEqual(message.texts, [], "карточку не отправляли")
+        self.assertEqual(callback.log, ["acknowledged"], "но callback отвечен")
+
+    def test_callback_opens_the_market_it_names(self):
+        message = _FakeMessage()
+        callback = _FakeCallback(f"k:{MARKET_ID}", message=message)
+
+        async def ok(path):
+            return PREDICT_MARKET
+
+        with patch.object(tb, "_get_json", ok):
+            asyncio.run(tb.cb_predict_market(callback))
+        self.assertEqual(len(message.texts), 1)
+        self.assertIn("BTC выше 90k", message.texts[0])
+
+
+class TestListKeyboards(unittest.TestCase):
+    def setUp(self):
+        self._url = tb.WAKE_MINIAPP_URL
+        self.addCleanup(setattr, tb, "WAKE_MINIAPP_URL", self._url)
+        tb.WAKE_MINIAPP_URL = "https://wake-7k6.pages.dev/"
+
+    def test_predict_list_offers_its_markets_as_buttons(self):
+        async def ok(path):
+            return [PREDICT_MARKET]
+
+        with patch.object(tb, "_get_json", ok):
+            _, keyboard = asyncio.run(tb.predict_payload("open"))
+        callbacks = [
+            b.callback_data
+            for row in keyboard.inline_keyboard
+            for b in row
+            if b.callback_data
+        ]
+        self.assertIn(f"k:{MARKET_ID}", callbacks)
+
+    def test_predict_list_without_the_app_still_says_where_to_trade(self):
+        async def ok(path):
+            return [PREDICT_MARKET]
+
+        tb.WAKE_MINIAPP_URL = "http://localhost:5173/"
+        with patch.object(tb, "_get_json", ok):
+            text, _ = asyncio.run(tb.predict_payload("open"))
+        self.assertIn("WAKE_MINIAPP_URL", text, "причина отсутствия кнопки")
+
+
+class TestAppLink(unittest.TestCase):
+    def setUp(self):
+        self._url = tb.WAKE_MINIAPP_URL
+        self.addCleanup(setattr, tb, "WAKE_MINIAPP_URL", self._url)
+
+    def test_https_address_becomes_a_link_with_the_checked_params(self):
+        tb.WAKE_MINIAPP_URL = "https://wake-7k6.pages.dev/"
+        # «&» в href обязан уйти как &amp;: Telegram набирает сообщения в HTML, и
+        # голый «&» он отбраковывает на разборе — сообщение не отправилось бы.
+        self.assertEqual(
+            tb.app_link("в терминале", "terminal", asset="BTC"),
+            '<a href="https://wake-7k6.pages.dev/?tab=terminal&amp;asset=BTC">'
+            "в терминале</a>",
+        )
+
+    def test_http_address_gives_no_link(self):
+        tb.WAKE_MINIAPP_URL = "http://localhost:5173/"
+        self.assertEqual(tb.app_link("в терминале", "terminal"), "")
+
+    def test_text_of_the_link_is_escaped(self):
+        tb.WAKE_MINIAPP_URL = "https://wake-7k6.pages.dev/"
+        self.assertNotIn("<b>", tb.app_link("<b>text</b>", "terminal"))
+
+
+class TestWelcome(unittest.TestCase):
+    """Первое сообщение отвечает на «с чего начать». /help перечисляет команды, и
+    повторять его в приветствии — значит занимать место, не давая выбора."""
+
+    OVERVIEW = {
+        "network": "mainnet",
+        "ranked_by": "quote_volume_24h",
+        "count": 2,
+        "rows": [
+            {
+                "symbol": "BTC",
+                "price": 84408.7,
+                "change_24h": -0.002,
+                "quote_volume_24h": 847_828_634.0,
+            },
+            {
+                "symbol": "ETH",
+                "price": 2660.34,
+                "change_24h": -0.0138,
+                "quote_volume_24h": 350_475_314.0,
+            },
+        ],
+        "no_market": [],
+        "no_data": [],
+    }
+
+    def setUp(self):
+        self._url = tb.WAKE_MINIAPP_URL
+        self.addCleanup(setattr, tb, "WAKE_MINIAPP_URL", self._url)
+        tb.WAKE_MINIAPP_URL = "https://wake-7k6.pages.dev/"
+
+    def test_names_the_top_markets_as_buttons(self):
+        with patch.object(
+            tb.lighter_rest, "get_market_overview", lambda network=None: self.OVERVIEW
+        ):
+            text, keyboard = asyncio.run(tb.start_payload())
+        self.assertIn("BTC", text)
+        self.assertIn("$847.8M", text)
+        buttons = [
+            b.callback_data
+            for row in keyboard.inline_keyboard
+            for b in row
+            if b.callback_data
+        ]
+        self.assertIn("p:BTC", buttons)
+        self.assertIn("c:markets", buttons, "навигация остаётся и в приветствии")
+
+    def test_survives_a_silent_lighter_without_losing_the_commands(self):
+        with patch.object(
+            tb.lighter_rest, "get_market_overview", _raise_runtime("Lighter HTTP 500")
+        ):
+            text, keyboard = asyncio.run(tb.start_payload())
+        self.assertIn("не отдан", text)
+        self.assertIn("/markets", text, "сказали, где взять список, когда ответит")
+        self.assertTrue(keyboard.inline_keyboard)
+
+    def test_body_lines_fit_the_bubble(self):
+        """Меряется тело <pre>, а не весь HTML: Telegram переносит обычный текст, и
+        строка ссылки в счёт не идёт — обрезается только моноширинное тело."""
+        with patch.object(
+            tb.lighter_rest, "get_market_overview", lambda network=None: self.OVERVIEW
+        ):
+            text, _ = asyncio.run(tb.start_payload())
+        body = text.split("<pre>")[1].split("</pre>")[0]
+        self.assertEqual([line for line in body.splitlines() if len(line) > 62], [])
+
+
+class TestProfileTexts(unittest.TestCase):
+    """Имя и описания ставятся при старте тем же процессом, что и меню команд.
+    Лимиты — часть Bot API, и длиннее строку он просто не примет."""
+
+    def test_lengths_stay_inside_the_bot_api_limits(self):
+        self.assertLessEqual(len(tb.BOT_NAME), 64)
+        self.assertLessEqual(len(tb.BOT_SHORT_DESCRIPTION), 120)
+        self.assertLessEqual(len(tb.BOT_DESCRIPTION), 512)
+
+    def test_describe_what_the_bot_does_not_do(self):
+        """«Ничего не выставляет» — то, что человек обязан понять до первой
+        команды: бот читает публичный API, а не управляет счётом."""
+        self.assertIn("не выставляет", tb.BOT_DESCRIPTION)
+        self.assertIn("Lighter", tb.BOT_SHORT_DESCRIPTION)
+
+    def test_register_profile_survives_a_refused_write(self):
+        """Тексты витрины не торговый путь: отказ Bot API не имеет права ронять
+        старт бота."""
+
+        class Refusing:
+            async def set_my_name(self, name):
+                raise RuntimeError("unauthorized")
+
+            async def set_my_short_description(self, text):
+                raise RuntimeError("unauthorized")
+
+            async def set_my_description(self, text):
+                raise RuntimeError("unauthorized")
+
+        asyncio.run(tb.register_profile(Refusing()))
 
 
 class TestTelegramLineWidth(unittest.TestCase):

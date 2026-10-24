@@ -2,24 +2,53 @@
 <html lang="ru">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- viewport-fit=cover нужен не для красоты: без него вебвью не сообщает
+         странице выемки экрана, нижняя панель вкладок ложится под жест возврата,
+         а Telegram со своими safeAreaInset становится слепым. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>Wake — терминал Lighter: перпы, копи-трейдинг, Predict</title>
     <meta
       name="description"
-      content="Wake — интерфейс к Lighter: стакан, свечи и лента сделок напрямую с публичного REST, копи-трейдинг с dry-run журналом, бинарные Predict-рынки на LMSR, анализ риска и funding-арбитраж. Вход через Telegram или кошелёк."
+      content="Wake — интерфейс к Lighter: свечи и лента сделок напрямую с публичного REST, копи-трейдинг с dry-run журналом, бинарные Predict-рынки на LMSR, анализ риска и funding-арбитраж. Вход через Telegram или кошелёк."
     />
-    <meta name="theme-color" content="#0a0a0a" />
+    <meta name="theme-color" content="#0b0b0c" />
     <meta name="color-scheme" content="dark" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="canonical" href="https://wake-7k6.pages.dev/" />
+    <!-- Шрифт подключён ссылкой, а не @import внутри стилей: @import находится
+         только после разбора CSS, и вторая поездка к fonts.gstatic вставала на
+         критический путь отрисовки цифр. -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Azeret+Mono:wght@700;900&display=swap"
+    />
+    <!-- Превью ссылки: карточка появляется там, где адрес вставляют — в чате
+         Telegram, в ответе бота, в мессенджерах и закладках. -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Wake" />
+    <meta property="og:locale" content="ru_RU" />
+    <meta property="og:url" content="https://wake-7k6.pages.dev/" />
     <meta property="og:title" content="Wake — терминал Lighter" />
     <meta
       property="og:description"
       content="Перпы и споты Lighter, копи-трейдинг, Predict-рынки, риск и funding — в одном интерфейсе. Данные из публичного API Lighter, без посредников."
     />
-    <meta property="og:type" content="website" />
+    <meta property="og:image" content="https://wake-7k6.pages.dev/og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="Wake — приборная панель Lighter: цена рынка, лента часовых свечей, список рынков" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Wake — терминал Lighter" />
+    <meta
+      name="twitter:description"
+      content="Перпы и споты Lighter, копи-трейдинг, Predict-рынки, риск и funding — в одном интерфейсе."
+    />
+    <meta name="twitter:image" content="https://wake-7k6.pages.dev/og.png" />
     <style>
-      html { background-color: #0a0a0a; color-scheme: dark; }
+      html { background-color: #0b0b0c; color-scheme: dark; }
     </style>
   </head>
   <body>

@@ -10,6 +10,47 @@ from the commit history rather than from a release.
 ## [Unreleased]
 
 ### Added
+- Telegram Mini App window integration in `src/lib/telegram.ts`. The page now
+  tells Telegram it is ready (`ready()`), expands itself to full height
+  (`expand()`), paints the window header and background from the theme tokens,
+  copies the safe-area insets Telegram reports into `--tg-safe-*` CSS variables,
+  binds the header back arrow to the stack of open panels and gives haptic
+  feedback under the outcome of an order, a subscription or a sign-in. Before
+  this the module read only `initData`: inside Telegram the app opened as a
+  half-height webview with a light header over a dark terminal, and the home
+  indicator lay across the order panel.
+- `src/lib/layers.ts` — the stack of open panels. `Modal` registers itself while
+  mounted, so `closeTopLayer()` answers "what does back close" for a panel the
+  shell knows nothing about: the order confirmation lives in the Terminal, the
+  Predict ticket lives in Predict, and neither is reachable from `App.tsx`.
+- `src/lib/tabs.ts` — one list of the nine sections: it draws the navigation,
+  numbers the Alt+1…Alt+9 shortcuts and defines which `?tab=` values an external
+  link may carry. The shortcut map and the deeplink whitelist were separate
+  copies of it and drifted silently.
+- Bottom tab bar on narrow screens and inside the Mini App: the same `<nav>`
+  element, repositioned by CSS, with an icon per section, the active section
+  scrolled into view and content padded above it. Nine captions in a strip under
+  the header used to scroll away on the first swipe.
+- `public/favicon.svg`, `public/og.png`, `public/apple-touch-icon.png` and
+  `scripts/brand-assets.mjs`, which renders the two rasters from the same markup
+  with the Playwright Chromium already used by e2e. The site had no icon at all
+  (every tab asked Pages for `/favicon.ico` and got the SPA back) and no
+  `og:image`, so a link shared in Telegram rendered as a bare URL. The preview
+  card carries no invented numbers.
+- `?tab=predict&market=<uuid>`: a Predict market opens where the bot's card
+  pointed — scrolled into view, ringed and labelled "из ссылки" — and the filter
+  switches to "Все" when the market behind the link is already resolved, because
+  "no markets" would be a lie about a market that exists.
+- Telegram bot surface: `/start` is a welcome with the eight most liquid markets
+  as buttons instead of a second copy of `/help`; the bot's name and both
+  descriptions are written at startup (`set_my_name`,
+  `set_my_short_description`, `set_my_description`); `/predict` lists markets as
+  buttons and answers with a card of one market — state, YES/NO in cents, the
+  threshold and the Lighter market behind it, time left, volume, the LMSR pool
+  with its subsidy and the curator's evidence link; every card repeats its
+  section as a plain text link, which survives the http address where Telegram
+  rejects a `web_app` button.
+
 - `backend/test_agent_execution.py`, `backend/test_lighter_rest.py`,
   `backend/test_key_store.py` (61 checks): the three modules that carried a
   «не тестировалось мной» note in their own headers are now tested. The agent
@@ -343,6 +384,25 @@ from the commit history rather than from a release.
   claim of an "optional KMS mode", which the removed file could not deliver.
 
 ### Fixed
+- `verifyTelegramLogin` sent `photo_url` because the Login Widget hands it over,
+  and Telegram does not sign that field: the recomputed check string diverged and
+  a correctly signed login answered 401. The payload now carries exactly the
+  signed fields.
+- `hasMiniAppUser` looked for the substrings `user=` and `hash=` in `initData`,
+  so a username containing `user=` counted as a signed user. The string is now
+  parsed as the parameter set it is (`parseInitData`), and a signature is present
+  only when `user`, `auth_date` and `hash` all parse.
+- The toast variant was inferred from three `includes()` calls, so
+  "Кошелёк не подключился: …" — a failure — rendered as neutral info and buzzed
+  as info. `toastVariant()` in `src/components/utils.ts` classifies it, and its
+  test enumerates the strings the panels actually print.
+- `telegram_bot.card()` glued the note to the last row of the table it followed;
+  the note is a different kind of sentence and now gets its own line.
+- The price card opened with the symbol the card title had just printed and
+  mixed market facts with trading conditions in one block; the network and the
+  symbol are in the title, price and 24h change share a line, and conditions
+  start after a blank line.
+
 - Automatic resolution of price markets closed nothing. `resolve_due_markets()`
   called its injected oracle as `price_fn(market_id, network, resolve_at)` while
   `lighter_rest.get_price_at()` is `(market_id, when_s, network)` — so the string

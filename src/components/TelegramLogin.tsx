@@ -4,9 +4,14 @@ import type { TelegramUser } from "../lib/telegram";
 
 // Telegram Login Widget объявляет колбэк на window по data-onauth; window в
 // lib.dom не знает про него — расширяем тип, чтобы не гасить no-explicit-any.
+//
+// Виджет отдаёт photo_url, а Telegram его не подписывает: поле отсекает
+// verifyTelegramLogin, и в проверке подписи оно не участвует.
+type WidgetUser = TelegramUser & { photo_url?: string };
+
 declare global {
   interface Window {
-    onTelegramAuth?: (user: TelegramUser) => void;
+    onTelegramAuth?: (user: WidgetUser) => void;
   }
 }
 

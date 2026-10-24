@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { avatarColor, categorizeMarket, fmt, fmtPrice, fmtPct, fmtUsdCompact, shortHandle, usd } from './utils'
+import { avatarColor, categorizeMarket, fmt, fmtPrice, fmtPct, fmtUsdCompact, shortHandle, toastVariant, usd } from './utils'
 import { COMMODITY_SYMBOLS, FOREX_SYMBOLS, STOCK_SYMBOLS } from './types'
 import type { OrderBook } from '../lib/lighter'
 
@@ -148,4 +148,57 @@ describe('категория рынка по живым символам кни�
       expect(s).toMatch(/^[A-Z0-9$]{1,12}$/)
     }
   })
+})
+
+// Строки взяты из тех мест, где их печатают: setToast вызывается одной строкой, а
+// вариант решает, какого цвета плашка и какой вибрацией мини-апп ответит на
+// исход ордера. Ошибка классификации здесь — это «красное выглядит спокойным».
+describe('toastVariant', () => {
+  const failures = [
+    'Кошелёк не подключился: User rejected the request',
+    'Кошелёк не подтверждён: Бэкенд Wake 401',
+    'Telegram не подтвердил вход: Подпись initData не совпала',
+    'Telegram не передал подписанную initData — войди через виджет или кошелёк',
+    'Бэкенд не отвечает: fetch failed',
+    'Бэкенд не принял выключение: Бэкенд Wake 503',
+    'Бэкенд отклонил подписку: allocation exceeds balance',
+    'Не удалось отписать: Бэкенд Wake 500',
+    'Не удалось записаться в leaders: Бэкенд Wake 409',
+    'Пауза не записана в базу: Бэкенд Wake 503',
+    'Сделка не записана: рынок закрыт',
+    'Выигрыш не начислен: уже забрано',
+    'Расчёт размера не прошёл: нет данных книги',
+    'Агент недоступен: Бэкенд Wake 502',
+    'Анализ риска недоступен: fetch failed',
+    'Размер ордера должен быть больше нуля',
+    'Минимальный ордер по этому рынку — 10 USDC',
+    'Нет свечей Lighter по этому рынку — агенту не на чём решать',
+  ]
+
+  const successes = [
+    'Ордер отправлен: 0x4f2a',
+    'Подписка на @vega записана в таблицу follows',
+    'Забрано $12.34 по «BTC выше 90k к 5 октября?»',
+    'Пробный период начат — 14 дней',
+    'Публикация включена: индекс Lighter #7, комиссия 0.08% за сделку',
+    'Публикация выключена: mirror_engine больше не строит план по твоим сделкам',
+    'Кошелёк подтверждён: @vega, Lighter #7',
+    'Вошёл как @wake_user',
+    'Добро пожаловать, Sergey!',
+  ]
+
+  // Это не успех и не отказ — указание, чего не хватает. Красить его зелёным
+  // нельзя: человек решит, что действие прошло.
+  const neutral = [
+    'Сначала войди через Telegram или кошелёк',
+    'Лидер публикуется на подтверждённый вход — войди через Telegram или кошелёк',
+    'Нужен индекс аккаунта Lighter: подтверди вход кошельком в меню профиля',
+    'Сначала подключи кошелёк',
+    'Добавь хотя бы одну позицию',
+    'Сервис подписи работает в сухом режиме: ордер в Lighter не ушёл',
+  ]
+
+  for (const message of failures) it(`отклоняет: ${message.slice(0, 40)}`, () => expect(toastVariant(message)).toBe('error'))
+  for (const message of successes) it(`подтверждает: ${message.slice(0, 40)}`, () => expect(toastVariant(message)).toBe('success'))
+  for (const message of neutral) it(`не окрашивает: ${message.slice(0, 40)}`, () => expect(toastVariant(message)).toBe('info'))
 })

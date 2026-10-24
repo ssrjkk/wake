@@ -28,8 +28,8 @@ Captured from this build with live data (2026-10-23), not mockups. The backend-d
 | ![Predict](docs/screenshots/predict-1440.png) | **Predict** — LMSR price and event markets, quoting and claims; the shot shows the list gate (backend) and the sign-in gate (positions and payouts). |
 | ![Agent](docs/screenshots/agent-1440.png) | **Агент** — per-market decision with per-market win-rate memory, gated on trial or Pro; the empty state names the endpoint, the curator header and the table the rows live in. |
 | ![Risk](docs/screenshots/risk-1440.png) | **Risk** — basket exposure and hedge sizing on Lighter's single margin, correlations from hourly candles. |
-| ![Terminal at 390](docs/screenshots/terminal-390.png) | **Терминал на 390 px** — the same desk stacked; no tab overflows horizontally. |
-| ![Telegram bot](docs/screenshots/bot-cards.png) | **@waketrade_bot** — the HTML cards `backend/telegram_bot.py` sends, rendered in a browser: ranking with ticker buttons and pagination, price card with the hourly sparkline, funding ranking, `/spread` across venues. |
+| ![Terminal at 390](docs/screenshots/terminal-390.png) | **Терминал на 390 px** — the same desk stacked, with the nine sections as a bottom bar under the thumb; no tab overflows horizontally. |
+| ![Telegram bot](docs/screenshots/bot-cards.png) | **@waketrade_bot** — the HTML cards `backend/telegram_bot.py` sends, rendered in a browser: the `/start` welcome with the live liquidity ranking as buttons, ranking with ticker buttons and pagination, price card with the hourly sparkline, funding ranking, `/spread` across venues. |
 
 ## What each panel does
 
@@ -51,7 +51,9 @@ Those three keep working with no backend, which is why the site does not go blan
 
 Both identity paths end in the same thing: a signed session token, and every endpoint that touches someone's money takes the identity from that token, never from a field in the request.
 
-**Telegram.** The Login Widget button renders only when the frontend is built with `VITE_TELEGRAM_BOT_NAME` (bot username, no `@`) and the backend runs with `TELEGRAM_BOT_TOKEN`. The backend recomputes the widget's check string and compares HMACs (`POST /auth/telegram`), and validates Mini App `initData` separately (`POST /auth/telegram/init`). Without the token the panel states that Telegram login is off rather than showing a button that will 401.
+**Telegram.** The Login Widget button renders only when the frontend is built with `VITE_TELEGRAM_BOT_NAME` (bot username, no `@`) and the backend runs with `TELEGRAM_BOT_TOKEN`. The backend recomputes the widget's check string and compares HMACs (`POST /auth/telegram`), and validates Mini App `initData` separately (`POST /auth/telegram/init`). The frontend sends exactly the fields Telegram signed — `photo_url` is delivered by the widget but is not part of the signature, and sending it breaks the check. Without the token the panel states that Telegram login is off rather than showing a button that will 401.
+
+Inside the Mini App the page also configures its own window (`src/lib/telegram.ts`): `ready()` and `expand()` — without them Telegram keeps a placeholder screen and half-height webview; a dark header and background taken from the theme tokens; the safe-area insets Telegram reports, so the bottom bar does not sit under the home indicator; the header back arrow closing the open panel instead of killing the app; and haptic feedback on the outcome of an order, a subscription or a sign-in.
 
 **Wallet.** Injected wallets (MetaMask, Rabby) work with no configuration; WalletConnect QR needs `VITE_WALLETCONNECT_PROJECT_ID`. Ownership is proven, not asserted: `POST /auth/wallet/challenge` returns a one-off `personal_sign` text (5 minutes, single use), `POST /auth/wallet/verify` recovers the address from the signature and rejects it if it is not the address that asked. The follower record is created from that recovered checksummed address.
 
@@ -148,9 +150,13 @@ python telegram_bot.py     # reads TELEGRAM_BOT_TOKEN from the environment
 
 Commands: `/price BTC`, `/markets`, `/funding`, `/spread BTC`, `/predict` (`/predict resolved`), `/wake`, `/help`. Typing a bare ticker (`BTC`, `eth`, `BTC-USDC`) is the same as `/price` — nobody remembers command syntax. Answers are HTML cards: the numbers sit in a monospace block, so the 24h volume columns actually line up, and a market list comes with the tickers as buttons, so the next tap chooses the market instead of typing it. The list paginates (`ещё →`), and ranks continue across pages — place 11 is place 11, not place 1 again.
 
-`/spread BTC` answers the same asset across every venue Lighter reports (lighter, binance, bybit, hyperliquid) through `funding_arb.venue_rate_rows` — the function behind `GET /funding/venues`. It deliberately does not print a spread or an annualised difference: the venues pay on different epochs, and reducing those numbers to one denominator without checking would be a lie the bot told for convenience.
+`/start` is not `/help`. The first message answers "where do I begin": what the bot is, and the eight most liquid markets right now as buttons. `/help` answers "what can I ask" and lists the commands. The name and the two descriptions on the bot's page are written at startup by the same process that registers the menu (`set_my_name`, `set_my_short_description`, `set_my_description`) — text typed into @BotFather half a year ago drifts from the code silently, and it is the first thing a person reads.
 
-The "Open Wake" button carries where you were looking: the BTC card opens `?tab=terminal&asset=BTC`, the funding answer opens `?tab=funding`, Predict opens `?tab=predict`. `src/lib/deeplink.ts` validates both parameters against the tab list and a ticker profile before using them.
+`/predict` lists the markets with one button per market; the button opens a card of that market — state, YES/NO in cents, the threshold and the Lighter market behind it, time left, volume, the LMSR pool and its subsidy, and the curator's evidence link. The link to the Mini App carries the market id (`?tab=predict&market=<uuid>`), so tapping a market in Telegram lands on that market, not on the top of a list.
+
+The "Open Wake" button carries where you were looking: the BTC card opens `?tab=terminal&asset=BTC`, the funding answer opens `?tab=funding`, Predict opens `?tab=predict`. `src/lib/deeplink.ts` validates the tab, the ticker and the market id against the tab list and their own profiles before using them. Besides the button, every card repeats the address as a plain text link: Telegram rejects a `web_app` button on an http address, and a link still gets the person to the right section.
+
+`/spread BTC` answers the same asset across every venue Lighter reports (lighter, binance, bybit, hyperliquid) through `funding_arb.venue_rate_rows` — the function behind `GET /funding/venues`. It deliberately does not print a spread or an annualised difference: the venues pay on different epochs, and reducing those numbers to one denominator without checking would be a lie the bot told for convenience.
 
 The command menu is written to Telegram at startup (`set_my_commands`), otherwise autocomplete on `/` is empty and the bot's capabilities are only knowable from a screenshot. If the menu cannot be registered, the bot logs it and keeps polling — the menu is discoverability, not a dependency.
 
@@ -218,7 +224,7 @@ Price markets close themselves at the deadline only while this process runs; oth
 # backend — run from backend/; needs a scratch PostgreSQL database
 createdb wake_test
 export WAKE_TEST_DATABASE_URL=postgresql+asyncpg://wake:wake@localhost:5432/wake_test
-python -m unittest discover        # 519 tests, all through discovery
+python -m unittest discover        # 540 tests, all through discovery
 python -m pytest -q                # the same set under pytest (+ Allure in CI)
 
 # frontend
@@ -261,7 +267,10 @@ PW_PORT=5178 npx playwright test
 - `src/lib/lighter.ts` — Lighter public REST client
 - `src/lib/arcus.ts` — Arcus public REST client: read-only market data, and the only place that interprets Arcus's status and type fields
 - `src/lib/net.ts` — the timeout every external request carries, and the human wording for one that ran out
-- `src/lib/predict.ts`, `src/lib/telegram.ts`, `src/lib/leaders.ts`, `src/lib/config.ts`
+- `src/lib/telegram.ts` — sign-in from inside the Mini App and the window it lives in: `ready`/`expand`, theme colors, safe-area insets, the back button and haptics
+- `src/lib/deeplink.ts` and `src/lib/tabs.ts` — the entry point of an external link, and the single list of sections it is checked against
+- `src/lib/layers.ts` — the stack of open panels, so "back" closes the top one instead of the whole app
+- `src/lib/predict.ts`, `src/lib/leaders.ts`, `src/lib/config.ts`
 
 ## Deployment
 

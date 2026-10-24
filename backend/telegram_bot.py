@@ -28,16 +28,21 @@ Telegram-бот Wake: карточки рынков, funding, Predict-рынки
 
 Как это ложится в Telegram:
 
-  - Команды регистрируются в меню бота при старте (set_my_commands): список
-    появляется и в «/»-автодополнении, и в кнопке Menu. Без этого шага бот на
-    /price физически отвечает, но узнать об этом можно только из чужого
-    скриншота.
+  - Команды, имя и описания бота ставятся при старте (set_my_commands,
+    set_my_name, set_my_description): автодополнение по «/» и страница бота —
+    тоже интерфейс, и руками у @BotFather они разъезжаются молча.
+  - /start — приветствие с живым списком самых ликвидных рынков кнопками, /help —
+    перечень команд. Первое отвечает на «с чего начать», второе на «что можно».
   - Ответы — HTML: заголовок и числа в моноширинном блоке, поэтому колонки
     оборотов и ставок не разъезжаются. Всё, что пришло извне (вопрос
-    Predict-рынка, тикер из callback), проходит через esc().
-  - Список рынков и карточка funding отдают тикеры кнопками: выбор тапом, а не
-    ручным вводом. callback_data проверяется регуляркой — это поле клиент
-    подставить может.
+    Predict-рынка, тикер из callback, текст исключения), проходит через esc().
+  - Список рынков, карточка funding и список Predict-рынков отдают выбор кнопками:
+    тап вместо ручного ввода. callback_data проверяется регуляркой — это поле
+    клиент подставить может, и из него строятся и запрос к бэкенду, и ссылка.
+  - Каждый ответ ведёт в интерфейс: карточка рынка — на сам рынок, карточка
+    Predict-рынка — на конкретный рынок. Кроме кнопки web_app дублируется
+    текстовая ссылка: при http-адресе Telegram кнопку не принимает, а сослаться
+    на раздел всё равно нужно.
   - Обычное слово BTC / eth / BTC-USDC в чате — тот же /price: синтаксис команды
     помнить не нужно.
 
@@ -84,6 +89,11 @@ WAKE_BACKEND = BACKEND_URL
 # обязана быть буквой). Буква внутри обязательна: "1" и "$" тикерами не считаются.
 TICKER_RE = re.compile(r"(?=.*[A-Z])[A-Z0-9$]{1,12}")
 
+# id Predict-рынка: uuid4 из таблицы predict_markets. Значение приходит из
+# callback_data, которое клиент подставить может, и оно попадает и в ссылку на
+# вебвью, и в запрос к бэкенду — поэтому профиль у него свой, строгий.
+MARKET_ID_RE = re.compile(r"[0-9a-fA-F][0-9a-fA-F-]{30,63}")
+
 # Бот создаётся в main(), а не на импорте: aiogram валидирует токен в конструкторе,
 # и без TELEGRAM_BOT_TOKEN модуль не удавалось даже импортировать в тестах.
 dp = Dispatcher()
@@ -97,6 +107,35 @@ BOT_COMMANDS = (
     BotCommand(command="wake", description="Открыть Wake в Telegram"),
     BotCommand(command="help", description="Что бот умеет"),
 )
+
+# Профиль бота — это тоже интерфейс: человек видит эти строки до первой команды,
+# в списке чатов и на странице бота. Без set_my_* там остаётся то, что было
+# набрано руками у @BotFather при создании, и оно расходится с ботом молча.
+BOT_NAME = "Wake — терминал Lighter"
+BOT_SHORT_DESCRIPTION = (
+    "Карточки рынков Lighter, funding и Predict-рынки Wake прямо в чате"
+)
+BOT_DESCRIPTION = (
+    "Wake читает публичный API Lighter и отдаёт: карточку рынка (цена, изменение "
+    "за 24 часа, funding, ход по часам), ранжирование перпов по фактическому "
+    "обороте, ставки funding по площадкам и бинарные Predict-рынки Wake с "
+    "кнопкой на конкретный рынок.\n"
+    "Ордера не выставляет, аккаунт не открывает, денег не видит — только числа "
+    "из публичного REST и из базы Wake.\n"
+    "Полный терминал открывается кнопкой «Открыть Wake»."
+)
+
+# Приветствие: с чего начинать, а не перечень команд (он у /help).
+WELCOME_BODY = (
+    "Терминал Lighter в чате: карточка рынка, рейтинг по обороту,\n"
+    "funding и бинарные Predict-рынки Wake.\n"
+    "\n"
+    "Можно просто написать тикер — BTC или eth, и будет карточка.\n"
+    "Команды — в меню по «/». Бот ничего не выставляет и счёт не\n"
+    "открывает: в нём только числа из публичного API и базы Wake."
+)
+
+WELCOME_MARKETS = 8
 
 
 def esc(value: object) -> str:
@@ -170,12 +209,22 @@ def find_perp(symbol: str) -> dict | None:
 
 
 def price_report(symbol: str, book: dict, stats: dict, funding: dict | None) -> str:
+    """Карточка рынка: сначала цена и как она двигалась, потом условия сделки.
+
+    Цена — закрытие последней часовой свечи, и это написано в самой строке:
+    «цена» без оговорки читается как последний тик, а ленту тиков бот не держит.
+
+    Пустая строка делит карточку на два блока. Telegram печатает <pre> с
+    сохранением переносов, и восемь строк подряд читаются как одна простыня,
+    тогда как цена и открытый интерес — про разные вещи.
+
+    symbol в теле не повторяется: заголовок карточки его уже показывает."""
     lines = [
-        f"{symbol} · market_id {book['market_id']}",
-        f"Цена (close последней 1ч свечи): {fmt_price(stats['price'])}",
-        f"Изменение за 24ч: {fmt_pct(stats['change_24h'])}",
+        f"рынок #{book['market_id']}",
+        f"Цена: {fmt_price(stats['price'])} · {fmt_pct(stats['change_24h'])} за 24ч",
         f"Оборот за 24ч: {fmt_usd(stats['quote_volume_24h'])}",
         f"Диапазон 24ч: {fmt_price(stats['high_24h'])} – {fmt_price(stats['low_24h'])}",
+        "",
         f"Открытый интерес: {fmt_open_interest(book)} базового актива",
         f"Мин. размер: {book['min_base_amount']} · шаг: {book['supported_size_decimals']} знаков",
     ]
@@ -190,8 +239,8 @@ def price_report(symbol: str, book: dict, stats: dict, funding: dict | None) -> 
         payer = funding["direction"]
         pays = {"long": "лонги", "short": "шорты"}.get(payer, "никто")
         lines.append(
-            f"Funding: {funding['rate'] * 100:.4f}%/ч (годовая ≈ "
-            f"{funding['rate'] * 24 * 365 * 100:.1f}%), платят {pays}"
+            f"Funding: {funding['rate'] * 100:.4f}%/ч · годовая ≈ "
+            f"{funding['rate'] * 24 * 365 * 100:.1f}% · платят {pays}"
         )
     return "\n".join(lines)
 
@@ -271,6 +320,103 @@ def predict_report(
     return "\n".join(lines)
 
 
+def fmt_cents(price: float) -> str:
+    """Доля в центах. Победившая доля после резолюции стоит $1, поэтому 47¢ — это
+    и вероятность, которую в неё закладывает пул, а не абстрактное число."""
+    return f"{price * 100:.0f}¢"
+
+
+def market_condition(m: dict) -> str:
+    """Условие ценового рынка — из полей таблицы, а не из текста вопроса: вопрос
+    набирает куратор, а threshold и comparator лежат в базе рядом с mark-ценой."""
+    if (
+        m.get("kind") != "price"
+        or m.get("threshold") is None
+        or not m.get("comparator")
+    ):
+        return ""
+    value = f"{float(m['threshold']):,.2f}".rstrip("0").rstrip(".")
+    return (
+        f"Условие: {m['comparator']} {value} по mark-цене Lighter "
+        f"(рынок #{m['lighter_market_id']})"
+    )
+
+
+def predict_market_report(m: dict, now: datetime.datetime | None = None) -> str:
+    """Один рынок: состояние, цена, условие, срок и чем закрылся.
+
+    Закрытый рынок показывает исход вместо цены: «47% YES» у уже решённого вопроса
+    читается как «ещё можно зайти», а зайти нельзя — бэкенд отказывает."""
+    now = now or datetime.datetime.now(datetime.timezone.utc)
+    resolved = m.get("status") == "resolved"
+    lines = [
+        "Состояние: закрыт" if resolved else "Состояние: открыт",
+        (
+            f"Исход: {m.get('outcome') or 'не указан'} · победившая доля — $1"
+            if resolved
+            else f"YES {fmt_cents(float(m['price_yes']))} · NO "
+            f"{fmt_cents(float(m['price_no']))}"
+        ),
+    ]
+    condition = market_condition(m)
+    if condition:
+        lines.append(condition)
+    if not resolved and m.get("resolve_at"):
+        lines.append(f"До закрытия: {_fmt_left(float(m['resolve_at']), now)}")
+    lines.append("")
+    lines.append(
+        f"Объём: {fmt_usd(float(m.get('volume_usd') or 0))} · сделок "
+        f"{int(m.get('trade_count') or 0)}"
+    )
+    if m.get("max_subsidy") is not None:
+        lines.append(
+            f"Пул LMSR: b={m.get('b')} · субсидия ≤ {fmt_usd(float(m['max_subsidy']))}"
+        )
+    if resolved and m.get("resolved_by"):
+        lines.append(f"Закрыл: {m['resolved_by']}")
+    return "\n".join(lines)
+
+
+def evidence_note(url: object) -> str:
+    """Ссылка на источник решения — отдельной строкой и только https.
+
+    URL набирает куратор: схема проверяется, кавычки экранируются, а показанный
+    текст — тот же адрес, что и в href. Подписать ссылку одним словом было бы
+    способом спрятать чужой домен."""
+    text = str(url or "").strip()
+    if not text.startswith("https://") or any(c in text for c in " \t\"'<>"):
+        return ""
+    label = text if len(text) <= 60 else text[:59] + "…"
+    return f'<a href="{html.escape(text, quote=True)}">{esc(label)}</a>'
+
+
+PREDICT_BUTTONS = 6
+BUTTON_LABEL = 42
+
+
+def predict_buttons(
+    markets: list, limit: int = PREDICT_BUTTONS
+) -> list[list[InlineKeyboardButton]]:
+    """Рынки — по одной кнопке в ряду.
+
+    Вопрос длиннее экрана, а две половины вопроса в ряд не читаются. id рынка
+    проходит ту же проверку, что и ссылка на вебвью: callback_data возвращает
+    клиент, и в запрос к бэкенду он должен приходить уже похожим на uuid."""
+    rows = []
+    for m in markets[:limit]:
+        question = str(m.get("question") or "").strip()
+        market_id = str(m.get("id") or "")
+        if not question or not MARKET_ID_RE.fullmatch(market_id):
+            continue
+        label = (
+            question
+            if len(question) <= BUTTON_LABEL
+            else question[: BUTTON_LABEL - 1] + "…"
+        )
+        rows.append([InlineKeyboardButton(text=label, callback_data=f"k:{market_id}")])
+    return rows
+
+
 def funding_report(rates: list, limit: int = 10) -> str:
     """Список ставок. Строки держим короче ~58 знаков: Telegram набирает <pre>
     моноширинно и не переносит — длинная строка упирается в край пузыря и
@@ -314,17 +460,25 @@ def spread_report(symbol: str, venues: list) -> str:
 def card(title: str, body: str, note: str = "") -> str:
     """Заголовок + моноширинное тело. Числа живут в <pre>: Telegram набирает их
     пропорциональным шрифтом, и без моноширинного блока колонки оборотов
-    разъезжаются, а сравнение глазам по правому краю — весь смысл списка."""
+    разъезжаются, а сравнение глазам по правому краю — весь смысл списка.
+
+    Сноска отделяется пустой строкой: она написана не в том регистре, что числа,
+    и приклеенная к последней строке таблицы читается как её продолжение."""
     text = f"<b>{esc(title)}</b>\n<pre>{esc(body)}</pre>"
-    return f"{text}\n{note}" if note else text
+    return f"{text}\n\n{note}" if note else text
 
 
-def miniapp_url(tab: str = "terminal", asset: str | None = None) -> str:
+def miniapp_url(
+    tab: str = "terminal", asset: str | None = None, market: str | None = None
+) -> str:
     """Ссылка на Mini App с нужным разделом и, если нужно, с выбранным рынком.
 
     Кнопка из карточки BTC должна приводить в терминал на BTC, а не в начало:
-    иначе ответ бота и экран не связаны, и рынок приходится искать руками.
-    Табы и тикер проверяются здесь, а не на сайте — адрес уходит в Telegram, и
+    иначе ответ бота и экран не связаны, и рынок приходится искать руками. У
+    Predict-рынка своя точка входа — конкретный рынок, потому что список из
+    десятка вопросов не отвечает на «показали ли мне тот самый».
+
+    Табы, тикер и id проверяются здесь, а не на сайте: адрес уходит в Telegram, и
     внятным он должен быть до отправки."""
     if not WAKE_MINIAPP_URL.startswith("https://"):
         return ""
@@ -332,11 +486,13 @@ def miniapp_url(tab: str = "terminal", asset: str | None = None) -> str:
     url = f"{WAKE_MINIAPP_URL}{sep}tab={tab}"
     if asset and TICKER_RE.fullmatch(asset):
         url += f"&asset={asset}"
+    if market and MARKET_ID_RE.fullmatch(market):
+        url += f"&market={market}"
     return url
 
 
 def web_app_button(
-    tab: str = "terminal", asset: str | None = None
+    tab: str = "terminal", asset: str | None = None, market: str | None = None
 ) -> InlineKeyboardButton | None:
     """Кнопка Mini App — только когда адрес https.
 
@@ -344,10 +500,23 @@ def web_app_button(
     localhost бот падал бы с 400 на каждом сообщении с такой клавиатурой, а не
     только там, где кнопка. Лучше кнопка исчезнет, а причина попадёт в лог и в
     ответ /start."""
-    url = miniapp_url(tab, asset)
+    url = miniapp_url(tab, asset, market)
     if not url:
         return None
     return InlineKeyboardButton(text="Открыть Wake", web_app=WebAppInfo(url=url))
+
+
+def app_link(
+    text: str, tab: str, asset: str | None = None, market: str | None = None
+) -> str:
+    """Текстовая ссылка на вебвью в теле ответа.
+
+    Кнопка web_app есть не всегда (адрес без https), а сослаться на раздел нужно:
+    <a href> Telegram открывает в том же вебвью. Адрес строится тем же
+    проверенным miniapp_url, так что в ссылку не попадает ничего, кроме таба,
+    тикера и id, прошедших регулярку."""
+    url = miniapp_url(tab, asset, market)
+    return f'<a href="{html.escape(url, quote=True)}">{esc(text)}</a>' if url else ""
 
 
 def ticker_rows(
@@ -370,10 +539,11 @@ def nav_keyboard(
     top_rows: list[list[InlineKeyboardButton]] | None = None,
     tab: str = "terminal",
     asset: str | None = None,
+    market: str | None = None,
 ) -> InlineKeyboardMarkup:
     """Навигация внизу каждого ответа: разделы + ссылка на полный интерфейс.
-    Кнопка интерфейса ведёт в тот раздел, о котором сейчас речь, а карточка
-    рынка — ещё и на сам рынок."""
+    Кнопка интерфейса ведёт в тот раздел, о котором сейчас речь, карточка рынка —
+    ещё и на сам рынок, а карточка Predict-рынка — на конкретный рынок."""
     rows = list(top_rows or [])
     rows.append(
         [
@@ -382,7 +552,7 @@ def nav_keyboard(
             InlineKeyboardButton(text="Predict", callback_data="c:predict"),
         ]
     )
-    app = web_app_button(tab, asset)
+    app = web_app_button(tab, asset, market)
     if app is not None:
         rows.append([app])
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -411,15 +581,59 @@ async def price_payload(ticker: str) -> tuple[str, InlineKeyboardMarkup]:
         funding = await asyncio.to_thread(lighter_rest.get_funding_rate, market_id)
     except RuntimeError:
         funding = None
+    link = app_link("график и ордер — в терминале Wake", "terminal", asset=ticker)
     return (
         card(
             f"{ticker} · Lighter {LIGHTER_NETWORK}",
             price_report(ticker, book, stats, funding),
-            "График и ордер — в веб-терминале." if app_available() else "",
+            link,
         ),
         # Кнопка ведёт в терминал уже на этом рынке: смотреть карточку и потом
         # искать тот же символ в списке — два лишних тапа на каждый запрос.
         nav_keyboard(tab="terminal", asset=ticker),
+    )
+
+
+async def start_payload() -> tuple[str, InlineKeyboardMarkup]:
+    """Приветствие: чем отвечать, и сразу то, что сейчас ликвиднее.
+
+    /help перечисляет команды, а с чего начать в первую минуту — нет. Здесь те же
+    рынки, что даёт /markets, но кнопками: знакомство с ботом не должно
+    начинаться с ручного набора тикера.
+
+    Lighter может не ответить — это не повод лишать человека приветствия, поэтому
+    список рынков опускается с записью о причине, а команды остаются."""
+    try:
+        overview = await asyncio.to_thread(lighter_rest.get_market_overview)
+    except Exception as e:
+        log.warning("приветствие без рынков: Lighter не ответил (%s)", e)
+        return (
+            card(
+                "Wake · терминал на Lighter",
+                WELCOME_BODY
+                + f"\n\nРейтинг рынков сейчас не отдан: {type(e).__name__}. "
+                "Список — командой /markets, когда Lighter ответит.",
+            ),
+            nav_keyboard(),
+        )
+    rows = overview["rows"][:WELCOME_MARKETS]
+    body = WELCOME_BODY + "\n\nСейчас ликвиднее всего (оборот за 24ч):"
+    for i, r in enumerate(rows, 1):
+        body += (
+            f"\n{i:>2}. {str(r['symbol']):<9} {fmt_price(r['price']):>10}  "
+            f"{fmt_pct(r['change_24h']):>8}  {fmt_usd(r['quote_volume_24h']):>8}"
+        )
+    return (
+        card(
+            "Wake · терминал на Lighter",
+            body,
+            app_link("открыть полный терминал", "terminal")
+            or "Полного интерфейса кнопкой нет: боту задают адрес мини-аппа через "
+            "WAKE_MINIAPP_URL, и без https Telegram вебвью не открывает.",
+        ),
+        nav_keyboard(
+            ticker_rows([str(r["symbol"]) for r in rows], cap=WELCOME_MARKETS) or None
+        ),
     )
 
 
@@ -501,14 +715,50 @@ async def predict_payload(status: str = "open") -> tuple[str, InlineKeyboardMark
             ),
             nav_keyboard(tab="predict"),
         )
-    note = (
-        "Купить долю и забрать выигрыш — в мини-аппе."
-        if app_available()
-        else "Купить долю — в веб-терминале."
+    note = app_link("купить долю и забрать выигрыш — в мини-аппе", "predict") or (
+        "Купить долю — в веб-терминале: задай WAKE_MINIAPP_URL с https, и кнопка "
+        "появится здесь."
     )
     return (
         card(f"Predict · {status}", predict_report(markets), note),
-        nav_keyboard(tab="predict"),
+        nav_keyboard(predict_buttons(markets) or None, tab="predict"),
+    )
+
+
+async def predict_market_payload(market_id: str) -> tuple[str, InlineKeyboardMarkup]:
+    """Карточка одного Predict-рынка по кнопке из списка.
+
+    id пришёл из callback_data и прошёл MARKET_ID_RE до того, как попасть сюда, —
+    в URL запроса он не может принести ни слэш, ни решётку."""
+    try:
+        market = await _get_json(f"/predict/markets/{market_id}")
+    except (httpx.HTTPError, ValueError) as e:
+        return (
+            card(
+                "Predict-рынок недоступен",
+                "Карточка рынка читается из базы Wake, другого источника у неё "
+                "нет.\n"
+                f"WAKE_BACKEND_URL = {WAKE_BACKEND}\n{type(e).__name__}: {e}",
+            ),
+            nav_keyboard(tab="predict"),
+        )
+    lines = (
+        [evidence_note(market.get("evidence_url"))]
+        if market.get("evidence_url")
+        else []
+    )
+    link = app_link(
+        "купить долю — в мини-аппе на этом рынке", "predict", market=market_id
+    )
+    if link:
+        lines.append(link)
+    return (
+        card(
+            str(market.get("question") or "Predict-рынок"),
+            predict_market_report(market),
+            "\n".join(lines),
+        ),
+        nav_keyboard(tab="predict", market=market_id),
     )
 
 
@@ -584,8 +834,15 @@ async def _reply(callback: CallbackQuery, stage: str, build) -> None:
     await callback.message.answer(*await safe_payload(stage, build))
 
 
-@dp.message(Command("start", "help"))
+@dp.message(Command("start"))
 async def cmd_start(message: Message):
+    """Приветствие отделено от /help: список команд отвечает на «что можно», а
+    первое сообщение должно отвечать на «с чего начать»."""
+    await _answer(message, "Приветствие", start_payload)
+
+
+@dp.message(Command("help"))
+async def cmd_help(message: Message):
     await message.answer(help_text(), reply_markup=nav_keyboard())
 
 
@@ -694,6 +951,22 @@ async def cb_predict(callback: CallbackQuery):
     await _reply(callback, "Predict", predict_payload)
 
 
+@dp.callback_query(F.data.startswith("k:"))
+async def cb_predict_market(callback: CallbackQuery):
+    """Карточка одного Predict-рынка по кнопке из списка.
+
+    id приходит из callback_data, который клиент подставить может, поэтому он
+    сначала проверяется профилем uuid: дальше из него строится и адрес вебвью, и
+    запрос к бэкенду."""
+    market_id = callback.data.removeprefix("k:")
+    if not MARKET_ID_RE.fullmatch(market_id):
+        await callback.answer(
+            "Кнопка из старой версии — список рынков: /predict", show_alert=True
+        )
+        return
+    await _reply(callback, "Predict-рынок", lambda: predict_market_payload(market_id))
+
+
 @dp.callback_query()
 async def cb_unknown(callback: CallbackQuery):
     """Всё нераспознанное — в основном callback от клавиатур прошлой версии бота:
@@ -727,6 +1000,24 @@ async def register_commands(bot: Bot) -> None:
         log.warning("команды бота не зарегистрированы: %s", e)
 
 
+async def register_profile(bot: Bot) -> None:
+    """Имя и описания витрины бота ставятся тем же процессом, что и меню команд.
+
+    Разойтись они могут молча: код меняется, а текст, набранный полгода назад у
+    @BotFather, остаётся — и первое впечатление человек составляет по нему.
+    Неудача не роняет бота: это витрина, а не торговый путь."""
+    steps = {
+        "имя": lambda: bot.set_my_name(BOT_NAME),
+        "краткое описание": lambda: bot.set_my_short_description(BOT_SHORT_DESCRIPTION),
+        "описание": lambda: bot.set_my_description(BOT_DESCRIPTION),
+    }
+    for label, step in steps.items():
+        try:
+            await step()
+        except Exception as e:
+            log.warning("%s бота не установлено: %s", label, e)
+
+
 async def main():
     if not TELEGRAM_BOT_TOKEN:
         raise RuntimeError("TELEGRAM_BOT_TOKEN не задан — получи у @BotFather")
@@ -739,6 +1030,7 @@ async def main():
         token=TELEGRAM_BOT_TOKEN,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
+    await register_profile(bot)
     await register_commands(bot)
     await dp.start_polling(bot)
 

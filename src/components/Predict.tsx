@@ -20,6 +20,9 @@ interface PredictProps {
   signedIn: boolean;
   setToast: (toast: string | null) => void;
   onConnect: () => void;
+  // Рынок, на который пришла ссылка из Telegram-бота. Показываем его выбранным,
+  // а не тем, который первым лежал в списке.
+  focusMarket?: string | null;
 }
 
 const FILTERS: { id: PredictStatus; label: string }[] = [
@@ -51,8 +54,10 @@ function conditionOf(m: PredictMarket): string | null {
   return `${sign} ${value} · mark-цена Lighter, рынок #${m.lighter_market_id}`;
 }
 
-export default function Predict({ signedIn, setToast, onConnect }: PredictProps) {
-  const [status, setStatus] = useState<PredictStatus>("open");
+export default function Predict({ signedIn, setToast, onConnect, focusMarket = null }: PredictProps) {
+  // Срез под ссылку: «открытые» не содержит резолвленного рынка, и человек,
+  // пришедший по ссылке на закрытый рынок, увидел бы «рынков нет» вместо своего.
+  const [status, setStatus] = useState<PredictStatus>(focusMarket ? "all" : "open");
   const [markets, setMarkets] = useState<PredictMarket[] | null>(null);
   const [marketsError, setMarketsError] = useState<string | null>(null);
   const [positions, setPositions] = useState<PredictPosition[] | null>(null);
@@ -140,6 +145,16 @@ export default function Predict({ signedIn, setToast, onConnect }: PredictProps)
 
   const claimable = (positions ?? []).filter((p) => p.claimable_usd > 0);
   const now = new Date(clock);
+
+  // Ссылка из бота ведёт на конкретный рынок: его видно сразу, а не после
+  // проматывания списка. Прокручиваем по факту пришедшего списка — до ответа
+  // бэкенда карточки в дереве нет.
+  const focusListed = focusMarket !== null && (markets?.some((m) => m.id === focusMarket) ?? false);
+
+  useEffect(() => {
+    if (!focusMarket || !focusListed) return;
+    document.getElementById(`predict-market-${focusMarket}`)?.scrollIntoView({ block: "center" });
+  }, [focusMarket, focusListed, markets]);
 
   function openTrade(market: PredictMarket, outcome: "yes" | "no") {
     if (!signedIn) {
@@ -366,6 +381,26 @@ export default function Predict({ signedIn, setToast, onConnect }: PredictProps)
         </div>
       )}
 
+      {/* Ссылка из бота на рынок, которого в этом срезе нет: «рынков нет» был бы
+          обманом — рынок есть, просто закрыт или создан позже. */}
+      {focusMarket && markets && !focusListed && (
+        <div className="notice notice-warn animate-fade-in">
+          <span>
+            Рынка <code className="num">{focusMarket.slice(0, 8)}…</code> нет в срезе
+            «{FILTERS.find((f) => f.id === status)?.label}»: он мог закрыться или появиться позже
+            этого запроса.
+          </span>
+          {status !== "all" && (
+            <button
+              onClick={() => { setStatus("all"); setMarkets(null); setMarketsError(null); }}
+              className="btn-ghost shrink-0"
+            >
+              Показать все
+            </button>
+          )}
+        </div>
+      )}
+
       {!markets && !marketsError && (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: "8px" }}>
           {[0, 1, 2, 3].map((i) => (
@@ -397,10 +432,26 @@ export default function Predict({ signedIn, setToast, onConnect }: PredictProps)
             const no = heldByKey.get(`${m.id}:no`);
             const resolved = m.status === "resolved";
             return (
-              <div key={m.id} style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", padding: "16px", display: "flex", flexDirection: "column" }}>
+              <div
+                key={m.id}
+                id={`predict-market-${m.id}`}
+                style={{
+                  background: m.id === focusMarket ? "#150f0b" : "#111",
+                  border: `1px solid ${m.id === focusMarket ? "#ff6b35" : "#1e1e1e"}`,
+                  borderRadius: "6px",
+                  padding: "16px",
+                  display: "flex",
+                  flexDirection: "column",
+                }}
+              >
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px", gap: "8px" }}>
-                  <span style={{ fontSize: "10px", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
-                    {m.kind === "price" ? "Цена на Lighter" : "Событие"}
+                  <span style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0 }}>
+                    <span style={{ fontSize: "10px", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                      {m.kind === "price" ? "Цена на Lighter" : "Событие"}
+                    </span>
+                    {m.id === focusMarket && (
+                      <span style={{ fontSize: "10px", color: "#ff6b35", whiteSpace: "nowrap" }}>из ссылки</span>
+                    )}
                   </span>
                   <span style={{ fontSize: "10px", color: "var(--text-muted)" }}>
                     {resolved ? "закрыт" : predictTimeLeft(m.resolve_at, now)}

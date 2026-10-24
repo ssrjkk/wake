@@ -1,5 +1,8 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Azeret+Mono:wght@700;900&display=swap');
 @import "tailwindcss";
+
+/* Шрифты подключаются в index.html (<link>), а не здесь: @import внутри CSS
+   обнаруживается только после разбора стилей и вставлял вторую поездку к
+   fonts.gstatic на критический путь первой отрисовки чисел. */
 
 /* Тема v4 живёт здесь: tailwind.config.js в четвёртой версии не подхватывается. */
 @theme {
@@ -77,6 +80,13 @@
        потому что инлайн-стиль перебивает любое правило, а медиазапрос в
        инлайне не написать. */
     --touch: 36px;
+
+    /* Выемки экрана. env() работает в обычном браузере, а вебвью Telegram часто
+       отдаёт ему ноль — окно уже обрезано клиентом, — и тогда свои числа в
+       приложение приносит SDK (--tg-safe-*, пишет lib/telegram.ts). Берётся
+       большее из двух. */
+    --safe-top: max(var(--tg-safe-top, 0px), env(safe-area-inset-top, 0px));
+    --safe-bottom: max(var(--tg-safe-bottom, 0px), env(safe-area-inset-bottom, 0px));
   }
 
   /* Старые имена. Компоненты, которые ещё не переведены на шкалу выше,
@@ -593,6 +603,40 @@
 
   .nav-tab-active::after { transform: scaleX(1); }
 
+  /* ── Лента навигации ──────────────────────────────────────────────────────
+     Один элемент <nav> на оба расположения: на широком экране — строка подписей
+     под шапкой, на узком та же разметка становится закреплённой снизу панелью.
+     Два разных элемента разошлись бы в том, какая вкладка текущая, и рассинхрон
+     увиделся бы сразу на телефоне, где проверять aria-current некому. */
+  .tabbar {
+    display: flex;
+    align-items: stretch;
+    gap: 2px;
+    overflow-x: auto;
+    border-bottom: 1px solid var(--line);
+    padding: 0 4px;
+    scroll-behavior: smooth;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .tabbar .tab-icon { display: none; }
+
+  .app-shell {
+    padding-top: calc(20px + var(--safe-top));
+    padding-bottom: calc(20px + var(--safe-bottom));
+  }
+
+  /* Уведомление — над всем, включая нижнюю панель: на телефоне оно сообщает исход
+     ордера именно тогда, когда руки заняты панелью. */
+  .toast {
+    position: fixed;
+    bottom: 16px;
+    left: 50%;
+    transform: translateX(-50%);
+    max-width: min(440px, calc(100vw - 32px));
+    z-index: 60;
+  }
+
   .live-indicator {
     width: 5px;
     height: 5px;
@@ -851,6 +895,43 @@
     .btn-primary { padding: 12px 18px; min-height: 44px; }
     .btn-action { padding: 14px; }
     .input-mono { padding: 12px 14px; font-size: 15px; }
+
+    /* Девять вкладок под пальцем, а не над контентом: в верхней полосе они
+       уезжали при первом же скролле, а в мини-аппе Telegram ещё и сама шапка
+       отнимает верхнюю часть экрана. Акцентная полоска переезжает на верхний
+       край панели — это сторона, обращённая к контенту. */
+    .tabbar {
+      position: fixed;
+      inset: auto 0 0 0;
+      z-index: 55;
+      gap: 0;
+      padding: 0 2px;
+      padding-bottom: var(--safe-bottom);
+      border-bottom: none;
+      border-top: 1px solid var(--line);
+      background: var(--bg-1);
+    }
+
+    .tabbar .nav-tab {
+      flex: 0 0 auto;
+      flex-direction: column;
+      align-items: center;
+      gap: 3px;
+      min-width: 66px;
+      min-height: 54px;
+      padding: 8px 8px 9px;
+      font-size: var(--fs-label);
+      letter-spacing: 0.02em;
+    }
+
+    .tabbar .nav-tab::after { top: 0; bottom: auto; left: 10px; right: 10px; }
+    .tabbar .tab-icon { display: block; }
+    .tabbar .live-indicator { position: absolute; top: 7px; right: 7px; }
+
+    /* Нижний край контента не должен прятаться под панелью, а уведомление —
+       ложиться на неё. */
+    .app-shell { padding-bottom: calc(66px + var(--safe-bottom)); }
+    .toast { bottom: calc(66px + var(--safe-bottom)); }
 
     button,
     [role="button"],

@@ -1,6 +1,17 @@
-import { useState, useEffect, useEffectEvent, lazy, Suspense } from "react";
+import { useState, useEffect, useEffectEvent, useRef, lazy, Suspense } from "react";
 import { useAccount, useConnect, useDisconnect, useEnsName, useSignMessage } from "wagmi";
-import { Zap, ChevronDown, ChevronRight, X, Check, ServerOff, RefreshCw, AlertTriangle, Info } from "lucide-react";
+import {
+  Zap,
+  ChevronDown,
+  ChevronRight,
+  X,
+  Check,
+  ServerOff,
+  RefreshCw,
+  AlertTriangle,
+  Info,
+  MessageSquareText,
+} from "lucide-react";
 import {
   getOrderBooks,
   getAccountByL1Address,
@@ -16,18 +27,30 @@ import {
   type LighterNetwork,
   type OrderBook,
 } from "./lib/lighter";
-import { LIGHTER_NETWORK } from "./lib/config";
+import { LIGHTER_NETWORK, TELEGRAM_BOT_NAME } from "./lib/config";
 import { readEntryFromSearch } from "./lib/deeplink";
+import { TABS } from "./lib/tabs";
 import { setNetwork as setArcusNetwork } from "./lib/arcus";
 import { backendJson, errorText, probeBackend, SIGNED_OUT_EVENT, type BackendHealth } from "./lib/backend";
 import { clearSession, getSession, saveSession, type Session, type SignInResponse } from "./lib/session";
 import { verifyWalletOwnership } from "./lib/wallet";
+import { closeTopLayer, onLayerDepth } from "./lib/layers";
 import { Modal, NavTab, ToastProvider } from "./components/ui";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import type { Tab } from "./components/types";
 import { TelegramLogin } from "./components/TelegramLogin";
-import { connectTelegramMiniApp, isTelegramWebView, miniAppDisplayName, verifyTelegramLogin, type TelegramUser } from "./lib/telegram";
-import { categorizeMarket, avatarColor, shortHandle, usd, fmt } from "./components/utils";
+import {
+  connectTelegramMiniApp,
+  ensureTelegramChrome,
+  isTelegramWebView,
+  miniAppDisplayName,
+  openExternally,
+  setTelegramBackHandler,
+  telegramNotify,
+  verifyTelegramLogin,
+  type TelegramUser,
+} from "./lib/telegram";
+import { categorizeMarket, avatarColor, shortHandle, toastVariant, usd, fmt } from "./components/utils";
 import type { Leader, Following, Subscription } from "./components/types";
 
 const Dashboard = lazy(() => import("./components/Dashboard"));
@@ -56,9 +79,10 @@ export default function App() {
      Считается один раз до рендера — иначе переключение вкладок затрёт то, с чего
      начали. */
   const [entry] = useState(() =>
-    readEntryFromSearch(window.location.search, { tab: "dashboard", asset: "BTC" })
+    readEntryFromSearch(window.location.search, { tab: "dashboard", asset: "BTC", market: null })
   );
   const [tab, setTab] = useState<Tab>(entry.tab);
+  const navRef = useRef<HTMLElement>(null);
   const [walletMenuOpen, setWalletMenuOpen] = useState(false);
   const [connectPickerOpen, setConnectPickerOpen] = useState(false);
   const [accountResult, setAccountResult] = useState<{ key: string; account: LighterAccount | null } | null>(null);
@@ -178,12 +202,11 @@ export default function App() {
       setToastState(null);
       return;
     }
-    const variant = msg.includes("не удалось") || msg.includes("не отправлен") || msg.includes("ошибка") || msg.includes("error")
-      ? "error"
-      : msg.includes("отправлен") || msg.includes("успешно") || msg.includes("добавлен")
-      ? "success"
-      : "info";
+    const variant = toastVariant(msg);
     setToastState({ msg, variant, ts: Date.now() });
+    // Тот же итог, что и строка внизу экрана, но в руке: в мини-аппе человек
+    // смотрит на график, а не вниз, и исход ордера обязан ощущаться.
+    telegramNotify(variant);
   }
 
   useEffect(() => {
@@ -226,26 +249,26 @@ export default function App() {
       }
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
       if (e.altKey && !e.ctrlKey && !e.metaKey) {
-        const tabMap: Record<string, Tab> = {
-          "1": "dashboard",
-          "2": "terminal",
-          "3": "discover",
-          "4": "portfolio",
-          "5": "earn",
-          "6": "predict",
-          "7": "agent",
-          "8": "risk",
-          "9": "funding",
-        };
-        if (tabMap[e.key]) {
+        const index = Number(e.key) - 1;
+        if (e.key >= "1" && e.key <= "9" && index < TABS.length) {
           e.preventDefault();
-          setTab(tabMap[e.key]);
+          setTab(TABS[index].id);
         }
       }
     }
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
   }, []);
+
+  // Активная вкладка остаётся в поле зрения ленты. Девять подписей не влезают в
+  // узкое окно, и переход по Alt-цифре или по ссылке из бота иначе показывал бы
+  // экран без того, где сейчас человек.
+  useEffect(() => {
+    const bar = navRef.current;
+    const active = bar?.querySelector<HTMLElement>('[aria-current="page"]');
+    if (!bar || !active) return;
+    bar.scrollLeft = Math.max(0, active.offsetLeft - (bar.clientWidth - active.offsetWidth) / 2);
+  }, [tab]);
 
   function switchNetwork(next: LighterNetwork) {
     setLighterNetwork(next);
@@ -358,6 +381,32 @@ export default function App() {
       .catch((error) => { if (live) onAutoLoginError(error); });
     return () => { live = false; };
   }, []);
+
+  // Окно мини-аппа настраивает сама страница: без ready() Telegram держит
+  // экран-заглушку, без expand() приложение остаётся половиной высоты, а шапка
+  // окна — светлой над тёмным интерфейсом.
+  useEffect(() => {
+    if (!isTelegramWebView()) return;
+    void ensureTelegramChrome();
+  }, []);
+
+  // Глубина стека модалок: торговые панели монтируют свои внутри своих вкладок,
+  // и здесь им не нужно ни знать про них, ни пробрасывать onClose наверх.
+  const [layerDepth, setLayerDepth] = useState(0);
+  useEffect(() => onLayerDepth(setLayerDepth), []);
+
+  // Стрелка «назад» в шапке Telegram закрывает верхнюю панель: сначала модалку
+  // (выбор рынка, подтверждение ордера, окно входа), затем — меню профиля. Без
+  // этого единственная «назад» в окне вела бы сразу к закрытию мини-аппа.
+  const overlayOpen = layerDepth > 0 || walletMenuOpen || connectPickerOpen || marketPickerOpen || copyModal !== null;
+  useEffect(() => {
+    if (!isTelegramWebView()) return;
+    setTelegramBackHandler(overlayOpen, () => {
+      if (closeTopLayer()) return;
+      setWalletMenuOpen(false);
+    });
+    return () => setTelegramBackHandler(false, () => {});
+  }, [overlayOpen]);
 
   useEffect(() => {
     // 401 из backendJson означает «этот токен больше не действителен», и приложение
@@ -514,7 +563,7 @@ export default function App() {
     <div
       role="status"
       aria-live="polite"
-      className="fixed bottom-4 left-4 right-4 sm:left-1/2 sm:right-auto sm:-translate-x-1/2 bg-[#1a1a1a] border rounded-full px-5 py-3 shadow-2xl flex items-center gap-3 z-50 sm:max-w-md animate-fade-in"
+      className="toast bg-[#1a1a1a] border rounded-full px-5 py-3 shadow-2xl flex items-center gap-3 z-50 animate-fade-in"
       style={{ borderColor: toast.variant === "error" ? "#ef4444" : toast.variant === "success" ? "#10b981" : "#3b82f6" }}
     >
       {toast.variant === "error" ? <AlertTriangle className="w-4 h-4 text-[#ef4444] shrink-0" />
@@ -530,7 +579,7 @@ export default function App() {
   return (
     <ToastProvider toast={toastView}>
     <div className="min-h-screen w-full font-sans">
-      <div className="max-w-6xl mx-auto px-3 sm:px-6 py-5">
+      <div className="app-shell max-w-6xl mx-auto px-3 sm:px-6">
         <div className="mb-4">
           <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3 mb-3">
             <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
@@ -587,7 +636,12 @@ export default function App() {
                 </button>
               ) : (
                 <button onClick={() => setConnectPickerOpen(true)} className="btn-primary">
-                  Войти через TG или кошелёк
+                  {/* На телефоне шапка и так съедает четверть экрана: длинная
+                      подпись уводила кнопку входа на вторую строку. Полный
+                      вариант остаётся на широком экране и в описании модального
+                      окна, куда кнопка открывает. */}
+                  <span className="hidden sm:inline">Войти через TG или кошелёк</span>
+                  <span className="sm:hidden">Войти</span>
                 </button>
               )}
 
@@ -625,6 +679,25 @@ export default function App() {
                       <div className="text-xs text-[color:var(--text-muted)] mb-3 font-mono">
                         бэкенд: {backend.network} · {backend.dry_run ? "dry-run — ордера не отправляются" : "реальные ордера"}
                       </div>
+                    )}
+                    {TELEGRAM_BOT_NAME && (
+                      <a
+                        href={`https://t.me/${TELEGRAM_BOT_NAME}?startapp`}
+                        target="_blank"
+                        rel="noreferrer noopener"
+                        onClick={(e) => {
+                          // Изнутри Telegram ссылка обязана уйти в сам клиент, а
+                          // не открыть второе вебвью поверх этого.
+                          if (isTelegramWebView()) {
+                            e.preventDefault();
+                            openExternally(`https://t.me/${TELEGRAM_BOT_NAME}`);
+                          }
+                        }}
+                        className="flex items-center gap-2 text-xs text-[color:var(--fg-2)] hover:text-[var(--accent)] mb-3 transition-colors"
+                      >
+                        <MessageSquareText className="w-3.5 h-3.5 shrink-0" />
+                        @{TELEGRAM_BOT_NAME} — карточки рынков командой и тикером
+                      </a>
                     )}
                     {address && session?.via !== "wallet" && (
                       <>
@@ -767,19 +840,18 @@ export default function App() {
             </div>
           </div>
 
-          <div className="relative -mx-3 px-3 sm:mx-0 sm:px-0">
-            <nav className="flex items-center gap-0.5 overflow-x-auto border-b border-[var(--line)] px-1 scrollbar-hide" aria-label="Основная навигация" style={{ WebkitOverflowScrolling: "touch" }}>
-              <NavTab active={tab === "dashboard"} onClick={() => setTab("dashboard")} label="Обзор" live />
-              <NavTab active={tab === "terminal"} onClick={() => setTab("terminal")} label="Терминал" live />
-              <NavTab active={tab === "discover"} onClick={() => setTab("discover")} label="Discover" />
-              <NavTab active={tab === "portfolio"} onClick={() => setTab("portfolio")} label="Портфель" />
-              <NavTab active={tab === "earn"} onClick={() => setTab("earn")} label="Earn" />
-              <NavTab active={tab === "predict"} onClick={() => setTab("predict")} label="Predict" />
-              <NavTab active={tab === "agent"} onClick={() => setTab("agent")} label="Агент" />
-              <NavTab active={tab === "risk"} onClick={() => setTab("risk")} label="Risk" />
-              <NavTab active={tab === "funding"} onClick={() => setTab("funding")} label="Funding" />
-            </nav>
-          </div>
+          <nav ref={navRef} className="tabbar scrollbar-hide" aria-label="Основная навигация">
+            {TABS.map((t) => (
+              <NavTab
+                key={t.id}
+                icon={t.icon}
+                active={tab === t.id}
+                onClick={() => setTab(t.id)}
+                label={t.label}
+                live={t.live}
+              />
+            ))}
+          </nav>
         </div>
 
         {backendChecked && !backend && (
@@ -894,7 +966,13 @@ export default function App() {
 
             {tab === "predict" && (
               <ErrorBoundary fallback={<div style={{ padding: "24px", color: "#ef4444" }}>Ошибка загрузки Predict. <button onClick={() => window.location.reload()} style={{ color: "#3b82f6", background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>Обновить</button></div>}>
-                <Predict key={userId ?? "signed-out"} signedIn={signedIn} setToast={setToast} onConnect={() => setConnectPickerOpen(true)} />
+                <Predict
+                  key={userId ?? "signed-out"}
+                  signedIn={signedIn}
+                  setToast={setToast}
+                  onConnect={() => setConnectPickerOpen(true)}
+                  focusMarket={entry.market}
+                />
               </ErrorBoundary>
             )}
 

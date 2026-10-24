@@ -86,7 +86,7 @@ alembic check
 
 ## Tests
 
-**Backend** — one command, 519 tests, against a real PostgreSQL:
+**Backend** — one command, 540 tests, against a real PostgreSQL:
 
 ```bash
 cd backend
@@ -108,14 +108,15 @@ Four rules the suite enforces on itself (the first three come from `backend/test
 npm ci
 npm run lint                      # ESLint over src/, e2e/ and the config files
 npx tsc --noEmit
-npm run test:run                  # vitest: 138 tests in 14 files
+npm run test:run                  # vitest: 199 tests in 15 files
+node scripts/brand-assets.mjs       # re-render public/og.png and apple-touch-icon.png
 npm run build
 PW_PORT=5178 npx playwright test  # first run needs `npx playwright install chromium`
 ```
 
 CI runs `npm run test:run -- --coverage` and `npm run test:e2e`. The e2e suite drives the frontend alone against the vite dev server — its route stubs intercept everything outside their own origin, so it neither needs nor tests the backend.
 
-Playwright starts its own dev server with `VITE_TELEGRAM_BOT_NAME` and `VITE_WALLETCONNECT_PROJECT_ID` explicitly empty. Local `.env` values cannot skip tests or change the sign-in scenario. The Telegram component's configured path is covered by unit tests; e2e also checks keyboard focus, Escape, tab navigation and mobile overflow.
+Playwright starts its own dev server with `VITE_TELEGRAM_BOT_NAME` and `VITE_WALLETCONNECT_PROJECT_ID` explicitly empty. Local `.env` values cannot skip tests or change the sign-in scenario. The Telegram component's configured path is covered by unit tests; e2e also checks keyboard focus, Escape, tab navigation and mobile overflow. `e2e/miniapp.spec.ts` runs the same page against a stub `window.Telegram.WebApp` with a Telegram user agent: it asserts the page calls `ready`/`expand` in order, paints the window from the theme tokens, moves the safe-area numbers into CSS, and closes the top panel on the header back button.
 
 `PW_PORT` exists because the suite starts its own dev server; set it when 5173 is already taken.
 
@@ -291,7 +292,7 @@ alembic check
 
 ## Тесты
 
-**Бэкенд** — одна команда, 519 тестов, против настоящего PostgreSQL:
+**Бэкенд** — одна команда, 540 тестов, против настоящего PostgreSQL:
 
 ```bash
 cd backend
@@ -313,14 +314,15 @@ python -m pytest . -q
 npm ci
 npm run lint                      # ESLint по src/, e2e/ и конфигам
 npx tsc --noEmit
-npm run test:run                  # vitest: 138 тестов в 14 файлах
+npm run test:run                  # vitest: 199 тестов в 15 файлах
+node scripts/brand-assets.mjs       # перерендерить public/og.png и apple-touch-icon.png
 npm run build
 PW_PORT=5178 npx playwright test  # первый прогон требует `npx playwright install chromium`
 ```
 
 CI запускает `npm run test:run -- --coverage` и `npm run test:e2e`. E2e-проверка работает только с фронтом против dev-сервера vite: её route-заглушки отсекают весь трафик вне собственного origin, поэтому бэкенд ей не нужен и не проверяется.
 
-Playwright поднимает собственный dev-сервер с явно пустыми `VITE_TELEGRAM_BOT_NAME` и `VITE_WALLETCONNECT_PROJECT_ID`. Локальный `.env` больше не пропускает тесты и не меняет сценарий входа. Настроенный Telegram-виджет покрыт unit-тестами; e2e проверяет фокус с клавиатуры, Escape, навигацию по вкладкам и отсутствие переполнения на мобильном экране.
+Playwright поднимает собственный dev-сервер с явно пустыми `VITE_TELEGRAM_BOT_NAME` и `VITE_WALLETCONNECT_PROJECT_ID`. Локальный `.env` больше не пропускает тесты и не меняет сценарий входа. Настроенный Telegram-виджет покрыт unit-тестами; e2e проверяет фокус с клавиатуры, Escape, навигацию по вкладкам и отсутствие переполнения на мобильном экране. `e2e/miniapp.spec.ts` гоняет ту же страницу против заглушки `window.Telegram.WebApp` с телеграмовским user agent: что страница вызывает `ready`/`expand` по порядку, красит окно токенами темы, переносит выемки экрана в CSS и закрывает верхнюю панель по стрелке «назад».
 
 `PW_PORT` существует потому, что suite поднимает свой dev-сервер; ставьте его, когда 5173 занят.
 
