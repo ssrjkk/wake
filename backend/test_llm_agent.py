@@ -13,7 +13,7 @@ import json
 import unittest
 from unittest.mock import patch, MagicMock
 
-from llm_agent import llm_decision
+from llm_agent import llm_decision, _bounded_float
 from agent_memory import AgentMemoryStore
 from agent_decision import rule_based_decision
 
@@ -165,6 +165,25 @@ class TestLLMAgent(unittest.TestCase):
         self.assertEqual(decision.confidence, 0.6)
         self.assertEqual(decision.size_usd, 0.0)
         self.assertIn("[LLM]", decision.reasoning)
+
+
+class TestBoundedNumbers(unittest.TestCase):
+    """Числа из внешнего ответа не входят в денежный путь как есть."""
+
+    def test_non_finite_size_falls_back_to_zero(self):
+        for bad in (float("nan"), float("inf"), None, "abc", {}):
+            with self.subTest(value=bad):
+                self.assertEqual(_bounded_float(bad, 0.0, 0.0, 1_000_000), 0.0)
+
+    def test_size_is_clamped_to_ceiling(self):
+        self.assertEqual(_bounded_float(1e12, 0.0, 0.0, 1_000.0), 1_000.0)
+
+    def test_negative_size_becomes_zero_not_negative(self):
+        self.assertEqual(_bounded_float(-5, 0.0, 0.0, 1_000.0), 0.0)
+
+    def test_confidence_stays_in_unit_interval(self):
+        self.assertEqual(_bounded_float(7, 0.5, 0.0, 1.0), 1.0)
+        self.assertEqual(_bounded_float(0.42, 0.5, 0.0, 1.0), 0.42)
 
 
 if __name__ == "__main__":

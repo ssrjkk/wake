@@ -96,5 +96,37 @@ class TestRecordExecuted(unittest.TestCase):
         self.assertEqual(state.open_position_usd[0], 0.0)
 
 
+class TestNonFiniteCannotPass(unittest.TestCase):
+    (
+        """NaN и inf не должны проходить лимит молча.
+
+    Проверка в коде до этой правки была `if requested_usd > limits.max_order_usd`,
+    а любое сравнение с NaN — False. Результат: ордер на «не-число» получал
+    allowed=True, capped_size_usd=NaN, и NaN уезжал дальше — в JSON ответа
+    (Starlette сериализует с allow_nan=False и падал 500) либо в int() при
+    расчёте размера ордера (ValueError).""",
+    )
+
+    def test_nan_is_blocked_not_allowed(self):
+        res = check_order(RiskLimits(), UserRiskState("u1"), 0, float("nan"))
+        self.assertFalse(res.allowed)
+        self.assertEqual(res.capped_size_usd, 0.0)
+
+    def test_infinity_is_blocked(self):
+        res = check_order(RiskLimits(), UserRiskState("u1"), 0, float("inf"))
+        self.assertFalse(
+            res.allowed, "inf > max_order_usd — True, но и это отказ, а не «разрешено»"
+        )
+
+    def test_record_executed_ignores_non_finite(self):
+        """Игнорирует, а не прибавляет: раз попав в volume_today_usd, NaN отравил
+        бы счётчик навсегда — все последующие сравнения с лимитом давали бы False,
+        и пользователь не мог бы больше ни открыть, ни закрыть."""
+        state = UserRiskState("u1", volume_today_usd=100.0, open_position_usd={0: 50.0})
+        record_executed(state, market_id=0, executed_usd=float("nan"))
+        self.assertEqual(state.volume_today_usd, 100.0)
+        self.assertEqual(state.open_position_usd[0], 50.0)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

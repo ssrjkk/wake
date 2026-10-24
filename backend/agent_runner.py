@@ -12,6 +12,7 @@ agent_memory.py (14 тестов) и agent_decision.py (11 тестов).
 import uuid
 import dataclasses
 import logging
+import urllib.error
 import urllib.request
 import json
 
@@ -166,6 +167,21 @@ def run_agent_step(
         _apply_to_memory(memory, decision, market_id, price, closing, trade_uid)
         record_executed(risk_state, market_id, capped, is_reduce_only=is_reduce)
         return decision, {"status": "sent", **result}
+    except urllib.error.HTTPError as e:
+        # Тело ответа signing_service — это причина отказа Lighter ("Minimal price
+        # difference exceeded", "insufficient margin" и т.п.). Без него в UI и в
+        # памяти оставалось бесполезное "HTTP Error 400: Bad Request", и человек
+        # не мог понять, что ему исправить.
+        body = ""
+        try:
+            body = e.read().decode(errors="replace")[:300]
+        except Exception:  # noqa: BLE001 — тело ответа не важнее самого отказа
+            pass
+        logger.error("исполнение не удалось: HTTP %s %s", e.code, body or e.reason)
+        return decision, {
+            "status": "failed",
+            "error": body or f"HTTP {e.code}",
+        }
     except Exception as e:
         logger.error("исполнение не удалось: %s", e)
         return decision, {"status": "failed", "error": str(e)}

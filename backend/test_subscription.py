@@ -1,7 +1,13 @@
 """python3 -m unittest test_subscription -v"""
 
 import unittest
-from subscription import start_trial, upgrade_to_pro, Tier, TRIAL_DURATION_DAYS
+from subscription import (
+    FEATURES,
+    TRIAL_DURATION_DAYS,
+    Tier,
+    start_trial,
+    upgrade_to_pro,
+)
 
 
 class TestTrial(unittest.TestCase):
@@ -51,10 +57,16 @@ class TestUpgrade(unittest.TestCase):
 
         pro = upgrade_to_pro(sub, now=after_expiry)
         self.assertTrue(pro.has_feature("ai_agent", now=after_expiry))
-        self.assertTrue(
-            pro.has_feature("priority_execution", now=after_expiry),
-            "priority_execution только у pro, не у trial",
+        self.assertFalse(
+            pro.is_trial_expired(now=after_expiry),
+            "pro не подчиняется границе трайла — срок касается только free_trial",
         )
+        # Совпадение множеств — это факт текущей модели, а не случайность: после
+        # того как из pro убрали "priority_execution" (функцию не читал ни один
+        # эндпоинт), трайл и pro дают ОДНАКОВЫЕ права, и отличаются только
+        # длительностью. Тест заставляет сказать это вслух: следующая платная
+        # фича обязана появиться здесь явно, а не «как-нибудь на фронте».
+        self.assertEqual(FEATURES[Tier.PRO], FEATURES[Tier.FREE_TRIAL])
 
     def test_upgrade_does_not_mutate_original(self):
         sub = start_trial("u1", now=1000)

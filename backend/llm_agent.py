@@ -10,9 +10,15 @@
 """
 
 import json
+import math
 from agent_memory import AgentMemoryStore
 from agent_decision import AgentDecision, rule_based_decision
 from config import ANTHROPIC_API_KEY
+
+# Потолок заимствуется из логики лимитов, а не из фантазии: размер ордера всё
+# равно урезался бы в check_order(), и молча урезанный ответ модели хуже, чем
+# тот, где потолок назван в том же месте, где он задан.
+MAX_LLM_SIZE_USD = 1_000_000
 
 SYSTEM_PROMPT = """Ты — торговый агент на Wake (терминал поверх Lighter perp DEX).
 Тебе дают сводку истории сделок и текущие цены. Отвечай ТОЛЬКО JSON без
@@ -75,10 +81,21 @@ def llm_decision(
         if action not in ("long", "short", "hold", "close"):
             raise ValueError(f"LLM вернул недопустимый action: {action}")
 
+        # Числа из ответа модели не проходят в денежный путь как есть. size_usd
+        # попадает в risk_limits.check_order(), а NaN обходит там все сравнения с
+        # лимитами (любое сравнение с NaN — False) и уходит в ответ: Starlette
+        # сериализует JSON с allow_nan=False по RFC 7159, и /agent/step падал 500
+        # вместо решения. Не-число или ноль дают size_usd=0, что check_order()
+        # честно отклоняет как "размер ордера должен быть положительным" — то
+        # есть сломанный ответ модели стоит агенту отсутствия сделки, но не
+        # сделки на выдуманную сумму.
+        size_usd = _bounded_float(parsed.get("size_usd"), 0.0, 0.0, MAX_LLM_SIZE_USD)
+        confidence = _bounded_float(parsed.get("confidence"), 0.5, 0.0, 1.0)
+
         return AgentDecision(
             action=action,
-            confidence=float(parsed.get("confidence", 0.5)),
-            size_usd=float(parsed.get("size_usd", 0)),
+            confidence=confidence,
+            size_usd=size_usd,
             reasoning=f"[LLM] {parsed.get('reasoning', '')}",
         )
 
@@ -91,3 +108,18 @@ def llm_decision(
             fallback.size_usd,
             f"[fallback: LLM-вызов не удался: {e}] {fallback.reasoning}",
         )
+
+
+def _bounded_float(value: object, default: float, low: float, high: float) -> float:
+    """Число из внешнего ответа, приведённое к конечному и в диапазоне.
+
+    default вместо исключения: отказ здесь означал бы отбросить ВСЁ решение
+    модели из-за одного кривого поля, а fallback-ветка и так честнее — она
+    подписана в reasoning."""
+    try:
+        v = float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+    if not math.isfinite(v):
+        return default
+    return min(max(v, low), high)

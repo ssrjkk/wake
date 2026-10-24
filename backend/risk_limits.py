@@ -14,6 +14,15 @@
 """
 
 from dataclasses import dataclass, field
+from math import isfinite
+
+
+def _finite(value: float) -> bool:
+    """Конечное число, а не «то, что прошло бы сравнение»."""
+    try:
+        return isfinite(float(value))
+    except (TypeError, ValueError):
+        return False
 
 
 @dataclass
@@ -44,6 +53,13 @@ def check_order(
     requested_usd: float,
     is_reduce_only: bool = False,
 ) -> RiskCheckResult:
+    if not _finite(requested_usd):
+        # NaN и inf нельзя отсекать сравнением: любое сравнение с NaN — False,
+        # поэтому проверка "requested_usd > max_order_usd" с NaN ПРОХОДИТ, а
+        # min(NaN, ...) отдаёт NaN дальше. Лимит, который обходится значением,
+        # которого не существует, — это не лимит.
+        return RiskCheckResult(False, "размер ордера должен быть конечным числом")
+
     if requested_usd <= 0:
         return RiskCheckResult(False, "размер ордера должен быть положительным")
 
@@ -91,6 +107,12 @@ def record_executed(
     executed_usd: float,
     is_reduce_only: bool = False,
 ):
+    """Учёт исполнения. Не-конечное значение игнорируется, а не прибавляется:
+    разок попав в volume_today_usd или в открытую позицию, NaN отравил бы их
+    навсегда — все последующие проверки лимита сравнивают с ним и молча
+    возвращают False, то есть человек больше не может ни открыть, ни закрыть."""
+    if not _finite(executed_usd):
+        return
     state.volume_today_usd += executed_usd
     current = state.open_position_usd.get(market_id, 0.0)
     if is_reduce_only:

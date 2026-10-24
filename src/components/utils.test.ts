@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { avatarColor, fmtPrice, fmtPct, fmtUsdCompact, shortHandle, usd } from './utils'
+import { avatarColor, fmt, fmtPrice, fmtPct, fmtUsdCompact, shortHandle, usd } from './utils'
 
 // Случаи взяты те же, что в backend/test_telegram_bot.py: смысл этих функций не в
 // том, чтобы «красиво печатать», а в том, чтобы Telegram и сайт показывали одно
@@ -59,6 +59,34 @@ describe('components/utils', () => {
   describe('shortHandle', () => {
     it('strips the leading @ for the avatar letter', () => {
       expect(shortHandle('@vega.eth')).toBe('V')
+    })
+  })
+
+  describe('not-a-number never renders as a real figure', () => {
+    // NaN в таблицу чисел попадает из жизни: у поля number() очищенное значение
+    // и ввод вида «-» или «1e» дают NaN, а Math.max(0, NaN) — тоже NaN. fmt(NaN)
+    // до правки печатал "NaN" и "-$NaN", что в колонке с суммами не отличить от
+    // настоящего числа.
+    it('renders em dash instead of NaN for every formatter', () => {
+      expect(fmt(NaN)).toBe('—')
+      expect(usd(NaN)).toBe('—')
+      expect(fmtUsdCompact(NaN)).toBe('—')
+      expect(fmtPrice(NaN)).toBe('—')
+      expect(fmtPct(NaN)).toBe('—')
+    })
+
+    it('renders em dash for infinity too', () => {
+      expect(usd(Infinity)).toBe('—')
+      expect(fmtPrice(-Infinity)).toBe('—')
+    })
+
+    it('keeps formatting real values exactly as before', () => {
+      expect(fmt(1234567, 2)).toBe('1,234,567.00')
+      expect(usd(-1500)).toBe('-$1,500')
+      expect(fmtUsdCompact(1500)).toBe('$1.5K')
+      expect(fmtPrice(3.5)).toBe('3.5')
+      expect(fmtPct(0.002)).toBe('+0.20%')
+      expect(fmtPct(-0.002)).toBe('-0.20%')
     })
   })
 })

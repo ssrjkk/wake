@@ -49,6 +49,46 @@ class FakeSigner:
         self.closed += 1
 
 
+class TestIdempotencyCacheBounded(unittest.TestCase):
+    """Кэш помнит ровно час — и это должно значить, что записи уходит, а не только
+    что просроченная не даёт ложного «уже отправлено».
+
+    До этой правки словарь только читался по TTL: ни одна ветка кода его не
+    сокращала, то есть процесс с долгой историей ордеров рос по памяти без потолка.
+    """
+
+    def setUp(self):
+        signing_service._idempotency_cache.clear()
+        self.addCleanup(signing_service._idempotency_cache.clear)
+
+    def test_expired_entries_are_dropped_on_write(self):
+        now = 1_000_000.0
+        signing_service._idempotency_cache[1] = (
+            "0xold",
+            now - signing_service._IDEMPOTENCY_TTL - 1,
+        )
+        signing_service._remember(2, "0xnew", now)
+        self.assertNotIn(
+            1, signing_service._idempotency_cache, "протухшая запись должна уйти"
+        )
+        self.assertIn(2, signing_service._idempotency_cache)
+
+    def test_fresh_entries_survive(self):
+        now = 1_000_000.0
+        signing_service._remember(1, "0xa", now)
+        signing_service._remember(2, "0xb", now + 1)
+        self.assertEqual(set(signing_service._idempotency_cache), {1, 2})
+
+    def test_cache_never_grows_past_the_cap(self):
+        now = 1_000_000.0
+        for i in range(signing_service._IDEMPOTENCY_MAX_ENTRIES + 400):
+            signing_service._remember(i, f"0x{i}", now)
+        self.assertLessEqual(
+            len(signing_service._idempotency_cache),
+            signing_service._IDEMPOTENCY_MAX_ENTRIES,
+        )
+
+
 class TestSigningService(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         # Кэш идемпотентности — состояние модуля: без очистки индексы из одного

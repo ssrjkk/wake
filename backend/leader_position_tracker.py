@@ -27,10 +27,20 @@ class LeaderPositionTracker:
     def apply_position_update(self, msg: dict) -> list:
         """msg — полное сообщение канала account_all_positions
         (update/account_all_positions или subscribed/account_all_positions).
-        Возвращает список raw_event-словарей, готовых для handle_leader_event()."""
+        Возвращает список raw_event-словарей, готовых для handle_leader_event().
+
+        Сообщению верят ровно в том объёме, в каком оно говорит: рынок, которого
+        в снапшоте нет, считается закрытым, а не «ничего не изменилось». Без этой
+        сверки листенер молчал бы вечно: у лидера позиция схлопнулась, ключа нет
+        в messages["positions"], сравнить не с чем — подписчик остаётся в рынке,
+        из которого лидер вышел, и закрыть его больше нечем. Проверено на
+        фикстуре с пустым снапшотом: событий было ноль, состояние — «лонг 0.5».
+        """
         events = []
+        seen = set()
         for market_id_str, pos in msg.get("positions", {}).items():
             market_id = int(market_id_str)
+            seen.add(market_id)
             new_size = abs(float(pos["position"]))
             new_sign = int(pos["sign"])
             price = float(pos["avg_entry_price"])
@@ -78,11 +88,32 @@ class LeaderPositionTracker:
                     )
                 )
 
-            self.positions[market_id] = {
-                "size": new_size,
-                "sign": new_sign,
-                "price": price,
-            }
+            if new_size == 0:
+                # Закрытая позиция из состояния уходит: дальше она должна
+                # ведти себя как новая (первый снапшот с ней — открытие), а не
+                # как «уменьшение от нуля».
+                self.positions.pop(market_id, None)
+            else:
+                self.positions[market_id] = {
+                    "size": new_size,
+                    "sign": new_sign,
+                    "price": price,
+                }
+
+        # Рынки, пропавшие из снапшота: эмитим полное закрытие по последней
+        # известной цене и убираем их из состояния.
+        for market_id in sorted(set(self.positions) - seen):
+            stale = self.positions.pop(market_id)
+            events.append(
+                self._event(
+                    market_id,
+                    stale["sign"],
+                    False,
+                    stale["size"],
+                    stale["price"],
+                    stale["size"],
+                )
+            )
         return events
 
     def _event(

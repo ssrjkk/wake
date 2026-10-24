@@ -107,5 +107,26 @@ class TestRecentAndSummary(unittest.TestCase):
         self.assertIn("momentum breakout", summary)
 
 
+class TestRecentTrades(unittest.TestCase):
+    """Последние сделки без сортировки всей истории.
+
+    recent_trades брал sorted(...) по всей коллекции на каждый шаг агента —
+    O(N log N) ради десяти строк, при том что и из базы строки приходят по
+    opened_at, и record_open только дописывает в конец. Порядок хвоста здесь
+    не «предположение о вставке», а проверяемое свойство."""
+
+    def test_newest_first_and_bounded(self):
+        m = AgentMemoryStore()
+        for i in range(5):
+            m.record_open(f"t{i}", 1, "long", 100 + i, 1)
+        recent = m.recent_trades(3)
+        self.assertEqual([t.id for t in recent], ["t4", "t3", "t2"])
+
+    def test_n_larger_than_history_returns_everything(self):
+        m = AgentMemoryStore()
+        m.record_open("t0", 1, "long", 100, 1)
+        self.assertEqual([t.id for t in m.recent_trades(10)], ["t0"])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

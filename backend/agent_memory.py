@@ -104,7 +104,13 @@ class AgentMemoryStore:
         return sum(t.pnl_usd for t in closed) / len(closed)
 
     def recent_trades(self, n: int = 10) -> list:
-        return sorted(self.trades, key=lambda t: t.opened_at, reverse=True)[:n]
+        """n последних сделок, от новых к старым.
+
+        Без sorted(): trades и в памяти, и в базе идут в хронологическом порядке
+        (load_memory выбирает их с ORDER BY opened_at, record_open только
+        дописывает в конец), поэтому «последние» — это срез с хвоста. На полной
+        истории агента sort был бы O(N log N) на каждый шаг ради десяти строк."""
+        return self.trades[-n:][::-1]
 
     def summarize_for_reasoning(self, market_id: int | None = None, n: int = 5) -> str:
         """Человеко-читаемая сводка — то, что реально пойдёт в промпт LLM в

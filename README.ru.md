@@ -206,7 +206,7 @@ Price-рынки закрываются по дедлайну только по�
 # бэкенд — из backend/; нужна отдельная PostgreSQL-база для тестов
 createdb wake_test
 export WAKE_TEST_DATABASE_URL=postgresql+asyncpg://wake:wake@localhost:5432/wake_test
-python -m unittest discover        # 388 тестов, всё через discover
+python -m unittest discover        # 404 теста, всё через discover
 python -m pytest -q                # тот же набор под pytest (в CI ещё и Allure)
 
 # фронтенд

@@ -10,6 +10,10 @@ from the commit history rather than from a release.
 ## [Unreleased]
 
 ### Added
+- `snapshot()` helper in the position-tracker tests: the findings that matter
+  here are about a snapshot containing some markets and not others, which a
+  one-position builder cannot express.
+
 - `backend/quant.py`: one rounding implementation for the whole backend. There
   were two private `_round_down` functions, and the arithmetic in
   `funding_arb.py` cut 0.29 of a coin to 0.28 because `int(0.29 * 100)` is
@@ -248,6 +252,48 @@ from the commit history rather than from a release.
   claim of an "optional KMS mode", which the removed file could not deliver.
 
 ### Fixed
+- A leader whose position **leaves the snapshot** produced no event at all.
+  `leader_position_tracker.apply_position_update()` compared only the markets
+  present in `msg["positions"]`, so if Lighter drops a flattened position from
+  the channel instead of sending it with size 0, the copy engine never learned
+  about the exit and the follower stayed in a market the leader had left — with
+  no further event ever coming. The tracker now reconciles: absent market =
+  full close at the last known price, and the entry is dropped from state so the
+  next appearance counts as an open rather than a second close. Zero-size rows
+  are handled too, and close exactly once.
+- `signing_service._idempotency_cache` grew forever. The TTL was checked when an
+  index was read and nothing ever removed an entry, so the process holding the
+  signing key accumulated one record per order for its whole life. Expired
+  entries are dropped on write and the map has a ceiling.
+- Numbers from an LLM answer entered the money path unchecked:
+  `float(parsed.get("size_usd", 0))` accepted NaN and inf, and `check_order()`
+  cannot stop them because *every* comparison with NaN is False — the result was
+  `allowed=True` with a NaN size, which then died in JSON serialisation
+  (Starlette writes with `allow_nan=False`) as a 500 on `/agent/step`. Values are
+  clamped at parse time, and `risk_limits.check_order()`/`record_executed()`
+  gained the same guard, because a NaN that reaches the counters poisons them for
+  the rest of the day: afterwards no order can pass and none can be closed.
+- `get_market_overview()` sized its thread pool by the number of markets
+  (`max_workers=len(known)`), with a blocking `urllib` call plus retries in each
+  worker — several simultaneous `/markets/overview` requests multiplied threads
+  and sockets. The pool is capped.
+- When the signing service refused an order, the agent reported
+  `HTTP Error 400: Bad Request` and threw away the response body, which is the
+  only thing naming the reason (margin, tick size, price band). The reason is now
+  carried into the failure result and the log.
+- The Terminal's shares field and every number formatter handled NaN as if it
+  were data: `Math.max(0, Number("1e"))` is NaN, `NaN <= 0` is False, so the
+  trade button stayed enabled and the table printed "NaN" and "-$NaN" in columns
+  where a real figure is expected. Inputs read `valueAsNumber`, formatters print
+  an em dash for anything non-finite.
+- `priority_execution` was listed as the Pro-only feature and asserted by a test
+  — while no endpoint, panel or scheduler read it anywhere. Removed; the tier
+  tables now state what is actually enforced, and the test says out loud that
+  Pro and the trial grant the same rights and differ only in duration.
+- `agent_memory.recent_trades()` sorted the entire history for every agent step
+  to show ten rows. Trades arrive from PostgreSQL ordered by `opened_at` and
+  `record_open` appends, so the tail *is* the recency window; it is sliced now.
+
 - Copy-trading execution, three faults that each cost money on their own.
   `leader_listener.py` sent `price=int(event.price)` un-scaled by the market's
   `supported_price_decimals` (live check: all 246 order-book rows carry the

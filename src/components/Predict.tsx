@@ -510,7 +510,14 @@ export default function Predict({ signedIn, setToast, onConnect }: PredictProps)
               min={1}
               max={sellMode ? trade.held : undefined}
               value={shares}
-              onChange={(e) => setShares(Math.max(0, Number(e.target.value)))}
+              onChange={(e) => {
+                // valueAsNumber, а не Math.max(0, Number(...)): Math.max(0, NaN)
+                // это NaN, и NaN уходил и в подпись «Номинал при победе», и в
+                // условие блокировки (NaN <= 0 — false), то есть кнопка
+                // разблокировалась и стреляла запросом на бэкенд.
+                const raw = e.target.valueAsNumber;
+                setShares(Number.isFinite(raw) ? Math.max(0, raw) : 0);
+              }}
               style={{ background: "#0a0a0a", border: "1px solid #1e1e1e", borderRadius: "4px", padding: "8px 12px", marginBottom: "4px", color: "#fafafa", fontFamily: "'JetBrains Mono', monospace", fontSize: "12px", outline: "none", width: "100%", boxSizing: "border-box" }}
             />
             {sellMode && (

@@ -25,6 +25,11 @@ logger = logging.getLogger("wake.lighter")
 MAX_RETRIES = 3
 RETRY_DELAY = 1.0
 
+# Сколько свечных запросов идёт одновременно в get_market_overview. Восемь при
+# восемнадцати рынках вселенной: холодный обзор всё ещё считает параллельно, но
+# под один запрос не выделяется поток и сокет на каждый рынок.
+CANDLES_WORKERS = 8
+
 # Длительность интервала в мс — те же разрешения, что принимает /candles.
 RESOLUTION_MS = {
     "1m": 60_000,
@@ -333,7 +338,14 @@ def get_market_overview(
     # запрос, суммарно холодный ответ растягивался на ~2 минуты). Свечи разных
     # рынков не зависят друг от друга, поэтому параллелим; ThreadPoolExecutor
     # вместо async, потому что _get — блокирующий urllib, а функция синхронная.
-    with ThreadPoolExecutor(max_workers=len(known) or 1) as pool:
+    #
+    # Пул с потолком, а не по числу рынков: max_workers=len(known) означает, что
+    # каждый вызов эндпоинта забирает столько потоков, сколько символов в списке,
+    # а _get блокирующий и с повторами (до 3,5 с сна на сбоях). Несколько
+    # одновременных /markets/overview складывали потоки и сокеты друг с другом; с
+    # потолком задержка под нагрузкой растёт линейно вместо того, чтобы упираться
+    # в исчерпание нитей процесса.
+    with ThreadPoolExecutor(max_workers=min(len(known), CANDLES_WORKERS) or 1) as pool:
         futures = {
             symbol: pool.submit(get_24h_stats, market_id, network)
             for symbol, market_id in known

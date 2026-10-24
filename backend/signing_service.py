@@ -53,6 +53,36 @@ app = FastAPI(title="Wake signing service — Phase 1, solo only")
 # в базе данных с UNIQUE-ограничением на client_order_index.
 _idempotency_cache: dict[int, tuple[str, float]] = {}
 _IDEMPOTENCY_TTL = 3600  # 1 час — дольше ордер не живёт, нет смысла помнить
+# Потолок записей — не косметика: TTL проверялся только при чтении, и ни одна
+# запись из словаря никогда не удалялась. На долгоживущем процессе это рост на
+# каждый отправленный ордер, то есть медленная утечка памяти в процессе, который
+# держит ключ и двигает деньги.
+_IDEMPOTENCY_MAX_ENTRIES = 1000
+
+
+def _remember(client_order_index: int, tx_hash: str, now: float) -> None:
+    """Записать отправленный ордер, попутно выбросив протухшее.
+
+    Чистка на записи, а не по фоновому таймеру: процесс однопоточный по
+    сути запросов, фоновая корутина добавила бы состояние, которое надо
+    обслуживать, а эффект тот же — в словаре не копится история старше часа.
+    """
+    expired = [
+        index
+        for index, (_, ts) in _idempotency_cache.items()
+        if now - ts >= _IDEMPOTENCY_TTL
+    ]
+    for index in expired:
+        _idempotency_cache.pop(index, None)
+    if len(_idempotency_cache) >= _IDEMPOTENCY_MAX_ENTRIES:
+        # Если срок ещё не вышел у всех, а записей уже тысяча — выталкиваем
+        # самые старые: порядок dict в Python гарантирует хронологию вставки.
+        for index in list(_idempotency_cache)[
+            : len(_idempotency_cache) - _IDEMPOTENCY_MAX_ENTRIES + 1
+        ]:
+            _idempotency_cache.pop(index, None)
+    _idempotency_cache[client_order_index] = (tx_hash, now)
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -133,7 +163,7 @@ async def place_order(req: OrderRequest):
     if err:
         raise HTTPException(status_code=400, detail=f"Lighter отклонил ордер: {err}")
 
-    _idempotency_cache[req.client_order_index] = (tx_hash, now)
+    _remember(req.client_order_index, tx_hash, now)
     return {"tx_hash": tx_hash, "dry_run": False, "idempotent_replay": False}
 
 
