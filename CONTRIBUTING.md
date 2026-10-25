@@ -86,7 +86,7 @@ alembic check
 
 ## Tests
 
-**Backend** — one command, 540 tests, against a real PostgreSQL:
+**Backend** — one command, 548 tests, against a real PostgreSQL:
 
 ```bash
 cd backend
@@ -108,11 +108,17 @@ Four rules the suite enforces on itself (the first three come from `backend/test
 npm ci
 npm run lint                      # ESLint over src/, e2e/ and the config files
 npx tsc --noEmit
-npm run test:run                  # vitest: 199 tests in 15 files
+npm run test:run                  # vitest: 216 tests in 16 files
 node scripts/brand-assets.mjs       # re-render public/og.png and apple-touch-icon.png
 npm run build
 PW_PORT=5178 npx playwright test  # first run needs `npx playwright install chromium`
 ```
+
+`src/components/theme.gate.test.ts` keeps the panel honest about its own style:
+no gradients, no shadows and no blur in components (elevation lives in
+`index.css`, where the theme says so), and no colour literal outside the token
+palette — the list of legacy literals it carries may only shrink, and the test
+fails if an entry stops being used.
 
 CI runs `npm run test:run -- --coverage` and `npm run test:e2e`. The e2e suite drives the frontend alone against the vite dev server — its route stubs intercept everything outside their own origin, so it neither needs nor tests the backend.
 
@@ -292,7 +298,7 @@ alembic check
 
 ## Тесты
 
-**Бэкенд** — одна команда, 540 тестов, против настоящего PostgreSQL:
+**Бэкенд** — одна команда, 548 тестов, против настоящего PostgreSQL:
 
 ```bash
 cd backend
@@ -314,11 +320,16 @@ python -m pytest . -q
 npm ci
 npm run lint                      # ESLint по src/, e2e/ и конфигам
 npx tsc --noEmit
-npm run test:run                  # vitest: 199 тестов в 15 файлах
+npm run test:run                  # vitest: 216 тестов в 16 файлах
 node scripts/brand-assets.mjs       # перерендерить public/og.png и apple-touch-icon.png
 npm run build
 PW_PORT=5178 npx playwright test  # первый прогон требует `npx playwright install chromium`
 ```
+
+`src/components/theme.gate.test.ts` следит за стилем самой панели: ни градиентов,
+ни теней, ни блюра в компонентах (приподнятость слоя живёт в `index.css`, где это
+решила тема) и ни одного цвета вне палитры токенов — список наследия умеет только
+сохнуть, и тест падает, если значение из него исчезло из кода.
 
 CI запускает `npm run test:run -- --coverage` и `npm run test:e2e`. E2e-проверка работает только с фронтом против dev-сервера vite: её route-заглушки отсекают весь трафик вне собственного origin, поэтому бэкенд ей не нужен и не проверяется.
 

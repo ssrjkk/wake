@@ -10,6 +10,25 @@ from the commit history rather than from a release.
 ## [Unreleased]
 
 ### Added
+- `src/components/theme.gate.test.ts` — the rule that lived only as a comment in
+  `index.css` («no gradients, no blur: this is an instrument panel») is now a
+  test. It reads every panel and fails on a gradient, a shadow or a blur in
+  component code, on a colour literal outside the token palette, and — the other
+  way round — on a legacy literal that the code has already outgrown, so the
+  allow-list can only shrink. Checked by mutation: a `linear-gradient` and a new
+  hex in `Risk.tsx` both turn it red.
+- Theme primitives that panels were each inventing by hand: `.menu-card`,
+  `.overlay-shell`, `.field-box`, `.row-button`, `.btn-secondary`,
+  `.btn-accent`, `.btn-danger`, `.btn-up` / `.btn-down`, `.market-card`,
+  `.skeleton`, `.panel-error`, `.range`, and toast variants through
+  `data-variant` instead of an inline border colour.
+- Telegram bot: `/help` is laid out by section (Рынки / Funding / Predict /
+  Интерфейс) with the descriptions still taken from `BOT_COMMANDS`; a shorter
+  command menu is registered for groups (`BotCommandScopeAllGroupChats`) —
+  seven autocomplete lines in a chat where the bot was summoned once is noise;
+  the markets and funding cards carry a text link to their section beside the
+  web-app button.
+
 - Telegram Mini App window integration in `src/lib/telegram.ts`. The page now
   tells Telegram it is ready (`ready()`), expands itself to full height
   (`expand()`), paints the window header and background from the theme tokens,
@@ -247,6 +266,15 @@ from the commit history rather than from a release.
   trust boundaries, the local gates and the deployment contract.
 
 ### Changed
+- Predict and Dashboard stopped painting `linear-gradient` panels with drop
+  shadows: both now use the surfaces, borders and typographic scale declared in
+  `index.css`, and the Predict filters became the same segmented control the
+  network switch uses. `App.tsx` no longer contains a single colour literal —
+  the sign-in window, the market picker, the copy card and the profile menu are
+  classes now.
+- Documentation screenshots re-captured from this build (2026-10-25): the panel
+  shots, the mobile terminal and the bot cards.
+
 - `WAKE_SESSION_TTL_DAYS` defaults to 7, and 30 is now the ceiling. The token has
   no revocation list and never will — `session.py` says the short lifetime is
   what makes that acceptable, and 30 days did not match the claim. Re-login is a
@@ -384,6 +412,15 @@ from the commit history rather than from a release.
   claim of an "optional KMS mode", which the removed file could not deliver.
 
 ### Fixed
+- `.wake-modal` padded itself by a flat 16 px, so in the Telegram mini app a
+  dialog hung over the home-indicator gesture; the overlay now respects the same
+  safe-area variables as the shell.
+- `Skeleton` drew its own background and animation inline; it is the `.skeleton`
+  class, so the loading state of every panel changes when the theme changes.
+- The funding card's note was shown only when a web-app button existed, which
+  tied an explanation of `/spread` to a keyboard layout; the hint and the link
+  are independent now.
+
 - `verifyTelegramLogin` sent `photo_url` because the Login Widget hands it over,
   and Telegram does not sign that field: the recomputed check string diverged and
   a correctly signed login answered 401. The payload now carries exactly the

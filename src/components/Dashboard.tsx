@@ -191,7 +191,7 @@ export default function Dashboard({ setTab, setAsset }: DashboardProps) {
           </div>
         </div>
       ) : (
-        <div style={{ background: "linear-gradient(135deg, #111 0%, #0f0f0f 100%)", border: "1px solid #1e1e1e", borderRadius: "6px", overflow: "hidden", boxShadow: "0 1px 3px rgba(0, 0, 0, 0.2)" }}>
+        <div className="terminal-panel">
           <div className="table-scroll">
           <table style={{ width: "100%", fontSize: "12px", borderCollapse: "collapse", minWidth: "700px" }} aria-label="Таблица данных">
             <thead>
@@ -316,7 +316,7 @@ export default function Dashboard({ setTab, setAsset }: DashboardProps) {
           </div>
         </div>
       ) : (
-        <div style={{ background: "linear-gradient(135deg, #111 0%, #0f0f0f 100%)", border: "1px solid #1e1e1e", borderRadius: "6px", overflow: "hidden", boxShadow: "0 1px 3px rgba(0, 0, 0, 0.2)" }}>
+        <div className="terminal-panel">
           <div className="table-scroll">
           <table style={{ width: "100%", fontSize: "12px", borderCollapse: "collapse", minWidth: "700px" }} aria-label="Таблица данных">
             <thead>

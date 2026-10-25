@@ -67,6 +67,7 @@ from aiogram.enums import ParseMode
 from aiogram.filters import Command, CommandObject
 from aiogram.types import (
     BotCommand,
+    BotCommandScopeAllGroupChats,
     CallbackQuery,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
@@ -136,6 +137,20 @@ WELCOME_BODY = (
 )
 
 WELCOME_MARKETS = 8
+
+# /help по разделам: человек ищет не команду, а «где про funding». Порядок
+# берётся отсюда, тексты — из BOT_COMMANDS, поэтому команда, попавшая в меню,
+# обязана попасть и в справку.
+HELP_SECTIONS = (
+    ("Рынки", ("price", "markets")),
+    ("Funding", ("funding", "spread")),
+    ("Predict", ("predict",)),
+    ("Интерфейс", ("wake", "help")),
+)
+
+# Меню внутри групп: семь команд в чате, где бота позвали одним сообщением, —
+# шум. Остаётся то, что спраывают у бота в переписке, а не в личном чате.
+GROUP_COMMANDS = ("price", "markets", "funding", "spread", "wake")
 
 
 def esc(value: object) -> str:
@@ -663,11 +678,19 @@ async def markets_payload(offset: int = 0) -> tuple[str, InlineKeyboardMarkup]:
             )
         if nav:
             rows.append(nav)
+    link = app_link("тот же список в терминале Wake", "terminal")
     return (
         card(
             f"Рынки Lighter · {LIGHTER_NETWORK}",
             markets_report(overview, MARKETS_PAGE, offset),
-            "Тапни тикер — будет карточка с funding." if page else "",
+            "\n".join(
+                x
+                for x in (
+                    "Тапни тикер — будет карточка с funding." if page else "",
+                    link,
+                )
+                if x
+            ),
         ),
         nav_keyboard(rows or None),
     )
@@ -682,9 +705,14 @@ async def funding_payload(limit: int = 10) -> tuple[str, InlineKeyboardMarkup]:
         card(
             f"Funding · Lighter {LIGHTER_NETWORK}",
             funding_report(rates, limit),
-            "Ставку по любой площадке можно спросить командой /spread."
-            if app_available()
-            else "",
+            "\n".join(
+                x
+                for x in (
+                    "Ставку по любой площадке можно спросить командой /spread.",
+                    app_link("кандидаты в carry — во вкладке Funding", "funding"),
+                )
+                if x
+            ),
         ),
         nav_keyboard(rows or None, tab="funding"),
     )
@@ -768,19 +796,36 @@ def app_available() -> bool:
 
 def help_text() -> str:
     """Список команд собирается из BOT_COMMANDS — из того же кортежа, который
-    ставится в меню Telegram. Два текста, написанные раздельно, разошлись бы в
-    первый же день, когда команду добавили в меню и забыли в справке."""
+    ставится в меню Telegram, и разложен по разделам, а не идёт подряд.
+
+    Две надписи, написанные раздельно, разошлись бы в первый же день, когда
+    команду добавили в меню и забыли в справке. Разделы нужны потому, что семь
+    команд одной строкой читаются как простыня: человек ищет не команду, а
+    «где про funding»."""
+    by_command = {c.command: c.description for c in BOT_COMMANDS}
+    blocks = []
+    for title, commands in HELP_SECTIONS:
+        rows = "\n".join(
+            f"/{name:<8} {by_command[name]}" for name in commands if name in by_command
+        )
+        if rows:
+            blocks.append(f"<b>{esc(title)}</b>\n<pre>{esc(rows)}</pre>")
+    missing = sorted(
+        set(by_command) - {name for _, names in HELP_SECTIONS for name in names}
+    )
+    if missing:
+        rows = "\n".join(f"/{name:<8} {by_command[name]}" for name in missing)
+        blocks.append(f"<pre>{esc(rows)}</pre>")
     nav = (
         "Полный интерфейс — кнопкой ниже."
         if app_available()
         else "Кнопки на Mini App нет: задай WAKE_MINIAPP_URL с https — Telegram "
         "не принимает http-адрес вебвью."
     )
-    commands = "\n".join(f"/{c.command:<8} {c.description}" for c in BOT_COMMANDS)
     return (
         "<b>Wake · терминал на Lighter</b>\n"
-        f"<pre>{esc(commands)}</pre>"
-        "Можно просто написать тикер: <code>BTC</code> или <code>eth</code>.\n"
+        + "\n".join(blocks)
+        + "\nМожно просто написать тикер: <code>BTC</code> или <code>eth</code>.\n"
         f"Числа — публичный REST Lighter в сети {LIGHTER_NETWORK}. Бот ничего не "
         f"выставляет и аккаунт не открывает.\n{nav}"
     )
@@ -1000,6 +1045,23 @@ async def register_commands(bot: Bot) -> None:
         log.warning("команды бота не зарегистрированы: %s", e)
 
 
+async def register_group_menu(bot: Bot) -> None:
+    """Меню команд внутри групп — короче личного.
+
+    В чат бота позывают одним сообщением, и семь строк автодополнения там
+    читаются как шум: остаются карточка рынка, список, funding и спред. Predict
+    и /help сознательно вне группового меню: рынок предсказаний — разговор с
+    собственным аккаунтом Wake, а справка есть и в профиле бота.
+
+    Список фильтруется по BOT_COMMANDS, а не пишется заново: команда, на которую
+    бот не отвечает, не должна попасть ни в одно меню."""
+    commands = [c for c in BOT_COMMANDS if c.command in GROUP_COMMANDS]
+    try:
+        await bot.set_my_commands(commands, scope=BotCommandScopeAllGroupChats())
+    except Exception as e:
+        log.warning("меню команд в группах не зарегистрировано: %s", e)
+
+
 async def register_profile(bot: Bot) -> None:
     """Имя и описания витрины бота ставятся тем же процессом, что и меню команд.
 
@@ -1032,6 +1094,7 @@ async def main():
     )
     await register_profile(bot)
     await register_commands(bot)
+    await register_group_menu(bot)
     await dp.start_polling(bot)
 
 

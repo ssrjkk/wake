@@ -619,6 +619,29 @@ class TestPayloads(unittest.TestCase):
             "ETH", text, "отрицательная ставка: там платят шорты, она не показывается"
         )
 
+    def test_markets_and_funding_carry_a_text_link_too(self):
+        """Кнопка web_app есть не всегда, а сослаться на раздел нужно: ссылка
+        остаётся и тогда, когда Telegram её не принимает."""
+        url = tb.WAKE_MINIAPP_URL
+        tb.WAKE_MINIAPP_URL = "https://wake-7k6.pages.dev/"
+        self.addCleanup(setattr, tb, "WAKE_MINIAPP_URL", url)
+        with (
+            patch.object(
+                tb.lighter_rest,
+                "get_market_overview",
+                lambda network=None: self.OVERVIEW,
+            ),
+            patch.object(
+                tb.lighter_rest,
+                "get_funding_rates",
+                lambda network=None: self.FUNDING_ROWS,
+            ),
+        ):
+            markets, _ = self._run(tb.markets_payload())
+            funding, _ = self._run(tb.funding_payload())
+        self.assertIn('href="https://wake-7k6.pages.dev/?tab=terminal"', markets)
+        self.assertIn('href="https://wake-7k6.pages.dev/?tab=funding"', funding)
+
     def test_predict_payload_names_the_backend_when_it_cannot_reach_it(self):
         async def fail(path):
             raise httpx.ConnectError("connection refused")
@@ -1098,6 +1121,41 @@ class TestProfileTexts(unittest.TestCase):
                 raise RuntimeError("unauthorized")
 
         asyncio.run(tb.register_profile(Refusing()))
+
+
+class TestHelpSections(unittest.TestCase):
+    """Справка собрана из того же кортежа, что и меню Telegram, и разложена по
+    разделам: человек ищет не команду, а «где про funding»."""
+
+    def test_every_command_lands_in_exactly_one_section(self):
+        names = [name for _, section in tb.HELP_SECTIONS for name in section]
+        self.assertEqual(sorted(names), sorted(c.command for c in tb.BOT_COMMANDS))
+        self.assertEqual(
+            len(names),
+            len(set(names)),
+            "команда в двух разделах — две строки в справке",
+        )
+
+    def test_help_prints_the_descriptions_from_the_menu(self):
+        text = tb.help_text()
+        for command in tb.BOT_COMMANDS:
+            self.assertIn(command.description, text)
+
+    def test_group_menu_only_repeats_known_commands(self):
+        menu = {c.command for c in tb.BOT_COMMANDS if c.command in tb.GROUP_COMMANDS}
+        self.assertEqual(
+            menu, set(tb.GROUP_COMMANDS), "в GROUP_COMMANDS нет неизвестной команды"
+        )
+        self.assertLess(
+            len(menu), len(tb.BOT_COMMANDS), "в группах меню короче личного"
+        )
+
+    def test_group_menu_survives_a_refused_write(self):
+        class Refusing:
+            async def set_my_commands(self, commands, scope=None):
+                raise RuntimeError("unauthorized")
+
+        asyncio.run(tb.register_group_menu(Refusing()))
 
 
 class TestTelegramLineWidth(unittest.TestCase):

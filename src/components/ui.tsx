@@ -1,11 +1,24 @@
-import { createContext, useContext, useEffect, useLayoutEffect, useRef, type ReactNode } from "react";
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  type ReactNode,
+} from "react";
 import type { LucideIcon } from "lucide-react";
 import { pushLayer } from "../lib/layers";
 
 // Content outside a native modal is inert, including its live-region notifications.
 const ToastContext = createContext<ReactNode>(null);
 
-export function ToastProvider({ children, toast }: { children: ReactNode; toast: ReactNode }) {
+export function ToastProvider({
+  children,
+  toast,
+}: {
+  children: ReactNode;
+  toast: ReactNode;
+}) {
   return <ToastContext value={toast}>{children}</ToastContext>;
 }
 
@@ -22,7 +35,15 @@ function focusables(root: HTMLElement): HTMLElement[] {
 // Стек открытых панелей живёт в lib/layers.ts; здесь только регистрация: модалка
 // становится «верхним слоем» на время своей жизни в дереве.
 
-export function Modal({ children, label, onClose }: { children: ReactNode; label: string; onClose: () => void }) {
+export function Modal({
+  children,
+  label,
+  onClose,
+}: {
+  children: ReactNode;
+  label: string;
+  onClose: () => void;
+}) {
   const ref = useRef<HTMLDialogElement>(null);
   const toast = useContext(ToastContext);
 
@@ -33,7 +54,10 @@ export function Modal({ children, label, onClose }: { children: ReactNode; label
     // — прокручиваемый контейнер (max-h + overflow-y-auto), и Chrome отдаёт таким
     // контейнерам фокус: при длинном содержимом стартовый фокус попадал на обёртку,
     // а не на первую кнопку, и клавиатурный обход начинался с неочевидного места.
-    (dialog.querySelector<HTMLElement>("[data-autofocus]") ?? focusables(dialog)[0])?.focus();
+    (
+      dialog.querySelector<HTMLElement>("[data-autofocus]") ??
+      focusables(dialog)[0]
+    )?.focus();
     return () => dialog.close();
   }, []);
 
@@ -53,8 +77,13 @@ export function Modal({ children, label, onClose }: { children: ReactNode; label
       ref={ref}
       aria-label={label}
       className="wake-modal"
-      onCancel={(event) => { event.preventDefault(); onClose(); }}
-      onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}
+      onCancel={(event) => {
+        event.preventDefault();
+        onClose();
+      }}
+      onClick={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
       onKeyDown={(event) => {
         if (event.key !== "Tab") return;
         const controls = focusables(event.currentTarget);
@@ -75,8 +104,14 @@ export function Modal({ children, label, onClose }: { children: ReactNode; label
   );
 }
 
-export function Skeleton({ height = "16px", width = "100%" }: { height?: string; width?: string }) {
-  return <div style={{ height, width, background: "#1a1a1a", borderRadius: "3px", animation: "wakeShimmer 1.6s ease-in-out infinite" }} />;
+export function Skeleton({
+  height = "16px",
+  width = "100%",
+}: {
+  height?: string;
+  width?: string;
+}) {
+  return <div className="skeleton" style={{ height, width }} />;
 }
 
 export function NavTab({
@@ -101,7 +136,14 @@ export function NavTab({
       {/* Иконку показывает только нижняя панель (задаёт CSS): в строке подписей
           над контентом она была бы девятым украшением, а на телефоне по ней
           вкладка находится вслепую, когда текст уехал за край. */}
-      {Icon && <Icon className="tab-icon" size={15} strokeWidth={1.9} aria-hidden="true" />}
+      {Icon && (
+        <Icon
+          className="tab-icon"
+          size={15}
+          strokeWidth={1.9}
+          aria-hidden="true"
+        />
+      )}
       {label}
       {live && (
         <span

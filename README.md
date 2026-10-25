@@ -15,7 +15,7 @@ Live backend: https://wake-backend-production-3483.up.railway.app — `/health` 
 
 ## Screens
 
-Captured from this build with live data (2026-10-23), not mockups. The backend-dependent panels show the "backend unavailable" state on purpose: the deployed process answers `/health` but not `/ready` until PostgreSQL and Redis are attached, and a screenshot with invented numbers would be worse than an honest empty state.
+Captured from this build with live data (2026-10-25), not mockups. The backend-dependent panels show the "backend unavailable" state on purpose: the deployed process answers `/health` but not `/ready` until PostgreSQL and Redis are attached, and a screenshot with invented numbers would be worse than an honest empty state.
 
 | | |
 | --- | --- |
