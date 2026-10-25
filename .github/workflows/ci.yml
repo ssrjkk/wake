@@ -55,13 +55,14 @@ jobs:
       - name: Scan dependencies for vulnerabilities
         working-directory: backend
         # urllib3 остаётся на 2.0.7, потому что lighter-sdk жёстко требует
-        # urllib3<2.1.0 (проверяется: pip show lighter-sdk → Requires … urllib3).
+        # urllib3<2.1.0 (проверяется следующим шагом, а не глазами по
+        # `pip show`: проверка обязана краснеть в тот день, когда кап снимут).
         # Каждая запись ниже — адвизория urllib3, у которой фикс лежит выше этого
         # предела, то есть в этом проекте она неустранима иначе, чем снятием пина
         # upstream. Список ведётся по обоим идентификаторам (CVE и PYSEC), потому
         # что pip-audit отдаёт новые advisory под PYSEC-именами, и гейт иначе
         # краснеет без изменения в коде. Обзор риска и условие, при котором
-        # исключения снимаются, — SECURITY.md; задача снятия пина — в трекинге.
+        # исключения снимаются, — SECURITY.md.
         run: |
           pip-audit -r requirements.txt --strict \
             --ignore-vuln CVE-2024-37891 \
@@ -80,6 +81,21 @@ jobs:
             --ignore-vuln PYSEC-2026-1999 \
             --ignore-vuln PYSEC-2026-4175 \
             --ignore-vuln PYSEC-2026-4177
+      - name: Upstream cap on urllib3 must still be binding
+        # Вопросы «а нельзя уже убрать исключения» здесь решаются не памяти
+        # оператора, а реальным резолвером pip: пока lighter-sdk не отдаёт
+        # пропатченный urllib3, эта установка неразрешима, и шаг зелёный со
+        # внятной строкой в логе. В день, когда upstream снимет предел, pip
+        # соберёт такой set, шаг покраснеет и скажет, какой список править, —
+        # вместо того чтобы ещё один релиз пройти с действующими исключениями.
+        # Сеть здесь не маскируется: pip-audit выше падает без PyPI сам.
+        run: |
+          if pip install --dry-run --ignore-installed --quiet \
+               "urllib3>=2.1.0" "lighter-sdk>=1.1.8" >/dev/null 2>&1; then
+            echo "::error::lighter-sdk больше не запрещает urllib3>=2.1.0: снимите --ignore-vuln в шаге аудита и перепишите раздел «Проверка зависимостей» в SECURITY.md"
+            exit 1
+          fi
+          echo "cap держится: urllib3>=2.1.0 неразрешим с lighter-sdk>=1.1.8"
 
   # ── Backend tests (pytest + Allure) ──────────────────────────────────────
   backend-tests:

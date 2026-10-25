@@ -60,17 +60,18 @@ async def require_curator(supplied: str | None = Depends(_curator)) -> None:
 
     compare_digest на байтах, а не на строках: starlette декодирует заголовки как
     latin-1, и не-ASCII в строке иначе уронил бы сверку TypeError'ом (500) вместо
-    честного 403."""
+    честного 403.
+
+    Отсутствие токена на сервере — 503, а не 500 и не 403: причина на стороне
+    конфигурации, и один язык с SESSION_NOT_CONFIGURED и TELEGRAM_NOT_CONFIGURED
+    нужен, чтобы у клиента был единственный способ отличить «у сервера чего-то
+    нет» от «мой запрос плохой»."""
     if not CURATOR_TOKEN:
         raise deny(
             503,
             "CURATOR_NOT_CONFIGURED",
             "WAKE_CURATOR_TOKEN не настроен на сервере: операторские эндпоинты закрыты",
         )
-        # 503, а не 500: причина — конфигурация сервера, а не запрос. Один язык
-        # с SESSION_NOT_CONFIGURED и TELEGRAM_NOT_CONFIGURED нужен, чтобы у
-        # клиента был единственный способ отличить «у сервера чего-то нет» от
-        # «мой запрос плохой».
     if supplied is None or not hmac.compare_digest(
         supplied.encode(), CURATOR_TOKEN.encode()
     ):

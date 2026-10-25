@@ -86,7 +86,16 @@ Then sign in with a wallet from the live frontend and call `GET /follows` with t
 
 ## 5. Proxies and rate limiting
 
-Behind Railway the connection address is the proxy's address. Without `WAKE_TRUSTED_PROXY_IPS` every client shares one bucket and one audit entry. A signed token already removes the worst of it — the bucket key is the session subject — but anonymous traffic and the IP recorded at sign-in still say "proxy". Read the real address out of the `ip:` field of a `sign_in` row in `audit_log` after the first login and put it into `WAKE_TRUSTED_PROXY_IPS`. `X-Forwarded-For` is accepted only from that address, and only its rightmost element.
+Behind Railway the connection address is the proxy's address. Without `WAKE_TRUSTED_PROXY_IPS` every client shares one bucket and one audit entry. A signed token already removes the worst of it — the bucket key is the session subject — but anonymous traffic and the IP recorded at sign-in still say "proxy". Read the real address out of the `ip` field of a `sign_in` row after the first login and put it into `WAKE_TRUSTED_PROXY_IPS`. `X-Forwarded-For` is accepted only from that address, and only its rightmost element.
+
+The trail is readable without a database session — `GET /audit` returns the newest events and needs the same `X-Curator-Token` as the operator endpoints:
+
+```bash
+curl -sS "$BACKEND/audit?action=sign_in&limit=5" \
+  -H "X-Curator-Token: $WAKE_CURATOR_TOKEN"
+```
+
+`details` comes back as an object, `success=0` marks a rejected attempt, and `failed_only=true` keeps only those. One response is capped at 500 rows (`audit_log.MAX_ROWS`), so `?limit=` cannot be used to pull the whole table into memory.
 
 ## 6. Live orders
 

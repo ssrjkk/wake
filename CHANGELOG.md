@@ -10,6 +10,27 @@ from the commit history rather than from a release.
 ## [Unreleased]
 
 ### Added
+- `GET /audit` — the audit trail finally has a reader. `audit_log.py` had two
+  read functions and nothing called either, so the deploy guide could only tell
+  the operator to go look at the database; now the newest events come back over
+  HTTP behind the same curator token as the other operator endpoints, with
+  `actor`/`action`/`failed_only`/`since` filters, `details` decoded into an
+  object, and one ceiling (`audit_log.MAX_ROWS`, 500 rows) shared by the layer
+  and the route.
+- `backend/test_order_example.py` — the manual order script is now tested as the
+  operator runs it: a subprocess per environment, because every check lives at
+  module import.
+- `test_api_smoke.py::TestFailureResponseContract` — pins the middleware stack
+  order and asserts that 429, 500 and the `ValueError`-to-400 conversion all
+  arrive with `Access-Control-Allow-Origin`, `X-Content-Type-Options` and the CSP
+  intact.
+- `WAKE_LOG_LEVEL` is validated against the names `logging` actually has.
+- A CI step that asks `pip` to resolve `urllib3>=2.1.0` together with
+  `lighter-sdk>=1.1.8`. Today the resolution is impossible — that is the whole
+  reason the urllib3 advisories stay ignored — and the step fails on the first
+  day it becomes possible, naming the ignore list and the SECURITY.md section to
+  delete. Checked against PyPI on 2026-10-25: 1.1.8 (2026-10-19) is still the
+  newest release and still requires `urllib3<2.1.0`.
 - `src/components/theme.gate.test.ts` — the rule that lived only as a comment in
   `index.css` («no gradients, no blur: this is an instrument panel») is now a
   test. It reads every panel and fails on a gradient, a shadow or a blur in
@@ -266,6 +287,21 @@ from the commit history rather than from a release.
   trust boundaries, the local gates and the deployment contract.
 
 ### Changed
+### Changed
+- The browser build is silent. `vite build` used to print, on every run, that
+  `ox/_esm/tempo/internal/virtualMasterPool.js` imports `node:worker_threads`
+  and that the module was externalized for browser compatibility. The tempo
+  branch is pulled in by wagmi's barrel and cut by tree-shaking before it ever
+  reaches a chunk, so the noise described a module the client never loads — but
+  a warning that is always there trains nobody to read it. `vite.config.ts` now
+  swallows exactly that one message, matched on the importer's path (a
+  `node:`-import from anywhere else still prints), and the comment records why
+  the match cannot be widened into a post-build check: in Vite 8 an
+  externalized node module leaves no specifier string, no chunk import and no
+  module entry behind, so nothing in `dist` can be asserted about it. Verified
+  both ways — clean build prints nothing, a deliberate `node:worker_threads`
+  import in `src/main.tsx` prints again.
+- `viem` moved to 2.57.11 (newest patch of the declared range).
 - Predict and Dashboard stopped painting `linear-gradient` panels with drop
   shadows: both now use the surfaces, borders and typographic scale declared in
   `index.css`, and the Predict filters became the same segmented control the
@@ -400,6 +436,12 @@ from the commit history rather than from a release.
   blue for both buy and sell; it now reads the way the Terminal order ticket does.
 
 ### Removed
+- `audit_log.failed_actions_since()` — unread by the application, unbounded, and
+  unable to filter by actor or action. `recent_actions()` grew those two filters
+  and the row ceiling, so one reader covers both cases.
+- `@app.exception_handler(Exception)` from `app.py`, replaced by the error
+  envelope middleware (see Fixed) — the handler was outside the layers that sign
+  a response, which no handler inside FastAPI can fix.
 
 - SQLite-era scripts: `backend/migrate.py`, `backend/migrate_sqlite_to_pg.py` and
   their test.
@@ -412,6 +454,70 @@ from the commit history rather than from a release.
   claim of an "optional KMS mode", which the removed file could not deliver.
 
 ### Fixed
+- Refusals reached the browser unsigned. Starlette inserts each middleware at
+  position 0, so the layer registered last is the outermost, and the rate
+  limiter had been registered last: its 429 — and every 500 and `ValueError`
+  400, which FastAPI renders in `ServerErrorMiddleware`, outside our stack —
+  left without `Access-Control-Allow-Origin`, so the browser withheld the
+  response from JavaScript entirely. "Too many requests, retry in 6 seconds"
+  looked exactly like "the backend is down", which is the state the frontend
+  reports when it cannot read a code. The stack is now built CORS → security
+  headers → error envelope → rate limiter, `Retry-After` is in
+  `expose_headers`, and the untyped error handler moved inside it.
+- `place_order_example.py` put a real order on mainnet from one variable.
+  `WAKE_LIGHTER_NETWORK=mainnet` is both the config default and the production
+  value, and the script never read `WAKE_DRY_RUN`, so an operator following the
+  README with the production env file sent a live order with no confirmation. It
+  now requires `WAKE_MAINNET_LIVE` as well — the same pair of switches the rest
+  of the product refuses to start on without. Its environment parsing also
+  stopped crashing: `WAKE_ORDER_SIZE_USD=nan` used to reach `math.floor`,
+  `WAKE_ORDER_SIDE=SELL` used to mean *buy* rather than a refusal, and
+  `client_order_index` used the wall clock, which collides inside a second and
+  would be swallowed as a duplicate by the signing service's idempotency cache.
+- Portfolio risk could report "zero risk" for input that has no answer.
+  Correlations were computed pairwise over each pair's own tail, which does not
+  have to produce a positive-semidefinite matrix, and `max(0.0, variance)` then
+  hid the negative under a zero; a series of `1e154`-sized values went further
+  and made the variance `inf - inf = nan`, which `max(0.0, nan)` also reads as
+  `0.0`. The basket is now aligned to one common window before the matrix is
+  built, the response bounds the magnitude of a return series (`1e300` used to
+  be an `OverflowError`, i.e. a 500), and anything still non-finite is refused
+  by name instead of being rounded to a comfortable number.
+- `audit_log.log_action` promised that a failed write never becomes a 500 on a
+  completed money action, and kept that promise only for the database:
+  `json.dumps(details)` sat *before* the `try`, so a `Decimal` — the natural
+  type for money in the SQLAlchemy models — threw straight through. Serialising
+  now happens inside the guard, with `default=str` so the event still reaches
+  the table, and the fallback log line itself cannot fail (`_event_line` prints
+  a circular `details` with `repr` instead of raising while describing the
+  raise).
+- A corrupted rate-limit bucket was diagnosed as "Redis unavailable". The
+  limiter read `tokens`/`last_refill` with a bare `float()` inside
+  `except Exception`, so a bad field meant an unlimited key until TTL, a
+  misleading log and no repair. Bad data and transport failure are now separate
+  branches: the bucket is deleted and re-initialised with its own log line,
+  `allow()` fails open only on `RedisError`, and a bug in the limiter's own code
+  propagates instead of quietly disabling limits.
+- A Lighter response that is not JSON — a load balancer's HTML on a 200, which
+  is what planned maintenance looks like — surfaced as `json.JSONDecodeError`, a
+  `ValueError`, and the HTTP layer reads `ValueError` as "the client's request
+  was bad": an upstream failure answered 400 with a parser message. `_get()` now
+  speaks one failure type (`RuntimeError` for transport, non-JSON and
+  wrong-shaped payload alike), and `"key": null` in a response reads as an empty
+  list rather than crashing the parser.
+- Shutdown closed Redis and PostgreSQL in one line without `finally`: a Redis
+  socket that had gone stale mid-run made `aclose()` raise out of the lifespan
+  and the database pool was never disposed.
+- `api/guards.py` and `session.py` carried the explanation of their own 503 as a
+  comment *after* the `raise`, where it reads as dead code; it moved into the
+  docstring that the reader is actually shown.
+- `cache.py` documented itself as something to replace in production while
+  production had been running on it for months.
+- Documents that had drifted from the code: the curator endpoints answer 503,
+  not 500 (three files said 500); `X-Curator-Token` is in the CORS
+  `allow_headers` list, so `SECURITY.md` no longer claims the header is
+  unreachable from a browser; the Risk router's "16/16 tests" claim is gone,
+  because counts rot and the properties being asserted do not.
 - `.wake-modal` padded itself by a flat 16 px, so in the Telegram mini app a
   dialog hung over the home-indicator gesture; the overlay now respects the same
   safe-area variables as the shell.

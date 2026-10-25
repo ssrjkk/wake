@@ -1,14 +1,17 @@
 """python -m unittest test_audit_log -v
 
-audit_log.py на реальной PostgreSQL: фильтра по actor/action, поиск неудач,
-details как JSON и форма ответа (timestamp — epoch числом, success — 0/1), на
-которую завязан фронт.
+audit_log.py на реальной PostgreSQL: фильтра по actor/action/неудачам и окну
+времени, потолок выборки, details как JSON и форма ответа (timestamp — epoch
+числом, success — 0/1), на которую завязан фронт. Отдельно — обещание из
+докстринга log_action: сбой записи (и базы, и сериализации) не превращается в
+500 на уже исполненную сделку.
 """
 
 import json
 import logging
 import time
 import unittest
+from decimal import Decimal
 
 import testsupport
 import audit_log as al
@@ -55,11 +58,22 @@ class TestQueries(AuditCase):
             "оба фильтра должны сужать выборку, а не применяться по одному",
         )
 
-    def test_failed_actions_since(self):
-        failed = _run(al.failed_actions_since(since_timestamp=0))
+    def test_failed_only_is_a_filter_not_a_second_function(self):
+        """Слияние readers: раньше «неудачи» была отдельной функцией без actor,
+        без action и без limit, и оператор, который ищет перебор по одному
+        аккаунту, получал сначала все отказы за всё время."""
+        failed = _run(al.recent_actions(failed_only=True))
         self.assertEqual([r["actor"] for r in failed], ["user:mallory"])
         self.assertEqual(
-            len(_run(al.failed_actions_since(since_timestamp=time.time() + 60))),
+            _run(al.recent_actions(failed_only=True, actor="user:alice")),
+            [],
+            "фильтр неудач не должен перекрывать фильтр по актору",
+        )
+
+    def test_since_windows_the_read(self):
+        self.assertEqual(len(_run(al.recent_actions(since=0))), 3)
+        self.assertEqual(
+            len(_run(al.recent_actions(since=time.time() + 60))),
             0,
             "окно в будущем не должно ничего находить",
         )
@@ -68,6 +82,15 @@ class TestQueries(AuditCase):
         full = _run(al.recent_actions(limit=100))
         limited = _run(al.recent_actions(limit=2))
         self.assertEqual(limited, full[:2])
+
+    def test_limit_is_a_ceiling_not_a_suggestion(self):
+        """MAX_ROWS — граница объёма памяти процесса: вызывающий код передаёт
+        число из запроса клиента, и без потолка limit=10**6 означал бы выгрузку
+        всей таблицы."""
+        self.assertEqual(al._bounded(10**6), al.MAX_ROWS)
+        self.assertEqual(al._bounded(0), 1)
+        self.assertEqual(al._bounded(-5), 1)
+        self.assertEqual(al._bounded(7), 7)
 
     def test_wire_contract_shape(self):
         row = self.row("user:bob")
@@ -92,9 +115,9 @@ class TestAuditFailureDoesNotBreakRequest(unittest.TestCase):
     превращать успешную сделку в 500 — клиент повторил бы запрос и получил бы
     вторую сделку вместо одной.
 
-    Здесь ломается сам слой записи (async_session_factory), а log_action обязан
-    проглотить ошибку и выбросить её в лог уровнем ERROR: событие не должно
-    исчезнуть вместе с исключением."""
+    Ломаться может и сам слой записи (async_session_factory), и подготовка
+    строки к ней (сериализация details): обе ветки обязаны кончиться ERROR в лог,
+    а не исключением у вызывающего кода."""
 
     def test_write_failure_is_logged_and_swallowed(self):
         original = al.async_session_factory
@@ -120,6 +143,74 @@ class TestAuditFailureDoesNotBreakRequest(unittest.TestCase):
         self.assertIn("trade_executed", line)
         self.assertIn("user:carol", line)
         self.assertIn("market_9", line, "событие должно восстанавливаться из лога")
+
+    def test_unserialisable_details_are_stored_not_dropped(self):
+        """Decimal — обычный тип для денег в моделях SQLAlchemy, и положить его в
+        details проще простого. Раньше json.dumps без default стоял ДО try, и
+        такой вызов ронял TypeError'ом тот самый запрос, который уже отдал деньги.
+
+        default=str — условие того, что событие доживает до таблицы: лог процесса
+        ротируется, а разбор «кому сколько выплатили» не может на него опираться.
+        Число становится строкой — это цена за то, что строка вообще есть."""
+        testsupport.reset()
+        records = _capture("wake.audit")
+        try:
+            _run(
+                al.log_action(
+                    al.AuditEntry(
+                        actor="user:dave",
+                        action="predict_claim",
+                        resource="market_3",
+                        details={"payout_usd": Decimal("12.50")},
+                    )
+                )
+            )
+        finally:
+            records.stop()
+
+        self.assertEqual(records.records, [], "запись прошла — в логе делать нечего")
+        rows = _run(al.recent_actions(actor="user:dave"))
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(
+            json.loads(rows[0]["details"])["payout_usd"],
+            "12.50",
+            "сумма читается, а не съедена сериализатором",
+        )
+
+    def test_failure_after_serialisation_is_logged_and_swallowed(self):
+        """То, что не смог сериализатор (циклическая ссылка — ValueError внутри
+        json.dumps), обязано кончиться так же, как моргнувшая база: ERROR в лог и
+        ничего не долетает до вызывающего кода. Прежний try этого не видел вовсе."""
+        testsupport.reset()
+        circular: dict = {}
+        circular["self"] = circular
+        records = _capture("wake.audit")
+        try:
+            _run(
+                al.log_action(
+                    al.AuditEntry(
+                        actor="user:eve",
+                        action="market_resolution",
+                        resource="market_4",
+                        details=circular,
+                    )
+                )
+            )
+        finally:
+            records.stop()
+
+        self.assertEqual(len(records.records), 1)
+        self.assertEqual(records.records[0].levelno, logging.ERROR)
+        self.assertIn(
+            "market_resolution",
+            records.records[0].getMessage(),
+            "событие восстанавливается из лога",
+        )
+        self.assertEqual(
+            _run(al.recent_actions(actor="user:eve")),
+            [],
+            "в таблицу разорванное событие не попало",
+        )
 
 
 def _broken_session():

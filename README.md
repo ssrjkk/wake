@@ -253,6 +253,7 @@ PW_PORT=5178 npx playwright test
   - `agent.py` — decisions, memory, subscriptions
   - `portfolio.py` — cross-asset risk and hedge
   - `funding.py` — venue comparison and carry calculations
+  - `ops.py` — `/audit`: the operator read of the audit trail, curator token required
 - Storage is one PostgreSQL base: `database.py` (async engine), `pg_models.py` (schema), `alembic/` (migrations), and the repositories `db.py`, `predict_db.py`, `agent_db.py`, `audit_log.py`, `subscription.py`
 - Core logic lives in root modules and is tested on its own: `mirror_engine.py`, `leader_position_tracker.py`, `predict_amm.py`, `predict_resolution.py`, `portfolio_risk.py`, `funding_arb.py`, `quant.py`, `agent_decision.py`, `agent_memory.py`, `risk_limits.py`, `rate_limiter.py`, `cache.py`
 - Configuration is read once in `backend/config.py`, and every variable it owns is validated there — a bad combination (live orders on mainnet without the second switch, a non-Postgres URL) stops the process at startup. A handful of variables stay outside it because they belong to one process: the signing key triple in `signing_service.py`, `WAKE_MASTER_KEY` and `WAKE_KEYSTORE_PATH` in `encrypted_key_store.py`, `WAKE_TEST_DATABASE_URL` in the tests, `WAKE_ORDER_*` in `place_order_example.py`. They are listed in `backend/.env.example` too, with the process that reads each one.
@@ -354,7 +355,7 @@ docker compose up predict-resolver
 - Wallet sign-in proves ownership with an EIP-191 signature over a single-use challenge; the address is recovered from the signature and the Lighter account index is read from the server-side record, not from the request.
 - `WAKE_DRY_RUN` defaults to `true`, and turning it off on mainnet additionally requires `WAKE_MAINNET_LIVE=true`; the process refuses to start otherwise. Order sizes always round down.
 - Every path that can reach Lighter — the signing service, the copy-trading listener and the agent runner — checks `WAKE_DRY_RUN` in its own process before touching the SDK. While it is on, `/place-order` returns the order it would have sent and nothing reaches the exchange; `/health` of both services reports which mode they are in.
-- Curator endpoints require the `X-Curator-Token` header, compared with `hmac.compare_digest` over bytes; if the token is not configured on the server they answer 500 instead of allowing anonymous market creation or resolution.
+- Curator endpoints require the `X-Curator-Token` header, compared with `hmac.compare_digest` over bytes; if the token is not configured on the server they answer 503 `CURATOR_NOT_CONFIGURED` instead of allowing anonymous market creation or resolution.
 - `X-Forwarded-For` is honoured only from `WAKE_TRUSTED_PROXY_IPS`, and only the rightmost address in the chain — otherwise a client could pick the IP that rate limits and audit records show for it.
 - Every SQL statement goes through SQLAlchemy Core/ORM with bound parameters; there is no string-built SQL in the backend.
 - Keys are encrypted at rest (`encrypted_key_store.py`) — this is encryption, not an HSM.

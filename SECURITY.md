@@ -92,9 +92,14 @@ from trading on his signals.
 
 Curator operations — market creation and resolution, manual copy-engine runs —
 require `X-Curator-Token` compared with `hmac.compare_digest` over bytes, and
-answer 500 when the server has no token configured rather than running
-anonymously. CORS only allows `Content-Type` and `Authorization`, so this header
-is not reachable from a browser: it is operator tooling, not a client role.
+answer 503 (`CURATOR_NOT_CONFIGURED`) when the server has no token configured
+rather than running anonymously. 503 and not 403 because the reason is server
+configuration: a client cannot fix it by logging in again, and one language with
+`SESSION_NOT_CONFIGURED` is what lets a client tell "the server is missing
+something" from "my request is bad". `X-Curator-Token` is in the CORS
+`allow_headers` list, so an operator web UI can actually send it — without that
+entry the browser fails the preflight and the operator surface is broken by
+configuration rather than by code.
 
 ### The Telegram bot is a reader with client-supplied input
 
@@ -183,7 +188,11 @@ what asyncpg needs). Schema changes go through Alembic and nothing else;
 `alembic check` in CI fails on drift. All SQL is SQLAlchemy Core/ORM with bound
 parameters — there is no string-built SQL in the backend. Sensitive actions are
 written to the `audit_log` table in the same database, so they survive a
-container restart.
+container restart, and they are readable: `GET /audit` (curator token, newest
+first, 500 rows per response) is the operator's way to answer "who actually
+signed in". A write that fails — the database blinked, a detail would not
+serialise — is logged at ERROR and never turns into a 500 on the caller, because
+that caller has already moved money and would reasonably retry the request.
 
 Markets in the Predict module settle on the same layer as the money paths, not on
 the interface. `record_trade()` refuses a market whose `resolve_at` has passed:
@@ -202,6 +211,17 @@ market in one tick, and two parallel claims by the same user must pay once.
   strict-origin-when-cross-origin`, a `Permissions-Policy` that denies
   camera/microphone/geolocation/payment, and `Content-Security-Policy:
   default-src 'self'`.
+- "Every" includes the refusals, and that is a property of middleware order, not
+  of each handler: Starlette inserts every middleware at position 0, so the last
+  one registered is the outermost, and the stack is built CORS → security
+  headers → error envelope → rate limiter (`backend/app.py`). While the rate
+  limiter sat outermost, its 429 — and any 500 or 400 produced outside the
+  routers — left the application without `Access-Control-Allow-Origin`, so the
+  browser withheld the response from JavaScript entirely: "too many requests,
+  retry in 6s" reached the user as "the backend is down". `Retry-After` is in
+  `expose_headers`, otherwise the client sees the 429 but not the window. A test
+  pins the layer order, because any new middleware registered later silently
+  moves outside these ones.
 - Rate limiting is a Redis token bucket (`backend/rate_limiter.py`): the key is
   `user:<sub>` when the bearer verifies, otherwise `ip:<client>`; write methods
   cost 3 tokens, reads 1; capacity 40, refill 20/s by default. When Redis is
@@ -223,13 +243,26 @@ CI runs `pip-audit --strict` against `backend/requirements.txt`. Audit errors
 and advisories outside the exact list below fail the job, including new urllib3
 advisories. `npm audit` checks both production and development frontend packages.
 
-The following urllib3 advisories were reviewed on 2026-10-22. `lighter-sdk`
-1.1.8 still requires `urllib3<2.1.0`, so its dependency constraints exclude the
-patched releases. Its async REST client uses aiohttp; Wake does not configure
-urllib3 proxy TLS, use its low-level cross-origin proxy API, or stream responses
-through urllib3. These are bounded exceptions, not fixes: do not expose the
-signing service, add untrusted SDK hosts, or introduce those HTTP paths without
-revisiting the exceptions. Remove the exceptions when the SDK permits an update.
+The following urllib3 advisories were reviewed on 2026-10-25. `lighter-sdk`
+1.1.8 — published 2026-10-19 and still the newest release — requires
+`urllib3<2.1.0`, and `pip install --dry-run "urllib3>=2.1.0" "lighter-sdk>=1.1.8"`
+is unsolvable, so a patched urllib3 cannot be installed at all. CI checks that
+resolution instead of trusting this paragraph: the step after the audit fails on
+the first day the cap lifts, and says which list to delete.
+
+What actually touches urllib3 in this dependency set: `lighter/configuration.py`
+imports it for the logger name and retry constants, and the legacy generated
+`openapi_client` transport uses its pool — neither is on the order path. That
+path is the async `SignerClient`, whose REST calls go through aiohttp; the only
+requests-based (and therefore urllib3-based) call in the package is the
+synchronous nonce fallback, which the async path does not reach. Wake's own reads
+of market data use the standard library (`backend/lighter_rest.py`), not urllib3.
+Nothing here configures urllib3 proxy TLS, calls its low-level cross-origin proxy
+API, or streams a response through it.
+
+These are bounded exceptions, not fixes: do not expose the signing service, add
+untrusted SDK hosts, or introduce those HTTP paths without revisiting the
+exceptions. Remove the exceptions when the SDK permits an update.
 
 | Advisory | Affected path |
 | --- | --- |
@@ -275,7 +308,7 @@ responses in full; trusted HTTPS hosts reduce exposure but do not remove it.
 Before any instance trades at all:
 
 1. Set `WAKE_SESSION_SECRET` (otherwise sign-in answers 503) and
-   `WAKE_CURATOR_TOKEN` (otherwise operator routes answer 500).
+   `WAKE_CURATOR_TOKEN` (otherwise operator routes answer 503).
 2. Keep `WAKE_DRY_RUN=true`; confirm the order path on
    `WAKE_LIGHTER_NETWORK=testnet` first.
 3. Set `WAKE_TRUSTED_PROXY_IPS` to the actual proxy addresses.
@@ -363,9 +396,12 @@ dry-run-инстанс), видимый эффект, предложение п�
 
 Операторские операции (создание и резолюция рынков, ручной прогон копи-движка)
 требуют `X-Curator-Token`, сравнивают его через `hmac.compare_digest` по байтам и
-отвечают 500, когда токен на сервере не настроен, вместо анонимного исполнения.
-CORS разрешает только `Content-Type` и `Authorization`, так что этот заголовок не
-добирается из браузера: это инструмент оператора, а не роль клиента.
+отвечают 503 (`CURATOR_NOT_CONFIGURED`), когда токен на сервере не настроен,
+вместо анонимного исполнения. 503, а не 403: причина — конфигурация сервера, и
+клиент не может исправить её повторным входом. `X-Curator-Token` входит в CORS
+`allow_headers`, поэтому операторский веб-интерфейс действительно может его
+отправить; без этой строки браузер падал бы на preflight, и поверхность
+оператора была бы сломана конфигурацией, а не кодом.
 
 ### Telegram-бот — читатель с недоверчивым вводом
 
@@ -452,7 +488,12 @@ PostgreSQL (и дописывает `asyncpg` к `postgresql://`, потому �
 запрос падает с невнятной причиной). Схема меняется только через Alembic, а
 `alembic check` в CI падает на расхождении. Весь SQL идёт через SQLAlchemy
 Core/ORM со связанными параметрами; строк SQL в бэкенде не собирают. Чувствительные
-действия пишутся в таблицу `audit_log` той же базы и переживают рестарт контейнера.
+действия пишутся в таблицу `audit_log` той же базы и переживают рестарт контейнера,
+и они читаются: `GET /audit` (токен куратора, свежие сверху, до 500 строк в ответе) —
+это способ оператора ответить на «кто вообще заходил». Сбой записи — база моргнула,
+деталь не сериализуется — уходит в лог уровнем ERROR и никогда не становится 500 у
+вызывающего кода: там уже изменены деньги, и повтор такого запроса означал бы вторую
+сделку вместо одной.
 
 Рынки Predict сходятся тем же слоем, что и денежные пути, а не интерфейсом.
 `record_trade()` отказывает рынку, у которого `resolve_at` уже прошёл: исход
@@ -471,6 +512,16 @@ price-рынка в этот момент уже определён оракул
   strict-origin-when-cross-origin`, `Permissions-Policy`, запрещающий
   камеру/микрофон/геолокацию/payment, и `Content-Security-Policy: default-src
   'self'`.
+- «Каждый» включает отказы, и это свойство порядка middleware, а не каждого
+  обработчика: Starlette вставляет каждый слой в начало списка, поэтому
+  последним добавленный оказывается внешним, и стек собран CORS → заголовки →
+  конвертер ошибок → лимитер (`backend/app.py`). Пока лимитер был внешним, его
+  429 — и любой 500 или 400 вне роутов — уходили без
+  `Access-Control-Allow-Origin`, то есть браузер вообще не отдавал их
+  JavaScript: «слишком много запросов, повторите через 6 секунд» доходило до
+  человека как «бэкенд лежит». `Retry-After` добавлен в `expose_headers`, иначе
+  клиент видит 429, но не видит окно. Порядок слоёв закрепляет тест: любой новый
+  middleware, добавленный позже, молча переезжает наружу этих.
 - Rate limiting — token bucket в Redis (`backend/rate_limiter.py`): ключ
   `user:<sub>`, если bearer подтверждается, иначе `ip:<client>`; write-методы
   стоят 3 токена, чтение 1; по умолчанию capacity 40, refill 20/сек. При
@@ -491,14 +542,27 @@ CI запускает `pip-audit --strict` по `backend/requirements.txt`. Ош
 и уязвимости вне точного списка ниже роняют джоб, включая новые уязвимости
 urllib3. `npm audit` проверяет фронтенд вместе с dev-зависимостями.
 
-Перечисленные уязвимости urllib3 проверены 2026-10-22. `lighter-sdk` 1.1.8
-по-прежнему требует `urllib3<2.1.0`, поэтому исправленные версии не проходят его
-ограничения. Асинхронный REST-клиент SDK работает через aiohttp; Wake не
-настраивает TLS прокси urllib3, не использует его низкоуровневые междоменные
-прокси-запросы и не читает потоковые ответы через urllib3. Это ограниченные
-исключения, а не исправления: публикация сервиса подписи, недоверенные хосты SDK
-или добавление этих HTTP-путей требуют пересмотра исключений. После снятия
-ограничения SDK исключения надо удалить.
+Перечисленные уязвимости urllib3 проверены 2026-10-25. `lighter-sdk` 1.1.8 —
+опубликован 2026-10-19 и остаётся свежим релизом — требует `urllib3<2.1.0`, а
+`pip install --dry-run "urllib3>=2.1.0" "lighter-sdk>=1.1.8"` не разрешается, то
+есть пропатченный urllib3 нельзя поставить вообще. CI проверяет именно это
+разрешение, а не верит абзацу: шаг после аудита краснеет в первый день, когда
+предел снимут, и говорит, какой список удалять.
+
+Что на самом деле задевает urllib3 в этом наборе зависимостей:
+`lighter/configuration.py` импортирует его ради имени логгера и констант повторов,
+а легаси-транспорт `openapi_client` работает через его пул — ни то, ни другое на
+пути ордера не лежит. Путь ордера — это асинхронный `SignerClient`, чьи запросы
+ходят через aiohttp; единственный requests-вызов (а значит и urllib3-вызов) в
+пакете — синхронный запасной путь за nonce, до которого асинхронная ветка не
+доходит. Собственные данные Lighter Wake читает стандартной библиотекой
+(`backend/lighter_rest.py`), не urllib3. TLS прокси urllib3 здесь никто не
+настраивает, низкоуровневый междоменный прокси-API не вызывает, потоковые ответы
+через него не читаются.
+
+Это ограниченные исключения, а не исправления: публикация сервиса подписи,
+недоверенные хосты SDK или добавление этих HTTP-путей требуют пересмотра
+исключений. После снятия ограничения SDK исключения надо удалить.
 
 | Уязвимость | Затронутый путь |
 | --- | --- |
@@ -542,7 +606,7 @@ urllib3. `npm audit` проверяет фронтенд вместе с dev-з�
 Перед тем как инстанс вообще начнёт торговать:
 
 1. Задать `WAKE_SESSION_SECRET` (иначе вход отвечает 503) и
-   `WAKE_CURATOR_TOKEN` (иначе операторские роуты отвечают 500).
+   `WAKE_CURATOR_TOKEN` (иначе операторские роуты отвечают 503).
 2. Оставить `WAKE_DRY_RUN=true` и сначала проверить путь ордера на
    `WAKE_LIGHTER_NETWORK=testnet`.
 3. Выставить `WAKE_TRUSTED_PROXY_IPS` на реальные адреса прокси.

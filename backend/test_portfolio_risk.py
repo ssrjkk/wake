@@ -237,6 +237,74 @@ class TestGarbageData(unittest.TestCase):
         score = diversification_score(positions, returns)
         self.assertTrue(0.0 <= score <= 1.0)
 
+    def test_non_finite_variance_is_refused_instead_of_reading_as_zero(self):
+        """max(0.0, variance) из прежнего кода на inf - inf = nan возвращает 0.0:
+        панель показывала «волатильность портфеля 0$» на ряду, который к деньгам
+        не имеет отношения. Ноль тут опаснее ошибки — он выглядит как идеальный
+        хедж. Граница HTTP-слоя такие порядки отсекает, но и математика обязана
+        отвечать отказом, а не цифрой."""
+        positions = [Position(1, "BTC", 5e11), Position(2, "ETH", 5e11)]
+        returns = {1: [1e154, -1e154, 1e154], 2: [1e154, 1e154, -1e154]}
+        with self.assertRaises(ValueError) as ctx:
+            portfolio_dollar_volatility(positions, returns)
+        self.assertIn("inf", str(ctx.exception))
+
+    def test_basket_is_computed_on_one_common_window(self):
+        """Корзина из рядов разной длины считается по общим последним
+        наблюдениям, а не по попарным хвостам.
+
+        Это не придуманный случай: на рядах 3/4/4 ниже попарные корреляции
+        выходят 0.189, -1.0 и -0.663 — набор, посчитанный по РАЗНЫМ выборкам, и
+        матрица из него не обязана быть полуопределённой. Дисперсия уходила в
+        -427, прежний max(0.0, variance) превращал это в «риск нулевой», и панель
+        советовала бы хедж на том, чего посчитать нельзя. Ряды разной длины —
+        норма: так выглядит рынок, листнутый позже других."""
+        positions = [
+            Position(1, "A", 1000.0),
+            Position(2, "B", 1000.0),
+            Position(3, "C", 1000.0),
+        ]
+        mixed = {
+            1: [-0.5, 1.0, 1.0],
+            2: [-1.0, 0.0, 1.0, -0.5],
+            3: [1.0, 0.0, -1.0, -1.0],
+        }
+        value = portfolio_dollar_volatility(positions, mixed)
+        self.assertTrue(
+            math.isfinite(value) and value > 0,
+            f"нулевой риск на этом входе — прежний баг, а не ответ ({value!r})",
+        )
+        # Общий хвост = тот же ответ, что на рядах, обрезанных руками до 3 точек.
+        explicit = {1: [-0.5, 1.0, 1.0], 2: [0.0, 1.0, -0.5], 3: [0.0, -1.0, -1.0]}
+        self.assertAlmostEqual(
+            value, portfolio_dollar_volatility(positions, explicit), places=12
+        )
+        self.assertLessEqual(value, naive_dollar_volatility(positions, mixed))
+
+    def test_short_candidate_does_not_break_the_hedge_request(self):
+        """Кандидат с рядом из одного наблюдения не участвует в переборе — и не
+        должен обрывать расчёт: раньше он отсекался по нулевой волатильности, и
+        общее окно обязано сохранять это поведение."""
+        target = Position(1, "A", 1000.0)
+        returns = {1: [0.1, -0.2, 0.3, -0.1], 2: [0.05], 3: [0.05, -0.05, 0.1, 0.2]}
+        suggestion = suggest_hedge(target, [(2, "B"), (3, "C")], returns)
+        self.assertIsNotNone(
+            suggestion, "короткий кандидат не имеет права обнулить ответ"
+        )
+        self.assertEqual(suggestion.market_id, 3)
+
+    def test_full_hedge_still_reads_as_zero_not_as_an_error(self):
+        """Граничный случай того же отказа: длинная и короткая позиции одного
+        риска (ряды совпадают, знаки нотционалей противоположны) дают дисперсию
+        ровно ноль — с плавающей ошибкой, у которой может быть любой знак. Такой
+        шум зажимается в ноль, а не превращается в отказ: иначе «портфель
+        захеджирован» падал бы ошибкой, а это ровно тот ответ, который человек
+        ждёт от панели."""
+        positions = [Position(1, "A", 1000.0), Position(2, "B", -1000.0)]
+        returns = {1: [0.1, 0.2, 0.3], 2: [0.1, 0.2, 0.3]}
+        self.assertAlmostEqual(portfolio_dollar_volatility(positions, returns), 0.0)
+        self.assertAlmostEqual(diversification_score(positions, returns), 1.0)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

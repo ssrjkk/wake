@@ -159,6 +159,23 @@ class TestDatabaseUrl(unittest.TestCase):
             build(wake_database_url="sqlite:///wake.db")
 
 
+class TestLogLevel(unittest.TestCase):
+    def test_typo_is_refused_instead_of_degrading_to_info(self):
+        """Прежний `getattr(logging, v.upper(), logging.INFO)` проглатывал
+        опечатку: WAKE_LOG_LEVEL=debu давал INFO, и «debug не включился» нельзя
+        было отличить от «debug не просили» — ровно тогда, когда логи и нужны."""
+        for bad in ("debu", "warningg", "", "CRITICAL_", "verbose"):
+            with self.assertRaises(ValidationError, msg=bad):
+                build(wake_log_level=bad)
+
+    def test_value_is_normalised_to_the_name_logging_uses(self):
+        """Имя уровня используется дважды: в валидаторе и в getattr при
+        basicConfig — нормализация в одном месте исключает пару «прошло
+        валидацию, но getattr не нашёл»."""
+        self.assertEqual(build(wake_log_level=" debug ").wake_log_level, "DEBUG")
+        self.assertEqual(build(wake_log_level="WARNING").wake_log_level, "WARNING")
+
+
 class TestListParsing(unittest.TestCase):
     def test_cors_origins_split_and_cleaned(self):
         settings = build(wake_cors_origins="http://a.test, http://b.test ,,")

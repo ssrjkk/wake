@@ -9,9 +9,10 @@ URL, которые ушли бы наружу, и ровно тот JSON, ко�
 ответов взяты из живых замеров mainnet (поле V — quote-объём свечи, t — начало
 интервала, кратное разрешению; market_id и размеры приходят строками).
 
-Проверяются четыре вещи, за которые отвечает этот файл:
+Проверяются пять вещей, за которые отвечает этот файл:
 
   - адрес аккаунта кодируется, а не вставляется в query как есть;
+  - у ответа биржи один язык отказа: не-JSON и не-словарь — RuntimeError;
   - повторяются только 5xx и сетевые сбои, 4xx — нет (иначе закрытый эндпоинт
     висит 3.5 с и жрёт квоту, а на 429 просит ещё);
   - из свечного ряда в расчёт берутся только конечные положительные цены,
@@ -112,6 +113,77 @@ class TestUrlBuilding(unittest.TestCase):
         transport = Transport({"accounts": []})
         with patch("urllib.request.urlopen", transport):
             self.assertIsNone(lighter_rest.get_account_index_by_l1("0x0", "mainnet"))
+
+
+def raw_transport(body: bytes):
+    """Транспорт, отдающий ровно переданные байты — для ответов, которые не
+    являются валидным JSON-объектом (страница балансировщика, [] на месте
+    словаря). Обычный Transport сериализует то, что ему дают, и такую форму не
+    воспроизведёт."""
+
+    def transport(req, timeout=None):
+        return _Response(body)
+
+    return transport
+
+
+class TestResponseShape(unittest.TestCase):
+    """У источника данных обязан быть ОДИН язык отказа. Роуты ловят RuntimeError
+    и отвечают 502; всё, что уходило другим типом, HTTP-слой трактовал иначе:
+    JSONDecodeError — подкласс ValueError, а ValueError означает у нас «плохой
+    запрос клиента», то есть чужая страница-заглушка превращалась в 400 с текстом
+    разбора JSON в ответе. Ответ-список вместо словаря давал AttributeError и 500."""
+
+    def test_non_json_body_is_a_runtime_error(self):
+        transport = raw_transport(
+            b"<html><body>Lighter is under maintenance</body></html>"
+        )
+        with (
+            patch("urllib.request.urlopen", transport),
+            self.assertRaises(RuntimeError) as ctx,
+        ):
+            lighter_rest._get("https://x/api/v1/orderBooks")
+        self.assertIn("не JSON", str(ctx.exception))
+        self.assertNotIsInstance(
+            ctx.exception, ValueError, "ValueError на HTTP-слое означает 400 клиенту"
+        )
+
+    def test_json_array_body_is_a_runtime_error(self):
+        """`data.get(...)` выше по стеку рассчитывает на словарь; [].get — это
+        AttributeError, то есть 500 вместо «биржа вернула не то»."""
+        transport = raw_transport(b'[{"market_id": 1}]')
+        with (
+            patch("urllib.request.urlopen", transport),
+            self.assertRaises(RuntimeError) as ctx,
+        ):
+            lighter_rest._get("https://x/api/v1/orderBooks")
+        self.assertIn("не объект JSON", str(ctx.exception))
+
+    def test_null_list_field_reads_as_empty_not_type_error(self):
+        """Ключ может прийти со значением null: `.get(key, [])` в этом случае
+        отдаёт None, и обход `for book in None` падал уже в разборе ответа."""
+        for name, fn, key in (
+            (
+                "order_books",
+                lambda: lighter_rest.get_order_books("mainnet"),
+                "order_books",
+            ),
+            (
+                "funding_rates",
+                lambda: lighter_rest.get_funding_rates("mainnet"),
+                "funding_rates",
+            ),
+            ("candles", lambda: lighter_rest.get_candles(1, "1h", 3, "mainnet"), "c"),
+        ):
+            cache.clear()
+            with (
+                self.subTest(name),
+                patch(
+                    "urllib.request.urlopen",
+                    raw_transport(json.dumps({key: None}).encode()),
+                ),
+            ):
+                self.assertEqual(fn(), [], f"{name}: null должен читаться как пусто")
 
 
 class TestRetryPolicy(unittest.TestCase):

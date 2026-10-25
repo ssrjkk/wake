@@ -156,6 +156,24 @@ class Settings(BaseSettings):
             )
         return v
 
+    @field_validator("wake_log_level")
+    @classmethod
+    def validate_log_level(cls, v: str) -> str:
+        """Уровень логов — конечный список, а не строка на вкус оператора.
+
+        Прежний `getattr(logging, v.upper(), logging.INFO)` молча проглатывал
+        опечатку: WAKE_LOG_LEVEL=debu и WAKE_LOG_LEVEL=warningg давали INFO, и
+        режим «включил разбор, а в логах ничего» ничем не отличался от «debug не
+        включали». Нормализация сюда же: значение сравнивается и используется
+        одним написанием."""
+        name = v.strip().upper()
+        allowed = {"CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"}
+        if name not in allowed:
+            raise ValueError(
+                f"WAKE_LOG_LEVEL={v!r}: доступен {', '.join(sorted(allowed))}"
+            )
+        return name
+
     @field_validator("wake_cors_origins")
     @classmethod
     def validate_cors_origins(cls, v: str) -> str:
@@ -222,9 +240,10 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
-# Logging setup
+# Logging setup. Fallback-уровень здесь не нужен: wake_log_level прошёл
+# валидатор, и список разрешённых имён известен с той же строки, что и getattr.
 logging.basicConfig(
-    level=getattr(logging, settings.wake_log_level.upper(), logging.INFO),
+    level=getattr(logging, settings.wake_log_level),
     format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )

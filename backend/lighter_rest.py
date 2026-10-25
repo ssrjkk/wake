@@ -66,13 +66,22 @@ def _get(url: str) -> dict:
     /orderBooks с depth, который Lighter отдаёт 403) висел по 3.5 секунды и
     сжигал квоту, а на 429 просил ещё больше. Повторяются только сетевые сбои и
     5xx — то, что действительно может пройти при следующем попытке.
+
+    Источник данных обязан иметь ОДИН язык отказа. Пока разбирались только
+    HTTPError и URLError, всё остальное уходило наружу своим типом: страница
+    статуса 200 с HTML (так отдаёт балансировщик Lighter во время техработ)
+    бросала json.JSONDecodeError — подкласс ValueError, который HTTP-слой
+    Wake трактует как «плохой запрос клиента», то есть чужой сбой превращался
+    в 400 с текстом разбора JSON в ответе. Не-JSON и неподходящая форма ответа
+    (не словарь) теперь RuntimeError, как и сеть: роуты ловят один тип и честно
+    отвечают 502.
     """
     req = urllib.request.Request(url, headers={"Accept": "application/json"})
     last_err = None
     for attempt in range(MAX_RETRIES):
         try:
             with urllib.request.urlopen(req, timeout=10) as resp:
-                return json.loads(resp.read().decode())
+                body = resp.read()
         except urllib.error.HTTPError as e:
             if e.code < 500:
                 raise RuntimeError(
@@ -82,12 +91,25 @@ def _get(url: str) -> dict:
             if attempt < MAX_RETRIES - 1:
                 delay = RETRY_DELAY * (2**attempt) + random.uniform(0, 0.5)
                 time.sleep(delay)
+            continue
         except urllib.error.URLError as e:
             last_err = e
             if attempt < MAX_RETRIES - 1:
                 # Exponential backoff with jitter: 1s, 2s, 4s + random 0-0.5s
                 delay = RETRY_DELAY * (2**attempt) + random.uniform(0, 0.5)
                 time.sleep(delay)
+            continue
+        try:
+            data = json.loads(body.decode())
+        except (ValueError, UnicodeDecodeError) as e:
+            raise RuntimeError(
+                f"Lighter API вернул не JSON для {url.split('?')[0]}"
+            ) from e
+        if not isinstance(data, dict):
+            raise RuntimeError(
+                f"Lighter API вернул не объект JSON для {url.split('?')[0]}"
+            )
+        return data
     raise RuntimeError(f"Lighter API недоступен: {last_err}")
 
 
@@ -98,7 +120,7 @@ def get_order_books(network: str = LIGHTER_NETWORK) -> list:
     Кэшируется на 30 секунд — список рынков не меняется часто."""
     url = f"{_base(network)}/orderBooks?filter=all"
     data = _get(url)
-    return data.get("order_books", [])
+    return data.get("order_books") or []
 
 
 def get_account_index_by_l1(
@@ -137,7 +159,7 @@ def get_funding_rates(network: str = LIGHTER_NETWORK) -> list:
     ответ всегда полный (~700 строк: 4 площадки × ~200 рынков), поэтому
     дёргать этот запрос на каждый рынок бессмысленно."""
     data = _get(f"{_base(network)}/funding-rates")
-    return data.get("funding_rates", data.get("rates", []))
+    return data.get("funding_rates") or data.get("rates") or []
 
 
 def get_candles(
@@ -169,7 +191,7 @@ def get_candles(
         f"&count_back={count}&set_timestamp_to_end=true"
     )
     data = _get(url)
-    return data.get("c", [])[-count:]
+    return (data.get("c") or [])[-count:]
 
 
 def get_price_at(

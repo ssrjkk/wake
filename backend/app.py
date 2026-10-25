@@ -10,6 +10,7 @@ REST-слой Wake backend. Тонкий файл: создаёт FastAPI, по�
     api/portfolio.py    — cross-asset portfolio risk
     api/funding.py      — funding rate арбитраж
     api/markets.py      — GET /markets/overview (ранжирование по 24ч-обороту)
+    api/ops.py          — GET /audit (операторское чтение аудита, токен куратора)
 
 Математика и логика каждой области протестированы отдельно (см. test_*.py);
 этот слой и роутеры — только HTTP-обвязка. Обвязка тоже прогнана:
@@ -27,6 +28,10 @@ REST-слой Wake backend. Тонкий файл: создаёт FastAPI, по�
 - Security headers (X-Content-Type-Options, X-Frame-Options, CSP, ...)
 - Strict CORS (no wildcards, explicit origins only)
 - Единый формат ошибок: { "error": { "code": "...", "message": "..." } }
+- Порядок middleware — не по вкусу, а по правилу Starlette (блок «Стек
+  middleware» в файле): отказ обязан доезжать до клиента с CORS- и
+  security-заголовками, иначе 429 и 500 для браузера выглядят как «сервер не
+  отвечает».
 
 Запуск:
     pip install -r requirements.txt
@@ -36,6 +41,7 @@ REST-слой Wake backend. Тонкий файл: создаёт FastAPI, по�
 import logging
 import math
 from contextlib import asynccontextmanager
+from http import HTTPStatus
 
 import sentry_sdk
 from sentry_sdk.integrations.fastapi import FastApiIntegration
@@ -60,6 +66,7 @@ from api.agent import router as agent_router
 from api.portfolio import router as portfolio_router
 from api.funding import router as funding_router
 from api.markets import router as markets_router
+from api.ops import router as ops_router
 
 # Initialize Sentry for error monitoring (optional — only if SENTRY_DSN is set)
 if settings.sentry_dsn:
@@ -82,41 +89,37 @@ async def lifespan(app: FastAPI):
     )
     yield
     logger.info("Shutting down Wake backend...")
-    await _rate_limiter.close()
-    await database.close_db()
+    # Каждый ресурс закрывается сам за себя. Когда оба стояли в одну линию без
+    # finally, моргнувший Redis (соединение протухло за время работы процесса, а
+    # aclose() это соединение трогает) бросал исключение из lifespan — и пул
+    # PostgreSQL не закрывался вовсе: рестарт оставлял открытые соединения от
+    # мёртвого процесса.
+    try:
+        await _rate_limiter.close()
+    finally:
+        await database.close_db()
     logger.info("Database connections closed")
 
 
 app = FastAPI(title="Wake backend", lifespan=lifespan)
 
-# CORS — strict origins, no wildcards
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.cors_origins_list,
-    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    # X-Curator-Token обязано быть в списке: операторские роуты требуют именно
-    # этот заголовок (api/guards.py), и без него браузер не проходит preflight —
-    # то есть любой веб-интерфейс оператора был бы нерабочим по конфигу CORS, а
-    # не по коду.
-    allow_headers=["Content-Type", "Authorization", "X-Curator-Token"],
-    allow_credentials=True,
-)
 
-
-# Security headers — Helmet-аналог для FastAPI
-@app.middleware("http")
-async def security_headers_middleware(request: Request, call_next):
-    response = await call_next(request)
-    response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["X-Frame-Options"] = "DENY"
-    response.headers["X-XSS-Protection"] = "1; mode=block"
-    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-    response.headers["Permissions-Policy"] = (
-        "camera=(), microphone=(), geolocation=(), payment=()"
-    )
-    response.headers["Content-Security-Policy"] = "default-src 'self'"
-    return response
-
+# Стек middleware. Starlette вставляет каждый следующий слой в начало списка,
+# поэтому ПОСЛЕДНИЙ добавленный — САМЫЙ ВНЕШНИЙ: порядок добавления в этом файле
+# обратен порядку, в котором запрос проходит сквозь приложение. Ниже слои идут
+# изнутри наружу, то есть запрос сначала уходит в rate limit, а ответ оттуда
+# сначала проходит конвертер ошибок, потом заголовки, потом CORS:
+#
+#     CORS (внешний) -> security headers -> конвертер ошибок -> rate limit -> роуты
+#
+# Порядок важен не для красоты. Когда лимитер был добавлен последним, он оказался
+# внешним, и его 429 не проходил ни через заголовки, ни через CORS: браузер не
+# отдавал фронтенду такой ответ вообще, и страница показывала «бэкенд лежит» ровно
+# в тот момент, когда честно просила притормозить. То же было с 500 и с 400 на
+# ValueError: обработчик Exception FastAPI вешает на ServerErrorMiddleware, слой
+# вне нашего стека, и подписать его ответ было некому. Проверено на живом
+# приложении: 502 из роута приходил с ACAO и nosniff, 429 и 500 — без обоих.
+# Порядок слоёв закрепляет тест, а не этот комментарий.
 
 # Redis-backed rate limiting (token bucket)
 _rate_limiter = RedisRateLimiter(
@@ -177,15 +180,24 @@ async def rate_limit_middleware(request: Request, call_next):
     return await call_next(request)
 
 
-# Единый формат ошибок
-@app.exception_handler(Exception)
-async def unified_exception_handler(request: Request, exc: Exception):
-    if isinstance(exc, ValueError):
+# Единый формат ошибок для того, что не является типизированным отказом. Раньше
+# это был @app.exception_handler(Exception), но такой обработчик FastAPI навешивает
+# на ServerErrorMiddleware — слой ВНЕ нашего стека, и ответ, собранный им, не
+# проходит ни через security-заголовки, ни через CORS. Конвертер внутри стека даёт
+# тот же JSON и те же статусы, но ответ идёт наружу подписанным. Типизированные
+# обработчики ниже (HTTPException, RequestValidationError, SessionError,
+# WalletAuthError) остаются на месте: они живут в ExceptionMiddleware, то есть
+# глубже этого конвертера, и их ответы конвертер не видит.
+@app.middleware("http")
+async def error_envelope_middleware(request: Request, call_next):
+    try:
+        return await call_next(request)
+    except ValueError as exc:
         # ValueError — это и валидация границ (predict_amm, portfolio_risk,
-        # wallet_auth), и баг в коде (_int("abc")). Статус 400 остаётся, но
-        # молча превращать настоящую ошибку сервера в «плохой запрос» нельзя:
-        # без этой строки Sentry и логики разбора видели бы только 400 от
-        # клиента там, где падал наш собственный код.
+        # wallet_auth), и баг в коде (_int("abc")). Статус 400 остаётся, но молча
+        # превращать настоящую ошибку сервера в «плохой запрос» нельзя: без этой
+        # строки Sentry и логи разбора видели бы только 400 от клиента там, где
+        # падал наш собственный код.
         logger.warning(
             "ValueError на %s %s: %s",
             request.method,
@@ -202,16 +214,55 @@ async def unified_exception_handler(request: Request, exc: Exception):
                 }
             },
         )
-    logger.exception("Unhandled exception: %s", exc)
-    return JSONResponse(
-        status_code=500,
-        content={
-            "error": {
-                "code": "INTERNAL_ERROR",
-                "message": "Внутренняя ошибка сервера",
-            }
-        },
+    except Exception as exc:
+        logger.exception("Unhandled exception: %s", exc)
+        # Дальше по стеку exception уже не уйдёт, а именно выход наружу ловила
+        # интеграция Sentry. Без этой строки 500-ки перестали бы долетать до
+        # Sentry, и «что упало на проде» разбиралось бы по логам процесса, которые
+        # rotate'ятся. При незапущенном Sentry вызов — пустой no-op.
+        sentry_sdk.capture_exception(exc)
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": {
+                    "code": "INTERNAL_ERROR",
+                    "message": "Внутренняя ошибка сервера",
+                }
+            },
+        )
+
+
+# Security headers — Helmet-аналог для FastAPI.
+@app.middleware("http")
+async def security_headers_middleware(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["X-XSS-Protection"] = "1; mode=block"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = (
+        "camera=(), microphone=(), geolocation=(), payment=()"
     )
+    response.headers["Content-Security-Policy"] = "default-src 'self'"
+    return response
+
+
+# CORS — strict origins, no wildcards
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_origins_list,
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    # X-Curator-Token обязано быть в списке: операторские роуты требуют именно
+    # этот заголовок (api/guards.py), и без него браузер не проходит preflight —
+    # то есть любой веб-интерфейс оператора был бы нерабочим по конфигу CORS, а
+    # не по коду.
+    allow_headers=["Content-Type", "Authorization", "X-Curator-Token"],
+    # Retry-After фронт читает руками: без этого заголовка он знает, что получил
+    # 429, но не знает, через сколько секунд повторить, и выбирает случайную паузу.
+    # Cross-origin ответ по спецификации читается только из expose-списка.
+    expose_headers=["Retry-After"],
+    allow_credentials=True,
+)
 
 
 # HTTPException (404 маршрутов, 401 auth, 400 ручных проверок) и ошибки
@@ -223,8 +274,6 @@ async def http_exception_handler(request: Request, exc: HTTPException):
     if isinstance(exc.detail, dict) and "error" in exc.detail:
         payload = exc.detail
     else:
-        from http import HTTPStatus
-
         payload = {
             "error": {
                 "code": HTTPStatus(exc.status_code).phrase.upper().replace(" ", "_"),
@@ -347,3 +396,4 @@ app.include_router(agent_router)
 app.include_router(portfolio_router)
 app.include_router(funding_router)
 app.include_router(markets_router)
+app.include_router(ops_router)

@@ -15,6 +15,13 @@ predict_amm.py — реальная, известная формула, не "п
 from dataclasses import dataclass
 from math import isfinite
 
+# Относительная граница «это ещё шум, а уже и не шум». float64 копит ошибку
+# порядка eps на каждом сложении: при 2500 слагаемых (50 позиций, матрица 50x50
+# — потолок роута) это ~2500 * 2.2e-16 ≈ 5e-13 от масштаба дисперсии. Взято 1e-9:
+# запас в четыре порядка над худшим случаем округления и на шесть порядков ниже
+# любой величины, которую человек назвал бы «портфель стал менее рискованным».
+_VARIANCE_NOISE_REL = 1e-9
+
 
 def price_returns(prices: list) -> list:
     """Простые доходности по закрытиям.
@@ -55,6 +62,11 @@ def pearson_correlation(returns_a: list, returns_b: list) -> float:
     которое человек не мог ни на что опереться. Усечение по общему хвосту —
     стандартная пара-в-пара работа с несопоставимыми по истории рядами: сравниваются
     одни и те же интервалы, а не «всё, что было у каждого».
+
+    Для корзины этой primitive уже недостаточно: набор попарных хвостов считает
+    корреляции по разным выборкам, и матрица из них не обязана быть
+    полуопределённой. Caller корзины обязан привести ряды к одному окну
+    (_aligned_tails) и позвонить сюда уже согласованными рядами.
     """
     a = _finite(list(returns_a))
     b = _finite(list(returns_b))
@@ -90,6 +102,29 @@ def _correlation_between(mid_a: int, mid_b: int, returns_by_market: dict) -> flo
     return pearson_correlation(returns_by_market[mid_a], returns_by_market[mid_b])
 
 
+def _aligned_tails(returns_by_market: dict, market_ids: list) -> dict:
+    """Ряды корзины приводятся к ОБЩЕМУ окну — последним min(len) значениям.
+
+    Это не аккуратность, а условие того, что матрицы корреляций вообще существует.
+    Прежний способ — попарный общий хвост — считает каждую пару на СВОЁМ
+    подвыборочном окне, и из трёх рынков с рядами 40, 12 и 5 наблюдений получается
+    набор чисел, который не обязан быть положительно полуопределённым: дисперсия
+    портфеля уходила в минус, а max(0.0, variance) прятал это за «нулём риска».
+    Матрица, посчитанная по одной и той же выборке, полуопределена по построению
+    (это Gram-матрица стандартизованных векторов), и нечисловой ответ больше не
+    нужен.
+
+    Короткий ряд не обрывает расчёт, а укорачивает окно всем — listwise-вырубка,
+    стандартная цена согласованной матрицы."""
+    window = min(len(returns_by_market[mid]) for mid in market_ids)
+    if window < 2:
+        raise ValueError(
+            f"общее окно корзины — {window} знач. (минимум 2): ряды слишком "
+            "короткие, коррелировать не по чему"
+        )
+    return {mid: list(returns_by_market[mid])[-window:] for mid in market_ids}
+
+
 def _require_series(positions: list, returns_by_market: dict) -> None:
     """Ряд должен быть у каждого рынка корзины. Молча пропущенный рынок — это
     волатильность портфеля, посчитанная по половине портфеля, и выглядит она
@@ -107,11 +142,31 @@ def portfolio_dollar_volatility(positions: list, returns_by_market: dict) -> flo
     """Портфельная (не наивная сумма) волатильность в долларах — учитывает,
     что скоррелированные позиции складывают риск, а некоррелированные и
     противоположные — гасят его. Стандартная формула var(sum) через матрицу
-    ковариаций, не приближение."""
+    ковариаций, не приближение.
+
+    Ряды корзины сначала приводятся к общему окну (_aligned_tails), и это не
+    косметика: без него матрица попарных корреляций не обязана быть
+    полуопределённой. Отрицательная дисперсия зажимается в ноль только в шуме
+    плавающей точки; раньше это делал max(0.0, variance) без условий, и у него
+    было два ложных оправдания — inf - inf = nan (max(0.0, nan) в Python даёт
+    0.0, то есть мусор на входе превращался в «риск нулевой») и отрицательная по
+    существу матрица, которую общий хвост пары рядов разной длины и рождал."""
     _require_series(positions, returns_by_market)
+    returns_by_market = _aligned_tails(
+        returns_by_market, sorted({p.market_id for p in positions})
+    )
     vols = {p.market_id: volatility(returns_by_market[p.market_id]) for p in positions}
 
     variance = 0.0
+    # Масштаб — сумма диагональных слагаемых: он того же порядка, что и само
+    # variance, поэтому от него можно брать шумовую границу в относительных
+    # единицах, а не в условном «1e-9 долларов». Умножение, а не возведение в
+    # степень: на ряду вроде [1e154, ...] ** даёт OverflowError ещё до проверки
+    # ниже, то есть 500 вместо внятного отказа.
+    scale = 0.0
+    for p in positions:
+        diagonal = p.signed_notional_usd * vols[p.market_id]
+        scale += diagonal * diagonal
     for pi in positions:
         for pj in positions:
             corr = _correlation_between(pi.market_id, pj.market_id, returns_by_market)
@@ -122,18 +177,33 @@ def portfolio_dollar_volatility(positions: list, returns_by_market: dict) -> flo
                 * vols[pi.market_id]
                 * vols[pj.market_id]
             )
-    return (
-        max(0.0, variance) ** 0.5
-    )  # float-шум изредка даёт крошечную отрицательную дисперсию
+    if not isfinite(variance):
+        raise ValueError(
+            "дисперсия портфеля сошлась к inf/nan — ряды доходностей должны быть "
+            "разумного порядка, а ноль на таком входе означал бы «нулевой риск»"
+        )
+    if variance < 0:
+        if variance >= -_VARIANCE_NOISE_REL * scale:
+            return 0.0
+        raise ValueError(
+            f"отрицательная дисперсия портфеля ({variance:.6g}) вне шумовой "
+            "границы: матрица корреляций не полуопределена, корень из неё "
+            "неизвлекаем — нулём это закрывать нельзя"
+        )
+    return variance**0.5
 
 
 def naive_dollar_volatility(positions: list, returns_by_market: dict) -> float:
     """Если бы риски просто складывались без учёта корреляции — точка сравнения
-    для diversification_score."""
+    для diversification_score. Окно то же, что у портфельной волатильности:
+    сравнивать число, посчитанное по 40 наблюдениям, с числом по 5 наблюдениям
+    бессмысленно, и score на такой паре врал бы сильнее, чем сама волатильность."""
     _require_series(positions, returns_by_market)
+    aligned = _aligned_tails(
+        returns_by_market, sorted({p.market_id for p in positions})
+    )
     return sum(
-        abs(p.signed_notional_usd) * volatility(returns_by_market[p.market_id])
-        for p in positions
+        abs(p.signed_notional_usd) * volatility(aligned[p.market_id]) for p in positions
     )
 
 
@@ -171,8 +241,24 @@ def suggest_hedge(
 
     Кандидат, который риска не убавил, отсеивается: «лучший из худших» — это не
     предложение хеджа, а предложение открыть вторую позицию, которая двигает
-    портфель в ту же сторону."""
+    портфель в ту же сторону.
+
+    Окно общее для цели и всех кандидатов, и берётся оно не из самой короткой
+    строки вообще, а из самой короткой ПРИГОДНОЙ: ряд длиннее одного значения —
+    то, при котором волатильность ещё определима. Кандидат с одним наблюдением
+    не обрывает запрос, он не участвует в переборе (именно так вёл себя и прежний
+    код: volatility ряда из одного значения даёт 0, и такой кандидат отсекался
+    до первой корреляции)."""
     _require_series([target], returns_by_market)
+    if len(returns_by_market[target.market_id]) < 2:
+        return None
+    usable = [
+        candidate_id
+        for candidate_id, _ in candidates
+        if candidate_id != target.market_id
+        and len(returns_by_market.get(candidate_id, [])) >= 2
+    ]
+    returns_by_market = _aligned_tails(returns_by_market, [target.market_id, *usable])
     target_vol = volatility(returns_by_market[target.market_id])
     if target_vol == 0:
         return None

@@ -253,6 +253,7 @@ PW_PORT=5178 npx playwright test
   - `agent.py` — решения, память, подписки
   - `portfolio.py` — кросс-ассетный риск и хедж
   - `funding.py` — сравнение площадок и расчёты carry
+  - `ops.py` — `/audit`: чтение аудита оператором, под токеном куратора
 - Хранилище одно — PostgreSQL: `database.py` (async-движок), `pg_models.py` (схема), `alembic/` (миграции) и репозитории `db.py`, `predict_db.py`, `agent_db.py`, `audit_log.py`, `subscription.py`
 - Ядро логики — в корневых модулях, и тестируется отдельно: `mirror_engine.py`, `leader_position_tracker.py`, `predict_amm.py`, `predict_resolution.py`, `portfolio_risk.py`, `funding_arb.py`, `quant.py`, `agent_decision.py`, `agent_memory.py`, `risk_limits.py`, `rate_limiter.py`, `cache.py`
 - Конфигурация читается один раз — `backend/config.py`, и каждая его собственная переменная валидируется там: недопустимое сочетание (живые ордера на mainnet без второго переключателя, не-PostgreSQL URL) останавливает процесс на старте. Несколько переменных живут вне него, потому что относятся к одному процессу: тройка ключей подписи в `signing_service.py`, `WAKE_MASTER_KEY` и `WAKE_KEYSTORE_PATH` в `encrypted_key_store.py`, `WAKE_TEST_DATABASE_URL` в тестах, `WAKE_ORDER_*` в `place_order_example.py`. Все они перечислены в `backend/.env.example` с указанием, кто именно их читает.
@@ -354,7 +355,7 @@ docker compose up predict-resolver
 - Вход кошельком доказывает владение адресом подписью EIP-191 к одноразовому challenge; адрес восстанавливается из подписи, а индекс аккаунта Lighter берётся из серверной записи, а не из запроса.
 - `WAKE_DRY_RUN` по умолчанию `true`, а выключить его на mainnet можно только вторым переключателем `WAKE_MAINNET_LIVE=true` — без него процесс не стартует. Размеры ордеров всегда округляются вниз.
 - Каждый путь, который дотягивается до Lighter, — сервис подписи, листенер копи-трейдинга и раннер агента — проверяет `WAKE_DRY_RUN` в собственном процессе, прежде чем трогать SDK. Пока он включён, `/place-order` возвращает тот ордер, который отправил бы, и на биржу ничего не уходит; `/health` обоих сервисов показывает, в каком они режиме.
-- Операторские эндпоинты требуют заголовок `X-Curator-Token` и сравнивают его через `hmac.compare_digest` по байтам; если токен на сервере не задан, они отвечают 500, а не создают и не резолвят рынки анонимно.
+- Операторские эндпоинты требуют заголовок `X-Curator-Token` и сравнивают его через `hmac.compare_digest` по байтам; если токен на сервере не задан, они отвечают 503 `CURATOR_NOT_CONFIGURED`, а не создают и не резолвят рынки анонимно.
 - `X-Forwarded-For` принимается только от адресов из `WAKE_TRUSTED_PROXY_IPS` и только правый элемент цепочки — иначе клиент выбирал бы сам, какой IP записать в аудит и в какой bucket rate limit.
 - Весь SQL идёт через SQLAlchemy Core/ORM с связанными параметрами; строк SQL в бэкенде не собирают.
 - Ключи шифруются at rest (`encrypted_key_store.py`) — это шифрование, а не HSM.

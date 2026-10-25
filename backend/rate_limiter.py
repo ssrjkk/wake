@@ -21,6 +21,7 @@ Token bucket, не fixed-window: fixed-window позволяет burst в 2x л�
 """
 
 import logging
+import math
 import time
 
 import redis.asyncio as redis
@@ -48,15 +49,50 @@ class RedisRateLimiter:
         )
 
     async def _read(self, key: str) -> tuple[float, float]:
-        """(tokens, last_refill) с уже применённым восполнением; bucket инициализируется capacity."""
+        """(tokens, last_refill) с уже применённым восполнением; bucket инициализируется capacity.
+
+        Битое содержимое ведра чинится здесь же, а не отдаётся наверх как «Redis
+        лёг». Значение может прилететь не от нас: этот же инстанс Redis делят с
+        другими процессами (общий db в доке и в docker-compose), ключи живут в
+        открытом всем `ratelimit:*`, и поле, из которого `float()` не делает число
+        — это испорченные ДАННЫЕ, а не отказ ТРАНСПОРТА. Прежний широкий `except
+        Exception` в allow() сваливал и то и другое в одну строку «Redis недоступен,
+        пропускаю без лимита»: ведро с `tokens="abc"` молча оставалось
+        неограниченным до самого TTL, потому что исключение случалось ДО записи, и
+        в логе был ровно один диагноз — неверный.
+        """
+        redis_key = f"ratelimit:{key}"
         tokens_str, last_str = await self.redis.hmget(
-            f"ratelimit:{key}", "tokens", "last_refill"
+            redis_key, "tokens", "last_refill"
         )
         now = time.time()
         if tokens_str is None or last_str is None:
             return self.capacity, now
-        elapsed = max(0.0, now - float(last_str))
-        return min(self.capacity, float(tokens_str) + elapsed * self.refill_rate), now
+        try:
+            tokens = float(tokens_str)
+            last_refill = float(last_str)
+        except (TypeError, ValueError) as e:
+            await self._reset(redis_key, e)
+            return self.capacity, now
+        if not math.isfinite(tokens) or not math.isfinite(last_refill) or tokens < 0:
+            # NaN и inf парсятся float'ом без ошибки, а min(capacity, nan) в Python
+            # отдаёт capacity: ведро выглядело полным на каждом запросе.
+            await self._reset(
+                redis_key, f"tokens={tokens_str!r} last_refill={last_str!r}"
+            )
+            return self.capacity, now
+        elapsed = max(0.0, now - last_refill)
+        return min(self.capacity, tokens + elapsed * self.refill_rate), now
+
+    async def _reset(self, redis_key: str, reason: object) -> None:
+        """Сброшенное ведро — это событие уровня «разберись», а не «Redis лёг»:
+        диагностику обязан описывать текст в логе, а не тип исключения."""
+        await self.redis.delete(redis_key)
+        logger.warning(
+            "rate limiter: битые данные в %s (%s), ведро сброшено",
+            redis_key,
+            reason,
+        )
 
     async def _write(self, key: str, tokens: float, last_refill: float) -> None:
         pipe = self.redis.pipeline()
@@ -73,24 +109,32 @@ class RedisRateLimiter:
 
         При недоступном Redis пропускаем (fail-open): отказ лимитера не должен
         останавливать терминал, у которого в этот момент открыты позиции.
-        Мёртвый Redis при этом видно по /ready, так что состояние не прячется."""
+        Мёртвый Redis при этом видно по /ready, так что состояние не прячется.
+
+        Ловится ровно RedisError, а не всё подряд: собственный баг в этом модуле
+        не имеет права превращаться в «лимитов нет» с одной строчкой в логе.
+        Остальное идёт наружу и становится честной 500 в едином формате."""
         try:
             tokens, now = await self._read(key)
             if tokens < cost:
                 return False
             await self._write(key, tokens - cost, now)
             return True
-        except Exception:
+        except redis.RedisError:
             logger.warning(
                 "rate limiter: Redis недоступен, пропускаю без лимита", exc_info=True
             )
             return True
 
     async def retry_after(self, key: str, cost: float = 1.0) -> float:
-        """Секунд до момента, когда cost токенов станет доступно."""
+        """Секунд до момента, когда cost токенов станет доступно.
+
+        Мёртвый Redis — 0.0: у клиента уже в руках 429, и вешать ответ из-за второй
+        попытки заглянуть в ведро нельзя. Другой тип ошибки здесь делать
+        нечего: _read своё покрытие битых данных уже имеет."""
         try:
             tokens, _ = await self._read(key)
-        except Exception:
+        except redis.RedisError:
             return 0.0
         if tokens >= cost:
             return 0.0

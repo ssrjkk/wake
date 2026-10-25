@@ -5,8 +5,9 @@
 [!] Единственное, что делает этот скрипт, — выставляет настоящий ордер. Поэтому его
 дефолтная сеть — testnet, хотя весь остальной бэкенд по умолчанию на mainnet
 (config.py): данные надо брать с основной сети, а тут само действие. Mainnet
-включают (WAKE_LIGHTER_NETWORK=mainnet), когда путь ордера проверен на тестнете и
-размер готов потерять живые деньги.
+включают двумя переменными сразу — WAKE_LIGHTER_NETWORK=mainnet и
+WAKE_MAINNET_LIVE=true, — когда путь ордера проверен на тестнете и размер готов
+потерять живые деньги. Одна network не подтверждение, а настройка данных.
 
 Это НЕ часть браузерного приложения (src/). В реальном продукте этот код живёт на
 сервере и становится ядром копи-движка: вместо ручного вызова main() — триггер по
@@ -30,7 +31,7 @@ Ethereum-кошелька — через app.lighter.xyz, после подкл�
 import asyncio
 import math
 import os
-import time
+import uuid
 
 import lighter
 
@@ -39,19 +40,70 @@ from config import LIGHTER_HOSTS
 
 # Одна сеть на весь скрипт: книга, цена и отправка должны смотреть в неё же,
 # иначе размер считается по decimal'ам одной сети, а ордер уходит в другую.
+# Значение по умолчанию — testnet, вопреки дефолту config.py: тут само действие, а
+# не данные. Неизвестная сеть сюда не доходит — config.py проверяет
+# WAKE_LIGHTER_NETWORK на импорте lighter_rest, то есть строкой раньше, и ровно
+# тем же списком.
 NETWORK = os.environ.get("WAKE_LIGHTER_NETWORK", "testnet")
-if NETWORK not in LIGHTER_HOSTS:
-    raise SystemExit(
-        f"WAKE_LIGHTER_NETWORK={NETWORK!r}: доступно {', '.join(sorted(LIGHTER_HOSTS))}"
-    )
 BASE_URL = f"https://{LIGHTER_HOSTS[NETWORK]}"
 
-SYMBOL = os.environ.get("WAKE_ORDER_SYMBOL", "ETH")
-SIZE_USD = float(os.environ.get("WAKE_ORDER_SIZE_USD", "100"))
-SIDE = os.environ.get("WAKE_ORDER_SIDE", "buy")  # buy | sell
+# Второй выключатель для живой сети — тот же, что у продукта (config.py).
+# Единственное, что делает этот скрипт, — выставляет настоящий ордер, и раньше
+# достаточно было WAKE_LIGHTER_NETWORK=mainnet: это значение стоит в .env.prod и
+# является дефолтом всего бэкенда, а dry_run скрипт не читал вовсе. Ордер уходил
+# живыми деньгами с одного неверного слова в окружении.
+if NETWORK == "mainnet" and os.environ.get("WAKE_MAINNET_LIVE", "").lower() not in (
+    "1",
+    "true",
+    "yes",
+):
+    raise SystemExit(
+        "WAKE_LIGHTER_NETWORK=mainnet требует WAKE_MAINNET_LIVE=true: этот скрипт "
+        "не симулирует, он отправляет ордер настоящими деньгами. Путь ордера "
+        "проверяют на WAKE_LIGHTER_NETWORK=testnet, потом подтверждают отдельно."
+    )
 
-ACCOUNT_INDEX = int(os.environ.get("LIGHTER_ACCOUNT_INDEX", "0"))
-API_KEY_INDEX = int(os.environ.get("LIGHTER_API_KEY_INDEX", "0"))
+
+def _env_number(name: str, default: str) -> float:
+    """Число из окружения с отказом вместо трейсбека.
+
+    Голый float(os.environ.get(...)) на опечатке бросал ValueError из модуля, и
+    оператор получал стек вызовов вместо строки «WAKE_ORDER_SIZE_USD=abc — нужно
+    число». NaN и inf парсятся без ошибки: NaN проходил дальше в math.floor и
+    падал уже там, а inf превращал размер заявки в бесконечность."""
+    raw = os.environ.get(name, default)
+    try:
+        value = float(raw)
+    except ValueError as e:
+        raise SystemExit(f"{name}={raw!r}: нужно число") from e
+    if not math.isfinite(value):
+        raise SystemExit(f"{name}={raw!r}: нужно конечное число")
+    return value
+
+
+def _env_index(name: str, default: str) -> int:
+    """Индекс аккаунта или API-ключа: целое, неотрицательное, то же объяснение."""
+    value = _env_number(name, default)
+    if not value.is_integer() or value < 0:
+        raise SystemExit(f"{name}={value}: нужно целое число не меньше нуля")
+    return int(value)
+
+
+SYMBOL = os.environ.get("WAKE_ORDER_SYMBOL", "ETH").strip()
+SIZE_USD = _env_number("WAKE_ORDER_SIZE_USD", "100")
+if SIZE_USD <= 0:
+    raise SystemExit(f"WAKE_ORDER_SIZE_USD={SIZE_USD}: размер должен быть больше нуля")
+
+# Сторона проверяется списком, а не сравнением SIDE == "sell". Прежний код
+# превращал ЛЮБУЮ строку, не равную "sell", в buy: "SELL", "sell " и "sll"
+# означали не отказ, а противоположную позицию — шорт становился лонгом на том
+# же размере.
+SIDE = os.environ.get("WAKE_ORDER_SIDE", "buy").strip().lower()
+if SIDE not in ("buy", "sell"):
+    raise SystemExit(f"WAKE_ORDER_SIDE={SIDE!r}: ожидается buy или sell")
+
+ACCOUNT_INDEX = _env_index("LIGHTER_ACCOUNT_INDEX", "0")
+API_KEY_INDEX = _env_index("LIGHTER_API_KEY_INDEX", "0")
 API_KEY_PRIVATE_KEY = os.environ.get("LIGHTER_API_KEY_PRIVATE_KEY", "")
 
 
@@ -101,8 +153,10 @@ async def main():
     try:
         tx, tx_hash, err = await client.create_order(
             market_index=market_index,
-            # Свой уникальный index — по нему ордер отменяют, если он ещё жив.
-            client_order_index=int(time.time()),
+            # Уникальный index замысла: по нему ордер ищут в Lighter и отменяют, а
+            # signing_service по нему же проверяет идемпотентность — второй запрос
+            # с тем же index возвращает первый tx_hash, не отправляя ордер.
+            client_order_index=int(uuid.uuid4().int % 2**31),
             base_amount=int(base_amount * 10**size_decimals),
             # Для IOC-маркета это предельно приемлемая цена. Здесь она равна
             # последней mark-цене, без запаса на проскальзывание: на резком рынке

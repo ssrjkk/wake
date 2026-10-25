@@ -1139,43 +1139,6 @@ class TestFundingLiveRoutes(HttpCase):
         self.assertIsNone(body["markets"][0]["hourly_rate"])
         self.assertIsNone(body["markets"][0]["annualized"])
 
-    async def test_portfolio_risk(self):
-        r = await self.client.post(
-            "/portfolio/risk",
-            json={
-                "positions": [
-                    {"market_id": 1, "symbol": "BTC", "signed_notional_usd": 1000},
-                    {"market_id": 2, "symbol": "ETH", "signed_notional_usd": -500},
-                ],
-                "returns_by_market": {
-                    "1": [0.01, -0.02, 0.015],
-                    "2": [0.005, -0.01, 0.02],
-                },
-            },
-        )
-        self.assertEqual(r.status_code, 200)
-        body = r.json()
-        self.assertLessEqual(
-            body["portfolio_dollar_volatility"], body["naive_dollar_volatility"]
-        )
-
-        r = await self.client.post(
-            "/portfolio/hedge",
-            json={
-                "target": {
-                    "market_id": 1,
-                    "symbol": "BTC",
-                    "signed_notional_usd": 1000,
-                },
-                "candidates": [[2, "ETH"]],
-                "returns_by_market": {
-                    "1": [0.01, -0.02, 0.015],
-                    "2": [0.005, -0.01, 0.02],
-                },
-            },
-        )
-        self.assertEqual(r.status_code, 200)
-
 
 class TestMarketsOverview(HttpCase):
     """Главный экран сайта и /markets в боте обязаны показывать ОДНИ числа,
@@ -1458,6 +1421,64 @@ class TestPortfolioAndAgent(HttpCase):
         self.assertEqual(r.json()["tier"], "pro")
         self.assertTrue(r.json()["has_ai_agent"])
 
+    async def test_portfolio_risk(self):
+        r = await self.client.post(
+            "/portfolio/risk",
+            json={
+                "positions": [
+                    {"market_id": 1, "symbol": "BTC", "signed_notional_usd": 1000},
+                    {"market_id": 2, "symbol": "ETH", "signed_notional_usd": -500},
+                ],
+                "returns_by_market": {
+                    "1": [0.01, -0.02, 0.015],
+                    "2": [0.005, -0.01, 0.02],
+                },
+            },
+        )
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertLessEqual(
+            body["portfolio_dollar_volatility"], body["naive_dollar_volatility"]
+        )
+
+        r = await self.client.post(
+            "/portfolio/hedge",
+            json={
+                "target": {
+                    "market_id": 1,
+                    "symbol": "BTC",
+                    "signed_notional_usd": 1000,
+                },
+                "candidates": [[2, "ETH"]],
+                "returns_by_market": {
+                    "1": [0.01, -0.02, 0.015],
+                    "2": [0.005, -0.01, 0.02],
+                },
+            },
+        )
+        self.assertEqual(r.status_code, 200)
+
+    async def test_portfolio_rejects_series_that_are_not_returns(self):
+        """Порядок величины на входе — не косметика. Конечное 1e300 проходит
+        проверку на NaN, а (x - mean) ** 2 на нём — OverflowError, то есть 500.
+        Хуже тот же ряд на 1e154: там умножение даёт inf, variance = inf - inf =
+        nan, а max(0.0, nan) в Python — 0.0, то есть панель отвечала «риск
+        портфеля 0$» вместо отказа."""
+        for series in ([1e300, -1e300], [1e154, 1e154, -1e154]):
+            r = await self.client.post(
+                "/portfolio/risk",
+                json={
+                    "positions": [
+                        {"market_id": 1, "symbol": "BTC", "signed_notional_usd": 1e12},
+                        {"market_id": 2, "symbol": "ETH", "signed_notional_usd": 1e12},
+                    ],
+                    "returns_by_market": {"1": series, "2": [0.01, -0.02, 0.03]},
+                },
+            )
+            with self.subTest(max_value=max(abs(x) for x in series)):
+                self.assertEqual(r.status_code, 422, r.text)
+                self.assertEqual(r.json()["error"]["code"], "VALIDATION_ERROR")
+
 
 class TestTelegramAuth(HttpCase):
     """Вход через Telegram — один из двух способов попасть в Wake (второй — кошелёк),
@@ -1662,6 +1683,199 @@ class TestHardening(HttpCase):
         err = r.json()["error"]
         self.assertTrue(err["code"])
         self.assertNotIn("detail", r.json())
+
+
+class TestFailureResponseContract(HttpCase):
+    """Отказ обязан долетать до клиента читаемым.
+
+    Прежний порядок middleware (лимитер, добавленный последним, оказывался самым
+    внешним) и обработчик Exception на ServerErrorMiddleware давали связный
+    результат: 429, 500 и 400 на ValueError выходили БЕЗ access-control-allow-origin
+    и без security-заголовков. Браузер такой ответ JavaScript не отдаёт вовсе, то
+    есть страница вместо «притормози, Retry-After: 6» показывала «бэкенд лежит» —
+    ровно в тот момент, когда бэкенд был жив и отвечал.
+
+    Здесь проверяются и заголовки на каждом виде отказа, и сам порядок слоёв:
+    порядок — это не стиль, а единственный механизм, который эти заголовки
+    обеспечивает, и переставить его может любой новый middleware ниже."""
+
+    def origin(self) -> str:
+        return app.settings.cors_origins_list[0]
+
+    async def test_middleware_stack_is_ordered_outermost_first(self):
+        from starlette.middleware.base import BaseHTTPMiddleware
+        from starlette.middleware.cors import CORSMiddleware
+
+        stack = app.app.user_middleware
+        self.assertIs(stack[0].cls, CORSMiddleware, "CORS обязан быть внешним")
+        names = [
+            m.kwargs["dispatch"].__name__
+            if issubclass(m.cls, BaseHTTPMiddleware)
+            else m.cls.__name__
+            for m in stack
+        ]
+        self.assertEqual(
+            names,
+            [
+                "CORSMiddleware",
+                "security_headers_middleware",
+                "error_envelope_middleware",
+                "rate_limit_middleware",
+            ],
+            "порядок слоёв = порядок, в котором ответ идёт наружу через них",
+        )
+
+    async def test_rate_limited_response_is_browser_readable(self):
+        class Denied:
+            async def allow(self, key, cost=1.0):
+                return False
+
+            async def retry_after(self, key, cost=1.0):
+                return 5.0
+
+            async def ping(self):
+                return True
+
+            async def close(self):
+                pass
+
+        original = app._rate_limiter
+        app._rate_limiter = Denied()
+        try:
+            r = await self.client.get(
+                "/predict/markets", headers={"Origin": self.origin()}
+            )
+        finally:
+            app._rate_limiter = original
+        self.assertEqual(r.status_code, 429)
+        self.assertEqual(r.json()["error"]["code"], "RATE_LIMITED")
+        self.assertEqual(r.headers.get("access-control-allow-origin"), self.origin())
+        self.assertEqual(r.headers.get("x-content-type-options"), "nosniff")
+        self.assertEqual(r.headers["retry-after"], "6")
+        self.assertIn(
+            "retry-after",
+            r.headers.get("access-control-expose-headers", "").lower(),
+            "без expose фронт видит 429, но не видит, сколько ждать",
+        )
+
+    async def test_internal_error_carries_headers_and_stays_in_one_format(self):
+        import lighter_rest
+
+        original = lighter_rest.get_market_overview
+        lighter_rest.get_market_overview = lambda *a, **k: (_ for _ in ()).throw(
+            ZeroDivisionError("деление на ноль в статистике рынка")
+        )
+        self.addCleanup(setattr, lighter_rest, "get_market_overview", original)
+        r = await self.client.get(
+            "/markets/overview", headers={"Origin": self.origin()}
+        )
+        self.assertEqual(r.status_code, 500)
+        self.assertEqual(r.json()["error"]["code"], "INTERNAL_ERROR")
+        self.assertEqual(r.headers.get("access-control-allow-origin"), self.origin())
+        self.assertEqual(r.headers.get("x-content-type-options"), "nosniff")
+        self.assertIn("default-src 'self'", r.headers["content-security-policy"])
+
+    async def test_value_error_response_is_signed_too(self):
+        """400 на ValueError — тоже ответ, собранный вне роута, и он обязан нести
+        те же заголовки: фронт читает error.code, а без ACAO он читает не его, а
+        «Failed to fetch»."""
+        import lighter_rest
+
+        original = lighter_rest.get_market_overview
+        lighter_rest.get_market_overview = lambda *a, **k: (_ for _ in ()).throw(
+            ValueError("неизвестная сеть Lighter")
+        )
+        self.addCleanup(setattr, lighter_rest, "get_market_overview", original)
+        r = await self.client.get(
+            "/markets/overview", headers={"Origin": self.origin()}
+        )
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.json()["error"]["code"], "VALIDATION_ERROR")
+        self.assertEqual(r.headers.get("access-control-allow-origin"), self.origin())
+        self.assertEqual(r.headers.get("x-content-type-options"), "nosniff")
+
+
+class TestAuditRead(HttpCase):
+    """Аудит до этого только писали: две функции-читателя в audit_log не
+    вызывались ни откуда, а docs/RAILWAY_DEPLOY.md советовал оператору «посмотрите
+    поле ip в строке sign_in» — совет, невыполнимый без доступа к базе.
+
+    GET /audit закрыт токеном куратора: это чужие входы и чужие сделки, и
+    выдавать их по токену сессии значит показать подписчику историю авторизаций
+    соседа."""
+
+    CURATOR = {"X-Curator-Token": testsupport.CURATOR_TOKEN}
+
+    async def test_requires_curator_token(self):
+        r = await self.client.get("/audit")
+        self.assertEqual(r.status_code, 403)
+        self.assertEqual(r.json()["error"]["code"], "CURATOR_TOKEN_INVALID")
+
+    async def test_returns_newest_first_with_decoded_details(self):
+        await al.log_action(
+            al.AuditEntry(
+                actor="tg_777001",
+                action="sign_in",
+                resource="follower:tg_777001",
+                details={"via": "widget", "ip": "203.0.113.9"},
+            )
+        )
+        await al.log_action(
+            al.AuditEntry(
+                actor="tg_777001",
+                action="key_access",
+                resource="follower:tg_777001",
+                success=False,
+                details={"reason": "wrong_key"},
+            )
+        )
+        r = await self.client.get(
+            "/audit", params={"actor": "tg_777001"}, headers=self.CURATOR
+        )
+        self.assertEqual(r.status_code, 200, r.text)
+        body = r.json()
+        self.assertEqual(body["ceiling"], al.MAX_ROWS)
+        self.assertEqual(
+            [row["action"] for row in body["rows"]], ["key_access", "sign_in"]
+        )
+        first = body["rows"][0]
+        self.assertEqual(
+            first["details"],
+            {"reason": "wrong_key"},
+            "details наружу — объект, а не строка внутри JSON",
+        )
+        self.assertEqual(first["success"], 0, "неудача различима без второго запроса")
+
+    async def test_failed_only_filter_and_window(self):
+        await al.log_action(
+            al.AuditEntry(actor="tg_777002", action="sign_in", success=False)
+        )
+        await al.log_action(al.AuditEntry(actor="tg_777002", action="sign_in"))
+        failed = (
+            await self.client.get(
+                "/audit",
+                params={"actor": "tg_777002", "failed_only": "true"},
+                headers=self.CURATOR,
+            )
+        ).json()["rows"]
+        self.assertEqual([row["success"] for row in failed], [0])
+        future = (
+            await self.client.get(
+                "/audit",
+                params={"actor": "tg_777002", "since": time.time() + 3600},
+                headers=self.CURATOR,
+            )
+        ).json()["rows"]
+        self.assertEqual(future, [], "окно в будущем не должно ничего находить")
+
+    async def test_limit_cannot_ask_for_the_whole_table(self):
+        """Потолок на роуте, а не только в слое: limit=10**6 означал бы
+        выгрузку всей таблицы в память процесса на один запрос."""
+        r = await self.client.get(
+            "/audit", params={"limit": 10**6}, headers=self.CURATOR
+        )
+        self.assertEqual(r.status_code, 422)
+        self.assertEqual(r.json()["error"]["code"], "VALIDATION_ERROR")
 
 
 class TestSessionGuards(HttpCase):
