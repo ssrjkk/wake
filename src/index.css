@@ -693,6 +693,14 @@
     margin: 0;
   }
 
+  /* Подпись под панелью лежит в третьей строке .terminal-main, а её фон — это
+     цвет зазора сетки (--line): без собственной поверхности текст едет по
+     серой полосе. */
+  .terminal-main > .fineprint {
+    background: var(--bg-1);
+    padding: 10px 14px;
+  }
+
   .fineprint code { color: var(--fg-2); }
 
   .chart-tip {
