@@ -29,7 +29,7 @@ cryptography
 # 3.4 — нижняя граница не косметика: DefaultBotProperties(parse_mode=HTML), которым
 # бот задаёт HTML для всех ответов, появился в 3.4; на более старом aiogram импорт
 # падает на старте процесса, а не молча теряет форматирование.
-aiogram>=3.4
+aiogram>=3.31.0
 
 # Error monitoring (optional — only used if SENTRY_DSN is set)
 sentry-sdk
