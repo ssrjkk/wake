@@ -10,6 +10,25 @@ from the commit history rather than from a release.
 ## [Unreleased]
 
 ### Added
+- `lighter_rest.get_account_equity(account_index)` — the account value Lighter
+  publishes for a `account_index`, cached 30 seconds. This is the number the copy
+  engine caps a mirror order by; before it, `available_margin_usd` was filled with
+  `allocation_usd`, which is what a follower typed, not what the venue holds.
+- `python -m encrypted_key_store store <follower_id> <api_key_index>`, with
+  `list` and `remove`. The secret is read from stdin — no echo on a terminal, one
+  line when piped — and never appears in argv, where shell history and the process
+  list would both keep it. `list` prints ids and key indexes and no secret, which
+  is enough to compare the file against the `followers` table.
+- `POST /follows` refuses a session whose wallet sign-in never produced a Lighter
+  account index (403 `LIGHTER_ACCOUNT_NOT_LINKED`), and `src/App.tsx` refuses the
+  same click earlier with the same words. A subscription that cannot be resolved
+  to an account cannot be mirrored, simulated or undone in money terms.
+- `test_api_smoke.py::TestShutdown` — the lifespan shutdown closes the rate
+  limiter, the wallet Redis client and the PostgreSQL pool, and a close that
+  raises is logged and does not cancel the two that follow.
+- Tests for the cases this phase fixed: a challenge record in Redis that does not
+  parse, a claim that pays 0, a subscription row built by the domain rather than
+  by the repository, and a follow attempted without a linked account.
 - `GET /audit` — the audit trail finally has a reader. `audit_log.py` had two
   read functions and nothing called either, so the deploy guide could only tell
   the operator to go look at the database; now the newest events come back over
@@ -287,7 +306,41 @@ from the commit history rather than from a release.
   trust boundaries, the local gates and the deployment contract.
 
 ### Changed
-### Changed
+- `/agent/step` is serialised per user by a PostgreSQL session advisory lock
+  (`pg_try_advisory_lock(hashtextextended('wake:agent-step:<user>', 0))`). A step
+  reads memory and the daily risk state, decides, then writes; two parallel steps
+  of one person read the same `risk_state_today` and both passed, spending the
+  daily volume cap and the open-position cap twice. Predict was already safe
+  because it locks one market row `FOR UPDATE` — here the limit is an aggregate
+  over many rows, so the lock sits on the user. A contended step answers 409
+  `AGENT_STEP_IN_PROGRESS`, and a lock whose connection died is dropped with the
+  socket by invalidating the connection instead of being inherited by the next
+  owner in the pool.
+- The copy engine caps a mirror order by the follower's own value at the venue
+  (`lighter_rest.get_account_equity`) in both `leader_listener.py` and
+  `POST /simulate-mirror`. A follower whose equity could not be read is skipped
+  and the skip is written to `mirror_log` as `skipped / margin_unverified`; the
+  previous behaviour was to assume the typed allocation was free margin, which is
+  the assumption the cap exists to make unnecessary.
+- `GET /follows/by-leader/{id}` returns aggregates only — for real this time. The
+  route documented itself that way and the changelog said so, while it still
+  shipped `allocation_usd`, `max_leverage` and `created_at` per follower; the
+  per-row list lives at `GET /leaders/{id}/followers` behind ownership, and the
+  operator tool reading the same rows is curator-gated. No client asked for the
+  array: `src/lib/lighter.ts` reads the two totals.
+- Subscription rows are built by the domain. `agent_db.ensure_trial` inserts what
+  `subscription.start_trial` returns, `agent_db.upgrade` what
+  `subscription.upgrade_to_pro` returns, and `upgrade_to_pro` no longer takes a
+  `now` or moves `started_at` — an upgrade is not the start of a subscription, and
+  resetting it made a three-year client indistinguishable from yesterday's. Until
+  now `start_trial` and `upgrade_to_pro` were called only by their own tests, so
+  the persisted path and the tested path could drift with both staying green.
+- `POST /predict/markets/{id}/resolve-price` forbids unknown fields in its body,
+  settles on `LIGHTER_NETWORK` (the network the process is configured for) and
+  cannot be pointed at another one by the caller; the audit row and the response
+  name the operator as `curator:<first 8 characters of the token>`, which is
+  enough to tell a manual resolution from the timer's without storing a secret in
+  a table.
 - The browser build is silent. `vite build` used to print, on every run, that
   `ox/_esm/tempo/internal/virtualMasterPool.js` imports `node:worker_threads`
   and that the module was externalized for browser compatibility. The tempo
@@ -436,6 +489,13 @@ from the commit history rather than from a release.
   blue for both buy and sell; it now reads the way the Terminal order ticket does.
 
 ### Removed
+- `database.init_db()` and `database.is_connected()`. Neither had a caller: the
+  schema comes from Alembic in production and from `testsupport.py`
+  (`Base.metadata.create_all`) in tests, `/ready` runs a real `SELECT 1`, and
+  `engine.pool.status() != "Pool is closed"` answered a question nobody asked
+  about a connection that was about to be used anyway.
+- `agent_db.set_tier()` — one caller, and it passed `Tier.PRO` in the only case
+  the product supports; `agent_db.upgrade()` says what it does.
 - `audit_log.failed_actions_since()` — unread by the application, unbounded, and
   unable to filter by actor or action. `recent_actions()` grew those two filters
   and the row ceiling, so one reader covers both cases.
@@ -454,6 +514,21 @@ from the commit history rather than from a release.
   claim of an "optional KMS mode", which the removed file could not deliver.
 
 ### Fixed
+- A challenge record in Redis that does not parse is a server failure and answers
+  503 `CHALLENGE_STORE_CORRUPTED` with an ERROR in the log. `wake:wallet:*` is
+  written only by `wallet_auth.py`, so a malformed value means the store was
+  touched from outside; `json.loads` used to raise out of `verify_signature`, the
+  `ValueError` converter made it a 400, and the audit recorded it as somebody
+  failing to sign in. Missing fields, a JSON list instead of an object and
+  `"exp": "через час"` are the same class.
+- The wallet Redis client is closed when the app stops. The rate limiter and the
+  PostgreSQL pool were, and the module-level client was not, so every deploy
+  leaked a connection until Redis dropped it.
+- `predict_claim` in the audit means what the word means: a claim that paid 0 — a
+  losing position, or a second claim on a paid one — ran, and is now written
+  `success=1`. It used to be `success=payout > 0`, which put ordinary traffic into
+  `GET /audit?failed_only` while the real refusal (a market that is not resolved
+  yet) was not written at all.
 - Refusals reached the browser unsigned. Starlette inserts each middleware at
   position 0, so the layer registered last is the outermost, and the rate
   limiter had been registered last: its 429 — and every 500 and `ValueError`

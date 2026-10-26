@@ -16,6 +16,7 @@ Challenge лежит в Redis (SET с TTL + GETDEL): одноразовость 
 """
 
 import json
+import logging
 import re
 import secrets
 import time
@@ -26,6 +27,8 @@ from eth_account.messages import encode_defunct
 from eth_utils import to_checksum_address
 
 from config import REDIS_URL
+
+logger = logging.getLogger("wake.wallet_auth")
 
 CHALLENGE_TTL_S = 300
 _NONCE_RE = re.compile(r"^nonce: ([0-9a-f]{32})$", re.MULTILINE)
@@ -59,6 +62,18 @@ def _store() -> redis.Redis:
             socket_connect_timeout=2.0,
         )
     return _client
+
+
+async def close() -> None:
+    """Закрыть клиент Redis (вызывается lifespan'ом на остановке).
+
+    Клиент живёт на уровне модуля, как и у лимитера: пул соединений переживает
+    один запрос и должен умирать вместе с процессом, иначе рестарт оставляет
+    висящие соединения на стороне сервера."""
+    global _client
+    client, _client = _client, None
+    if client is not None:
+        await client.aclose()
 
 
 def normalize_address(l1_address: str) -> str:
@@ -113,6 +128,45 @@ def _nonce_of(message: str) -> str:
     return match.group(1)
 
 
+def _broken_record(nonce: str, detail: str) -> WalletAuthError:
+    """Challenge в Redis читается, но не как запись Wake.
+
+    Ключ `wake:wallet:*` пишет только этот модуль, поэтому битая форма — это
+    повреждение хранилища (ручная правка ключа, чужой дамп на том же инстансе), а
+    не вина клиента. Отвечать таким 400 значит отправлять человека переделывать то,
+    что он не трогал, и спрятать инцидент: в аудите он выглядел бы как неудачная
+    попытка входа, а не как отказ сервиса."""
+    logger.error("challenge %s: запись Redis повреждена (%s)", nonce, detail)
+    return WalletAuthError(
+        "CHALLENGE_STORE_CORRUPTED",
+        "Сервер не смог разобрать сохранённый challenge — вход кошельком временно недоступен",
+        503,
+    )
+
+
+def _record_of(raw: str, nonce: str) -> dict:
+    """Разбор challenge-записи: объект JSON с теми же полями, что пишет new_challenge.
+
+    Каждый доступ к полю ниже идёт без guard'а, поэтому проверка типов стоит здесь
+    один раз: `json.loads` может дать число или список, а `record["exp"]` —
+    отсутствовать, и тогда вход падал ValueError'ом в конвертер ошибок."""
+    try:
+        record = json.loads(raw)
+    except (TypeError, ValueError):
+        raise _broken_record(nonce, "не JSON") from None
+    if not isinstance(record, dict):
+        raise _broken_record(nonce, f"не объект JSON ({type(record).__name__})")
+    missing = {"address", "message", "exp"} - record.keys()
+    if missing:
+        raise _broken_record(nonce, "нет полей: " + ", ".join(sorted(missing)))
+    for field, kind in (("address", str), ("message", str), ("exp", (int, float))):
+        if not isinstance(record[field], kind):
+            raise _broken_record(
+                nonce, f"{field} — {type(record[field]).__name__}, а не {kind}"
+            )
+    return record
+
+
 async def verify_signature(message: str, signature: str) -> str:
     """Проверяет подпись и возвращает подтверждённый адрес.
 
@@ -132,7 +186,7 @@ async def verify_signature(message: str, signature: str) -> str:
             "CHALLENGE_STALE", "Challenge не найден или уже использован — запроси новый"
         )
 
-    record = json.loads(raw)
+    record = _record_of(raw, nonce)
     if time.time() > record["exp"]:
         raise WalletAuthError("CHALLENGE_EXPIRED", "Challenge истёк — запроси новый")
     if message != record["message"]:
@@ -150,11 +204,11 @@ async def verify_signature(message: str, signature: str) -> str:
             "Подпись не восстанавливается в адрес — проверь, что подписал именно этот текст",
         ) from None
 
+    # EIP-55, а не то, что вернула библиотека: адрес — первичный ключ follower,
+    # и одна и та же строка в базе должна быть в одной форме у всех.
     if recovered.lower() != record["address"].lower():
         raise WalletAuthError(
             "ADDRESS_MISMATCH",
             "Подпись оставлена другим кошельком, а не тем адресом, что запрашивал вход",
         )
-    # EIP-55, а не то, что вернула библиотека: адрес — первичный ключ follower,
-    # и одна и та же строка в базе должна быть в одной форме у всех.
     return to_checksum_address(recovered)

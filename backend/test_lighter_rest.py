@@ -186,6 +186,64 @@ class TestResponseShape(unittest.TestCase):
                 self.assertEqual(fn(), [], f"{name}: null должен читаться как пусто")
 
 
+class TestAccountEquity(unittest.TestCase):
+    """Кап маржи в копи-трейде стоит на этом числе, поэтому форма ответа
+    важнее удобства: `total_asset_value` приходит строкой, а «аккаунта нет» и
+    «числа нет» должны читаться одинаково — None, а не 0 и не исключение."""
+
+    def setUp(self):
+        # ключ кэша — (account_index, network): у тестов он общий
+        cache.clear()
+
+    def _transport(self, payload):
+        return Transport(payload)
+
+    def test_string_amount_becomes_a_float(self):
+        cache.clear()
+        with patch(
+            "urllib.request.urlopen",
+            self._transport(
+                {"accounts": [{"index": 7, "total_asset_value": "1234.50"}]}
+            ),
+        ):
+            self.assertEqual(lighter_rest.get_account_equity(7, "mainnet"), 1234.5)
+
+    def test_absent_account_is_none(self):
+        for payload in ({"accounts": []}, {"accounts": None}, {}):
+            cache.clear()
+            with (
+                self.subTest(payload=payload),
+                patch("urllib.request.urlopen", self._transport(payload)),
+            ):
+                self.assertIsNone(lighter_rest.get_account_equity(7, "mainnet"))
+
+    def test_unusable_amount_is_none_not_zero(self):
+        """0 подписывается как «средств нет» — и это отказ по марже, а не нулевой
+        ордер: на нуле план сказал бы «не хватило минимального размера», тогда как
+        причина в обеспечении."""
+        for value in ("", "abc", None, "NaN", "Infinity", -5):
+            cache.clear()
+            with (
+                self.subTest(value=value),
+                patch(
+                    "urllib.request.urlopen",
+                    self._transport(
+                        {"accounts": [{"index": 7, "total_asset_value": value}]}
+                    ),
+                ),
+            ):
+                self.assertIsNone(lighter_rest.get_account_equity(7, "mainnet"))
+
+    def test_non_dict_answer_is_runtime_error(self):
+        """Транспорт источника говорит одним типом отказа: роуты ловят
+        RuntimeError и отвечают 502, а не 400 на чужом сбое."""
+        with (
+            patch("urllib.request.urlopen", raw_transport(b"[1, 2]")),
+            self.assertRaises(RuntimeError),
+        ):
+            lighter_rest.get_account_equity(7, "mainnet")
+
+
 class TestRetryPolicy(unittest.TestCase):
     def setUp(self):
         cache.clear()

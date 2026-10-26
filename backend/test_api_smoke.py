@@ -17,11 +17,13 @@ asyncpg привязано к циклу, в котором открыто, — 
         python -m unittest test_api_smoke -v
 """
 
+import asyncio
 import hashlib
 import math
 import hmac
 import json
 import logging
+import threading
 import time
 import unittest
 import uuid
@@ -42,6 +44,7 @@ import api.auth as api_auth  # noqa: E402
 import audit_log as al  # noqa: E402
 import db  # noqa: E402
 import session  # noqa: E402
+from subscription import Tier  # noqa: E402
 
 # httpx пишет в лог каждый запрос; на этом прогоне это 60 строк шума, а предмет
 # теста — ответы роутов, не сам факт запроса.
@@ -92,27 +95,40 @@ class HttpCase(testsupport.PgCase):
         return auth(r.json()["token"])
 
     def patch_wallet_infra(self) -> None:
-        """Подменяет ровно две вещи, которых в песочнице нет: Redis, где лежит
-        challenge (fakeredis), и ответ Lighter про индекс аккаунта. Всё остальное,
+        """Подменяет ровно три вещи, которых в песочнице нет: Redis, где лежит
+        challenge (fakeredis), ответ Lighter про индекс аккаунта по адресу и
+        средства этого аккаунта (кап маржи в плане копирования). Всё остальное,
         включая восстановление адреса из подписи, идёт кодом прода.
+
+        Маржа подменяется числом, а не отказом: у подписчика с подтверждённым
+        аккаунтом она есть, и кап по ней проверяется там, где он действительно
+        что-то ограничивает, — в test_margin_cap_uses_the_venue_number.
 
         Повторный вызов ничего не пересохраняет: иначе cleanup второго вызова
         вернул бы первый fake вместо настоящего клиента."""
         if hasattr(self, "_wallet_originals"):
             return
         import fakeredis.aioredis
+        import lighter_rest
         import wallet_auth
 
-        self._wallet_originals = (wallet_auth._client, api_auth.get_account_index_by_l1)
+        self._wallet_originals = (
+            wallet_auth._client,
+            api_auth.get_account_index_by_l1,
+            lighter_rest.get_account_equity,
+        )
         wallet_auth._client = fakeredis.aioredis.FakeRedis(decode_responses=True)
         api_auth.get_account_index_by_l1 = lambda address, network=None: (
             self.wallet_account_index
         )
+        lighter_rest.get_account_equity = lambda index, network=None: 250_000.0
 
         def restore():
-            wallet_auth._client, api_auth.get_account_index_by_l1 = (
-                self._wallet_originals
-            )
+            (
+                wallet_auth._client,
+                api_auth.get_account_index_by_l1,
+                lighter_rest.get_account_equity,
+            ) = self._wallet_originals
 
         self.addCleanup(restore)
 
@@ -273,9 +289,12 @@ class TestApiSmoke(HttpCase):
         self.assertEqual((await self.client.get("/predict/markets")).status_code, 200)
 
     async def test_copy_trading_cycle(self):
+        # подписчик — вход кошельком: строка follows без подтверждённого индекса
+        # Lighter не может ни зазеркалить, ни заплатить, поэтому POST /follows её
+        # не заводит (отказ проверен ниже, отдельным тестом)
         leader_headers, _ = await self.sign_in_wallet(999)
-        follower_headers = await self.sign_in_telegram(5001)
-        follower_id = "tg_5001"
+        follower_headers, follower_account = await self.sign_in_wallet(777)
+        follower_id = follower_account.address
 
         r = await self.client.post(
             "/leaders",
@@ -304,6 +323,24 @@ class TestApiSmoke(HttpCase):
         r = await self.client.get(f"/follows/by-leader/{leader_id}")
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.json()["follower_count"], 1)
+        self.assertEqual(r.json()["total_aum_usd"], 500)
+        self.assertNotIn(
+            "follows",
+            r.json(),
+            "публичная витрина — агрегат; список людей с их суммами читает только "
+            "владелец лидера (GET /leaders/{id}/followers)",
+        )
+        console = await self.client.get(
+            f"/leaders/{leader_id}/followers", headers=leader_headers
+        )
+        self.assertEqual(console.status_code, 200)
+        self.assertEqual([f["follower_id"] for f in console.json()], [follower_id])
+        stranger = await self.client.get(
+            f"/leaders/{leader_id}/followers", headers=follower_headers
+        )
+        self.assertEqual(
+            stranger.status_code, 403, "чужую консоль подписчиков не читают"
+        )
 
         r = await self.client.post(
             f"/follows/{follow_id}/pause", headers=follower_headers
@@ -340,11 +377,15 @@ class TestApiSmoke(HttpCase):
         self.assertEqual(r.json()["fee_bps"], 12)
 
         # подписка без подтверждённого кошелька лидера не публикуется: индекс
-        # аккаунта — не то, что клиент может прислать сам
+        # аккаунта — не то, что клиент может прислать сам. Сеанс берётся
+        # телеграмный: у него индекса и нет (подписчику он нужен так же — см.
+        # test_follow_requires_a_linked_lighter_account)
+        no_wallet_headers = await self.sign_in_telegram(5003)
         r = await self.client.post(
-            "/leaders", json={"handle": "@no-wallet"}, headers=follower_headers
+            "/leaders", json={"handle": "@no-wallet"}, headers=no_wallet_headers
         )
         self.assertEqual(r.status_code, 403)
+        self.assertEqual(r.json()["error"]["code"], "LIGHTER_ACCOUNT_NOT_LINKED")
 
         r = await self.client.post(
             "/simulate-mirror",
@@ -466,7 +507,9 @@ class TestApiSmoke(HttpCase):
         сделана через POST /simulate-mirror — тот же путь, которым идёт план по
         реальным подпискам из базы."""
         leader_headers, _ = await self.sign_in_wallet(900)
-        follower_headers = await self.sign_in_telegram(9001)
+        # подписчик с подтверждённым индексом: без кошелька /follows отказывает,
+        # а этот тест про рубильник публикации
+        follower_headers, _ = await self.sign_in_wallet(901)
 
         r = await self.client.post(
             "/leaders", json={"handle": "@switch", "fee_bps": 8}, headers=leader_headers
@@ -656,6 +699,34 @@ class TestApiSmoke(HttpCase):
             r.json()["resolve_at"],
             "цена запрошена на дедлайн рынка, а не на момент вызова",
         )
+        self.assertEqual(
+            seen[0][2],
+            app.settings.wake_lighter_network,
+            "сеть оракула берётся из процесса, а не из тела запроса",
+        )
+        row = (await self.client.get(f"/predict/markets/{past_id}")).json()
+        self.assertTrue(
+            str(row["resolved_by"]).startswith("curator:"),
+            "ручная резолюция обязана быть подписана оператором, а не «auto»: иначе "
+            "в базе ручной выбор цены неотличим от тика резолвера",
+        )
+        refused = await self.client.post(
+            f"/predict/markets/{past_id}/resolve-price",
+            json={"network": "testnet"},
+            headers=curator,
+        )
+        self.assertEqual(
+            refused.status_code,
+            422,
+            "сеть для чтения цены запросом не выбирается — рынок резолвится тем же "
+            "Lighter, на котором живут ордера",
+        )
+        self.assertEqual(
+            (await self.client.get(f"/predict/markets/{past_id}")).json()["outcome"],
+            row["outcome"],
+            "отказ в валидации тела ничего не меняет в уже вынесенном исходе",
+        )
+
         audit = await al.recent_actions(action="market_resolution", limit=10)
         self.assertIn(
             past_id,
@@ -903,6 +974,18 @@ class TestApiSmoke(HttpCase):
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.json()["payout_usd"], 0.0)
 
+        # payout 0 — это исполненный claim, а не сбой. Пока success считался как
+        # payout > 0, проигравшая ставка и повторный claim ложились в аудит
+        # success=0 и наполняли GET /audit?failed_only нормальными операциями:
+        # фильтр, по которому ищут настоящее, переставал читаться.
+        claims = [
+            row
+            for row in await al.recent_actions(action="predict_claim")
+            if row["resource"] == market_id
+        ]
+        self.assertEqual(len(claims), 3)
+        self.assertTrue(all(row["success"] == 1 for row in claims))
+
         # резолванный рынок виден только по фильтру, открытый список его больше не отдаёт
         r = await self.client.get("/predict/markets?status=resolved")
         self.assertIn(market_id, [m["id"] for m in r.json()])
@@ -961,6 +1044,70 @@ class TestApiSmoke(HttpCase):
         )
         self.assertEqual(r.status_code, 200)
         self.assertIsNotNone(r.json()["position"])
+
+    async def test_mirror_plan_is_capped_by_the_venue_margin(self):
+        """POST /simulate-mirror планирует по средствам, которые отвечает Lighter, а
+        не по тем, которые подписчик вписал в форму: кап `маржа × max_leverage` на
+        заявленной марже не ограничивает ничем, и оператор видел бы план, который
+        биржа отклонит. Тот же источник, что у живого листенера.
+
+        Арифметика: доля риска лидера 0.5×2000/50000 = 2%, desired = 2% от $20 000
+        = $400; средства аккаунта $100 при max_leverage 3 дают кап $300, то есть
+        0.15 ETH вместо 0.2."""
+        import lighter_rest
+
+        leader_headers, _ = await self.sign_in_wallet(810)
+        follower_headers, follower_account = await self.sign_in_wallet(811)
+        r = await self.client.post(
+            "/leaders", json={"handle": "@cap", "fee_bps": 8}, headers=leader_headers
+        )
+        leader_id = r.json()["leader_id"]
+        r = await self.client.post(
+            "/follows",
+            json={"leader_id": leader_id, "allocation_usd": 20_000},
+            headers=follower_headers,
+        )
+        self.assertEqual(r.status_code, 200, r.text)
+        curator = {"X-Curator-Token": testsupport.CURATOR_TOKEN}
+        simulate = {
+            "leader_id": leader_id,
+            "market_id": 1,
+            "side": "long",
+            "is_increase": True,
+            "size_delta": 0.5,
+            "price": 2000,
+            "price_decimals": 2,
+            "leader_equity_usd": 50_000,
+        }
+
+        original = lighter_rest.get_account_equity
+        lighter_rest.get_account_equity = lambda index, network=None: 100.0
+        try:
+            body = (
+                await self.client.post(
+                    "/simulate-mirror", json=simulate, headers=curator
+                )
+            ).json()
+        finally:
+            lighter_rest.get_account_equity = original
+        self.assertEqual(len(body["orders"]), 1)
+        self.assertAlmostEqual(body["orders"][0]["base_amount"], 0.15)
+
+        lighter_rest.get_account_equity = lambda index, network=None: None
+        try:
+            body = (
+                await self.client.post(
+                    "/simulate-mirror", json=simulate, headers=curator
+                )
+            ).json()
+        finally:
+            lighter_rest.get_account_equity = original
+        self.assertEqual(body["orders"], [], "без подтверждённых средств плана нет")
+        self.assertEqual(
+            [(s["follower_id"], s["reason"]) for s in body["skipped"]],
+            [(follower_account.address, "margin_unverified")],
+            "причина отказа от копирования обязана быть в ответе, а не в молчании",
+        )
 
 
 class TestFundingLiveRoutes(HttpCase):
@@ -1298,6 +1445,75 @@ class TestPortfolioAndAgent(HttpCase):
         self.addCleanup(setattr, lighter_rest, "get_order_books", original_books)
         self.addCleanup(setattr, lighter_rest, "get_candles", original_candles)
 
+    async def test_two_steps_at_once_cannot_double_spend(self):
+        """Два параллельных шага одного пользователя читают один и тот же
+        `risk_state_today` до того, как первый успеет что-нибудь записать, и
+        исполняют оба: лимит дневного объёма и лимит позиции по рынку обходятся
+        двойным тапом. Замок держится на время всего шага, поэтому второй запрос
+        получает 409, а не план; чужому пользователю он не мешает, и после
+        завершения шага замок снимается."""
+        import lighter_rest
+
+        user = await self.sign_in_telegram(7007)
+        other = await self.sign_in_telegram(7008)
+        for headers in (user, other):
+            self.assertEqual(
+                (
+                    await self.client.post("/subscription/trial", headers=headers)
+                ).status_code,
+                200,
+            )
+
+        real = lighter_rest.get_candles
+        release = threading.Event()
+        entered = threading.Event()
+
+        def slow(*args, **kwargs):
+            entered.set()
+            release.wait(5)
+            return real(*args, **kwargs)
+
+        lighter_rest.get_candles = slow
+        try:
+            first = asyncio.create_task(
+                self.client.post("/agent/step", json=self.STEP, headers=user)
+            )
+            for _ in range(250):  # ждать нельзя блокировать цикл: запрос живёт в нём
+                if entered.is_set():
+                    break
+                await asyncio.sleep(0.02)
+            else:
+                self.fail("шаг не дошёл до чтения свечей")
+            busy = await self.client.post("/agent/step", json=self.STEP, headers=user)
+            self.assertEqual(
+                busy.status_code,
+                409,
+                "параллельный шаг того же пользователя обязан ждать, а не решать",
+            )
+            self.assertEqual(busy.json()["error"]["code"], "AGENT_STEP_IN_PROGRESS")
+            elsewhere = await self.client.post(
+                "/agent/step", json=self.STEP, headers=other
+            )
+            self.assertEqual(
+                elsewhere.status_code,
+                200,
+                "замок лежит на пользователе, а не на всём роуте",
+            )
+            release.set()
+            self.assertEqual((await first).status_code, 200)
+        finally:
+            release.set()
+            lighter_rest.get_candles = real
+
+        after = await self.client.post("/agent/step", json=self.STEP, headers=user)
+        self.assertEqual(after.status_code, 200, "замок обязан быть снят после шага")
+        memory = await agent_db.load_memory("tg_7007")
+        self.assertEqual(
+            len(memory.trades),
+            1,
+            "двойной тап не удваивает сделку: дневной объём считается по строкам",
+        )
+
     async def test_subscription_trial_and_agent_step(self):
         user = await self.sign_in_telegram(7001)
         user_id = "tg_7001"
@@ -1321,6 +1537,14 @@ class TestPortfolioAndAgent(HttpCase):
         self.assertEqual(r.status_code, 200, r.text)
         self.assertEqual(r.json()["tier"], "free_trial")
         self.assertTrue(r.json()["has_ai_agent"])
+
+        # строку собрал домен, а не репозиторий: у выданного трайла trial_started_at
+        # — тот же момент, что и начало подписки (subscription.start_trial), и
+        # держится она за одну метку времени
+        trial = await agent_db.get_subscription(user_id)
+        self.assertEqual(trial.tier, Tier.FREE_TRIAL)
+        self.assertEqual(trial.started_at, trial.trial_started_at)
+        self.assertLess(abs(time.time() - trial.started_at), 60)
 
         # повторный трайл не двигает trial_started_at: иначе 14 дней продлеваются
         # кликом, и это же больше не обнуляется деплоем
@@ -1410,12 +1634,21 @@ class TestPortfolioAndAgent(HttpCase):
         self.assertEqual(r.status_code, 404)
 
         await self.client.post("/subscription/trial", headers=user)
+        trial = await agent_db.get_subscription("tg_7002")
         r = await self.client.post(
             "/subscription/tg_7002/upgrade",
             headers={"X-Curator-Token": testsupport.CURATOR_TOKEN},
         )
         self.assertEqual(r.status_code, 200, r.text)
         self.assertEqual(r.json()["tier"], "pro")
+
+        # апгрейд меняет тир и не трогает часы подписки: переставленный
+        # started_at сделал бы трёхлетнего клиента вчерашним, и в базе это
+        # заметнее, чем в домене, — там строка живёт между апгрейдами
+        after = await agent_db.get_subscription("tg_7002")
+        self.assertEqual(after.tier, Tier.PRO)
+        self.assertEqual(after.started_at, trial.started_at)
+        self.assertEqual(after.trial_started_at, trial.trial_started_at)
 
         r = await self.client.get("/subscription", headers=user)
         self.assertEqual(r.json()["tier"], "pro")
@@ -1925,7 +2158,39 @@ class TestSessionGuards(HttpCase):
             self.assertEqual((await self.client.get(path)).status_code, 200, path)
         r = await self.client.get(f"/follows/by-leader/{uuid.uuid4()}")
         self.assertEqual(r.status_code, 200)
-        self.assertEqual(r.json()["follower_count"], 0)
+        self.assertEqual(
+            r.json(),
+            {"follower_count": 0, "total_aum_usd": 0},
+            "агрегат — весь ответ: поштучных подписок публичный роут не отдаёт",
+        )
+
+    async def test_follow_requires_a_linked_lighter_account(self):
+        """Вход через Telegram подтверждает личность, но не даёт адреса Lighter, на
+        который копировать. Строка follows без индекса аккаунта не может ни
+        зазеркалиться, ни отчитаться: листенер доходит до `no_key`, а человек
+        видит «подписка записана» и считает, что копирует лидера."""
+        headers = await self.sign_in_telegram(5002)
+        leader_headers, _ = await self.sign_in_wallet(780)
+        r = await self.client.post(
+            "/leaders",
+            json={"handle": "@needlink", "fee_bps": 8},
+            headers=leader_headers,
+        )
+        leader_id = r.json()["leader_id"]
+        r = await self.client.post(
+            "/follows",
+            json={"leader_id": leader_id, "allocation_usd": 250},
+            headers=headers,
+        )
+        self.assertEqual(r.status_code, 403, r.text)
+        self.assertEqual(r.json()["error"]["code"], "LIGHTER_ACCOUNT_NOT_LINKED")
+        self.assertEqual(
+            (await self.client.get(f"/follows/by-leader/{leader_id}")).json()[
+                "follower_count"
+            ],
+            0,
+            "отклонённая подписка не должна была успеть попасть в AUM",
+        )
 
     async def test_mirror_log_shows_only_your_own(self):
         """Журнал зеркалирования — чужие размеры и чужие аллокации; раньше его
@@ -1936,8 +2201,8 @@ class TestSessionGuards(HttpCase):
         )
         leader_id = r.json()["leader_id"]
 
-        a = await self.sign_in_telegram(8001)
-        b = await self.sign_in_telegram(8002)
+        a, _ = await self.sign_in_wallet(801)
+        b, _ = await self.sign_in_wallet(802)
         follows = {}
         for name, headers in (("a", a), ("b", b)):
             r = await self.client.post(
@@ -2080,6 +2345,33 @@ class TestWalletSignIn(HttpCase):
         )
         self.assertEqual(r.status_code, 503)
         self.assertEqual(r.json()["error"]["code"], "CHALLENGE_STORE_UNAVAILABLE")
+
+    async def test_corrupted_record_is_503_not_clients_fault(self):
+        """Ключ `wake:wallet:*` пишет только сам Wake, поэтому битая запись в
+        Redis — повреждение хранилища, а не кривой запрос. Разбирать его нечем:
+        ответ 503 и ERROR в логе, а не 400, который валит инцидент на клиента и
+        в аудите выглядит как неудачная попытка входа."""
+        import wallet_auth
+        from eth_account import Account
+
+        account = Account.create()
+        message = await self.wallet_challenge(account.address)
+        key = f"{wallet_auth._KEY}{wallet_auth._nonce_of(message)}"
+        store = wallet_auth._store()
+
+        for raw in (
+            '"не JSON',
+            '["список вместо объекта"]',
+            "{}",
+            '{"address": 1, "message": "m", "exp": 2}',
+            '{"address": "0xabc", "exp": 2}',
+            '{"address": "0xabc", "message": "m", "exp": "через час"}',
+        ):
+            with self.subTest(record=raw[:28]):
+                await store.set(key, raw)
+                r = await self.verify(message, "0x1234")
+                self.assertEqual(r.status_code, 503, r.text)
+                self.assertEqual(r.json()["error"]["code"], "CHALLENGE_STORE_CORRUPTED")
 
     async def test_lighter_down_signs_in_without_account_index(self):
         """Индекс аккаунта — данные Lighter, а не условие входа: без него человек
@@ -2281,6 +2573,33 @@ class TestPredictMarketBoundary(HttpCase):
         )
         self.assertEqual(r.status_code, 422, "пустой вопрос — не рынок")
 
+    async def test_claim_on_open_market_is_audited_as_refusal(self):
+        """Claim по нерезолвленному рынку — отказ, и в аудит он обязан лечь
+        отказом. Успех помечается фактом исполнения, а не суммой выплаты,
+        поэтому success=0 остаётся единственным знаком «что-то не получилось» и
+        GET /audit?failed_only читается."""
+        trader = await self.sign_in_telegram(6102)
+        r = await self.create(
+            '{"question":"BTC above 100k?","lighter_market_id":1,"threshold":100000,'
+            '"comparator":">=","resolve_at":1999999999,"b":100}'
+        )
+        market_id = r.json()["market_id"]
+
+        r = await self.client.post(
+            f"/predict/markets/{market_id}/claim", headers=trader
+        )
+        self.assertEqual(r.status_code, 400, r.text)
+
+        rows = [
+            row
+            for row in await al.recent_actions(action="predict_claim")
+            if row["resource"] == market_id
+        ]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["success"], 0)
+        self.assertEqual(rows[0]["actor"], "tg_6102")
+        self.assertIn("не резолвлен", json.loads(rows[0]["details"])["error"])
+
     async def test_trade_shares_are_bounded(self):
         trader = await self.sign_in_telegram(6101)
         r = await self.client.post(
@@ -2365,13 +2684,65 @@ class TestPredictMarketBoundary(HttpCase):
         try:
             r = await self.client.post(
                 f"/predict/markets/{market_id}/resolve-price",
-                json={"network": "mainnet"},
+                json={},
                 headers={"X-Curator-Token": testsupport.CURATOR_TOKEN},
             )
         finally:
             lighter_rest.get_price_at = original
         self.assertEqual(r.status_code, 409, r.text[:200])
         self.assertIn("=>", r.json()["error"]["message"])
+
+
+class TestShutdown(HttpCase):
+    """Что закрывается на остановке процесса.
+
+    Клиент Redis — живое соединение, и незакрытое оно висит на сервере до своего
+    таймаута, а рестарт на Railway происходит на каждом деплое. Главное в этом
+    тесте не список закрытий, а порядок отказов: пока два вызова стояли в одну
+    линию без try, Redis с протухшим соединением бросал из lifespan и утаскивал за
+    собой dispose пула PostgreSQL."""
+
+    async def test_every_client_closes_even_if_one_raises(self):
+        import database
+        import wallet_auth
+
+        closed = []
+
+        class Recorder:
+            """Двойник сразу в двух формах: у лимитера закрытие — метод close(),
+            у клиента Redis — aclose(), который дёргает wallet_auth.close()."""
+
+            def __init__(self, name, raises=False):
+                self.name, self.raises = name, raises
+
+            async def _run(self):
+                if self.raises:
+                    raise RuntimeError("соединение протухло")
+                closed.append(self.name)
+
+            async def close(self):
+                await self._run()
+
+            async def aclose(self):
+                await self._run()
+
+        async def record_db():
+            closed.append("database")
+
+        self.addCleanup(setattr, app, "_rate_limiter", app._rate_limiter)
+        self.addCleanup(setattr, wallet_auth, "_client", wallet_auth._client)
+        self.addCleanup(setattr, database, "close_db", database.close_db)
+        app._rate_limiter = Recorder("rate limiter", raises=True)
+        wallet_auth._client = Recorder("wallet_auth")
+        database.close_db = record_db
+
+        with self.assertLogs("wake.app", level="WARNING") as logs:
+            async with app.lifespan(app.app):
+                pass
+
+        # отказ первого закрытия не отменил двух последующих
+        self.assertEqual(closed, ["wallet_auth", "database"])
+        self.assertIn("rate limiter", "\n".join(logs.output), "отказ не проглочен")
 
 
 if __name__ == "__main__":

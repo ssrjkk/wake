@@ -53,22 +53,6 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
             raise
 
 
-async def init_db() -> None:
-    """Create all tables (dev/test only — production uses Alembic migrations)."""
-    from pg_models import Base
-
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-
-
 async def close_db() -> None:
     """Dispose engine connections (called on app shutdown)."""
     await engine.dispose()
-
-
-def is_connected() -> bool:
-    """True, если пул движка жив (быстрая проверка без похода в БД)."""
-    try:
-        return engine.pool.status() != "Pool is closed"  # type: ignore[attr-defined]
-    except Exception:
-        return False

@@ -20,7 +20,7 @@ import uuid
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from starlette.concurrency import run_in_threadpool
 
 import predict_db as pdb
@@ -103,7 +103,16 @@ class ResolveEventRequest(BaseModel):
 
 
 class ResolvePriceRequest(BaseModel):
-    network: str = LIGHTER_NETWORK
+    """Пустое тело, и extra="forbid" — не придирка к формату, а граница оракула.
+
+    Раньше здесь читался `network` из запроса, и сеть для чтения цены не была
+    привязана ни к рынку (колонки сети в predict_markets нет), ни к процессу:
+    куратор резолвил mainnet-рынок свечами testnet, выбрав оракул телом запроса.
+    Авто-резолвер (`predict_resolver.py`) сеть из запроса не берёт в принципе,
+    поэтому и ручной триггер обязан брать её из того же `LIGHTER_NETWORK`, из
+    которого живут ордера."""
+
+    model_config = ConfigDict(extra="forbid")
 
 
 def _with_prices(row: dict, stats: dict) -> dict:
@@ -315,7 +324,7 @@ async def resolve_event(
 
 @router.post("/predict/markets/{market_id}/resolve-price")
 async def resolve_price(
-    market_id: str, req: ResolvePriceRequest, _curator: None = Depends(require_curator)
+    market_id: str, _req: ResolvePriceRequest, _curator: None = Depends(require_curator)
 ):
     """Ручной триггер того же пути, что проходит predict_resolver.py по таймеру,
     для случая «резолвер ещё не поднят как процесс».
@@ -327,7 +336,13 @@ async def resolve_price(
     сегодняшнего дня, и куратор становился бы оракулом по своему выбору момента.
     Резолвер закрывает рынок в течение WAKE_PREDICT_RESOLVER_TICK после дедлайна,
     так что ручным триггером куратор догоняет пропущенные тики, а не пересоздаёт
-    исход."""
+    исход.
+
+    Сеть не выбирается запросом — та же, на которой живут ордера (LIGHTER_NETWORK
+    процесса): market-строка сеть не хранит, и право решить исход свечами другой
+    сети было бы правом назначить цену. Кто решил — идёт в resolved_by как
+    оператор, а не как «auto»: строка рынка переживает логи процесса, и вопрос
+    «это резолвер или человек?» должен иметь в ней ответ."""
     from lighter_rest import get_price_at
 
     now = _time.time()
@@ -350,7 +365,7 @@ async def resolve_price(
     # останавливает остальные запросы.
     try:
         observed = await run_in_threadpool(
-            get_price_at, m["lighter_market_id"], m["resolve_at"], req.network
+            get_price_at, m["lighter_market_id"], m["resolve_at"], LIGHTER_NETWORK
         )
     except RuntimeError as e:
         raise HTTPException(status_code=502, detail=str(e))
@@ -365,15 +380,14 @@ async def resolve_price(
             detail=f"рынок создан с неизвестным условием сравнения {m['comparator']!r}",
         )
     resolution = resolve_price_market(observed, m["threshold"], comparator)
+    actor = f"curator:{_curator_identity()}"
     try:
-        await pdb.resolve_market(
-            market_id, resolution.outcome, "auto:lighter_mark_price", None
-        )
+        await pdb.resolve_market(market_id, resolution.outcome, actor, None)
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e))
     await al.log_action(
         al.AuditEntry(
-            actor=f"curator:{_curator_identity()}",
+            actor=actor,
             action="market_resolution",
             resource=market_id,
             details={
@@ -382,7 +396,7 @@ async def resolve_price(
                 "threshold": resolution.threshold,
                 "comparator": resolution.comparator.value,
                 "resolve_at": m["resolve_at"],
-                "network": req.network,
+                "network": LIGHTER_NETWORK,
                 "trigger": "manual",
             },
             success=True,
@@ -392,7 +406,8 @@ async def resolve_price(
         "outcome": resolution.outcome,
         "observed_price": observed,
         "observed_at": m["resolve_at"],
-        "network": req.network,
+        "network": LIGHTER_NETWORK,
+        "resolved_by": actor,
         "resolve_at": m["resolve_at"],
     }
 
@@ -410,10 +425,26 @@ def _curator_identity() -> str:
 async def claim_predict(market_id: str, user_id: str = Depends(require_user)):
     """Выплата по резолвнутому рынку. Субъект берётся из токена: до этого claim
     принимал user_id в query, и достаточно было знать чужой id (он виден в
-    публичной статистике рынка), чтобы забрать чужой выигрыш."""
+    публичной статистике рынка), чтобы забрать чужой выигрыш.
+
+    payout == 0 — исполненный claim, а не отказ: так выглядит и проигравшая
+    ставка, и повторный claim уже выплаченной. Поэтому success — это факт, что
+    операция прошла, а не сумма: с success=payout>0 GET /audit?failed_only
+    забивался нормальными операциями, и фильтр, по которому ищут настоящее,
+    переставал читаться. Отказ здесь другой — рынок без резолюции, и он
+    пишется success=False с причиной."""
     try:
         payout = await pdb.claim_winnings(user_id, market_id)
     except ValueError as e:
+        await al.log_action(
+            al.AuditEntry(
+                actor=user_id,
+                action="predict_claim",
+                resource=market_id,
+                details={"error": str(e)},
+                success=False,
+            )
+        )
         raise HTTPException(status_code=400, detail=str(e))
     await al.log_action(
         al.AuditEntry(
@@ -421,7 +452,7 @@ async def claim_predict(market_id: str, user_id: str = Depends(require_user)):
             action="predict_claim",
             resource=market_id,
             details={"payout_usd": payout},
-            success=payout > 0,
+            success=True,
         )
     )
     return {"payout_usd": payout}

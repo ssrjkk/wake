@@ -1,7 +1,9 @@
 """
-ИИ-агент и подписка: /agent/*, /subscription/*. Логика уже протестирована
-отдельно (agent_memory 14, agent_decision 11, llm_agent fallback-путь,
-agent_runner dry-run путь, subscription 10). Этот слой — HTTP-обвязка.
+ИИ-агент и подписка: /agent/*, /subscription/*. Логика протестирована отдельно
+и по слоям: agent_memory (память и win_rate), agent_decision (правило),
+llm_agent (fallback-путь без ключа и на битом JSON), agent_runner (dry-run путь
+исполнения), subscription (тиры и трайл), test_api_smoke (этот слой целиком).
+Этот файл — HTTP-обвязка.
 
 Состояние, которое было словарями в процессе, переехало в PostgreSQL
 (agent_db.py): трайл, сбрасываемый рестартом, и дневной лимит объёма,
@@ -19,11 +21,14 @@ agent_runner dry-run путь, subscription 10). Этот слой — HTTP-об
 """
 
 import math
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from functools import partial
 from typing import Literal
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
+from sqlalchemy import text
 from starlette.concurrency import run_in_threadpool
 
 import agent_db
@@ -31,13 +36,62 @@ import lighter_rest
 from api.guards import deny, require_curator, require_user
 from agent_runner import run_agent_step
 from config import LIGHTER_NETWORK
-from subscription import Subscription, Tier
+from database import engine
+from subscription import Subscription
 
 router = APIRouter()
 
 # Разрешения /candles Lighter — тот же список, что у RESOLUTION_MS в
 # lighter_rest.py; кривое значение здесь означает 422, а не тихий 1m-ряд.
 Resolution = Literal["1m", "5m", "15m", "30m", "1h", "4h", "12h", "1d"]
+
+# Ключ advisory-лока шага. hashtextextended считается в самом PostgreSQL (см.
+# _step_lock), поэтому текст ключа — единственное, что нужно знать: две сессии,
+# попросившие один ключ, разойдутся по разные стороны замка.
+_LOCK_NS = "wake:agent-step:"
+
+
+@asynccontextmanager
+async def _step_lock(user_id: str) -> AsyncIterator[None]:
+    """По одному шагу агента на пользователя, через замок PostgreSQL.
+
+    Шаг — это «прочитать память → прочитать дневной риск → решить → записать».
+    Без взаимного исключения два параллельных запроса одного человека (две
+    вкладки, двойной тап, curl в цикле) читают ОДИН и тот же `risk_state_today`
+    и исполняют оба: лимит дневного объёма и лимит открытой позиции по рынку
+    обходятся так, как обходить их не должно. В Predict от того же защищён
+    FOR UPDATE по строке рынка; здесь объекта блокировки нет — риск считается
+    агрегатом по многим строкам, поэтому замок лежит на пользователе.
+
+    Замок сессионный, а не транзакционный: шаг переживает несколько сессий БД
+    (load/risk/flush берут соединения из пула по очереди), и держать одно
+    соединение занятым через сетевой запрос к Lighter нельзя. Долго держаться он
+    не может: шаг стоит на запросах к Lighter, у которых свой таймаут и повторы,
+    а соединение, с которого замок не удалось снять, инвалидируется — с сокетом
+    умирает и замок, иначе следующий владелец соединения в пуле унаследовал бы
+    чужую блокировку."""
+    key = f"{_LOCK_NS}{user_id}"
+    async with engine.connect() as conn:
+        taken = await conn.execute(
+            text("SELECT pg_try_advisory_lock(hashtextextended(:k, 0))"), {"k": key}
+        )
+        acquired = bool(taken.scalar())
+        await conn.commit()
+        if not acquired:
+            raise deny(
+                409,
+                "AGENT_STEP_IN_PROGRESS",
+                "Предыдущий шаг агента ещё считается — дождись ответа, прежде чем "
+                "запускать второй: лимиты проверяются по тому, что уже записано",
+            )
+        try:
+            yield
+        finally:
+            try:
+                await conn.execute(text("SELECT pg_advisory_unlock_all()"))
+                await conn.commit()
+            except Exception:
+                conn.invalidate()
 
 
 class AgentStepRequest(BaseModel):
@@ -137,32 +191,33 @@ async def _require_feature(user_id: str, feature: str) -> Subscription:
 @router.post("/agent/step")
 async def agent_step(req: AgentStepRequest, user_id: str = Depends(require_user)):
     await _require_feature(user_id, "ai_agent")
-    memory = await agent_db.load_memory(user_id)
-    risk_state = await agent_db.risk_state_today(user_id)
+    async with _step_lock(user_id):
+        memory = await agent_db.load_memory(user_id)
+        risk_state = await agent_db.risk_state_today(user_id)
 
-    # Данные для решения и для расчёта риска берутся здесь, а не из тела запроса.
-    # В threadpool, потому что _get у lighter_rest блокирующий urllib: в event
-    # loop он остановил бы весь процесс на время запроса к Lighter.
-    constraints = await run_in_threadpool(_market_constraints, req.market_id)
-    closes = await run_in_threadpool(
-        _candle_closes, req.market_id, req.resolution, req.candles
-    )
+        # Данные для решения и для расчёта риска берутся здесь, а не из тела запроса.
+        # В threadpool, потому что _get у lighter_rest блокирующий urllib: в event
+        # loop он остановил бы весь процесс на время запроса к Lighter.
+        constraints = await run_in_threadpool(_market_constraints, req.market_id)
+        closes = await run_in_threadpool(
+            _candle_closes, req.market_id, req.resolution, req.candles
+        )
 
-    step = partial(
-        run_agent_step,
-        memory,
-        req.market_id,
-        closes,
-        constraints["size_decimals"],
-        constraints["price_decimals"],
-        req.base_size_usd,
-        risk_state=risk_state,
-    )
-    decision, execution = await run_in_threadpool(step)
+        step = partial(
+            run_agent_step,
+            memory,
+            req.market_id,
+            closes,
+            constraints["size_decimals"],
+            constraints["price_decimals"],
+            req.base_size_usd,
+            risk_state=risk_state,
+        )
+        decision, execution = await run_in_threadpool(step)
 
-    # Пустой pending — шаг ничего не исполнил (hold, skip, block); записывать нечего.
-    if memory.pending:
-        await agent_db.flush_memory(memory, execution["status"])
+        # Пустой pending — шаг ничего не исполнил (hold, skip, block); записывать нечего.
+        if memory.pending:
+            await agent_db.flush_memory(memory, execution["status"])
 
     return {
         "action": decision.action,
@@ -195,9 +250,13 @@ async def agent_memory_view(user_id: str = Depends(require_user)):
 
 
 def _subscription_body(sub: Subscription | None) -> dict:
+    """Один и тот же набор ключей при подписке и без неё: фронт читает
+    `days_left_in_trial` без проверки на месте, и отсутствие ключа в одном из
+    двух ответов — это undefined в интерфейсе вместо «считать нечего»."""
     if sub is None:
         return {
             "tier": "none",
+            "days_left_in_trial": None,
             "has_ai_agent": False,
             "has_copy_trading": False,
             "has_predict_markets": False,
@@ -235,7 +294,7 @@ async def subscription_upgrade(user_id: str):
 
     404, а не «создали бы подписку на ходу»: апгрейд — про длинное использование,
     а трайл остаётся единственной точкой входа в подписку."""
-    sub = await agent_db.set_tier(user_id, Tier.PRO)
+    sub = await agent_db.upgrade(user_id)
     if sub is None:
         raise deny(
             404,

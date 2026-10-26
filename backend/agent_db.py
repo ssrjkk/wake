@@ -28,7 +28,7 @@ from agent_memory import AgentMemoryStore, TradeRecord
 from database import async_session_factory
 from pg_models import AgentTrade, Subscription as SubscriptionRow
 from risk_limits import UserRiskState
-from subscription import Subscription, Tier
+from subscription import Subscription, Tier, start_trial, upgrade_to_pro
 
 _TIER_BY_NAME = {t.value: t for t in Tier}
 
@@ -188,6 +188,15 @@ def _subscription(row: SubscriptionRow) -> Subscription:
     )
 
 
+def _moment(ts: float | None) -> datetime | None:
+    """Эпоха из subscription.py → timestamp с таймзоной для колонки.
+
+    Домен описывает подписку числами (тем же полем считает срок трайла), колонка
+    хранит datetime; приводит одно к другому этот помощник, а не каждая функция
+    записи по-своему."""
+    return None if ts is None else datetime.fromtimestamp(ts, UTC)
+
+
 async def get_subscription(user_id: str) -> Subscription | None:
     async with async_session_factory() as session:
         row = await session.scalar(
@@ -199,20 +208,24 @@ async def get_subscription(user_id: str) -> Subscription | None:
 async def ensure_trial(user_id: str) -> Subscription:
     """Выдать трайл, если подписки ещё нет; существующую — вернуть как есть.
 
+    Состав строки берётся из subscription.start_trial, а не пересобирается здесь:
+    два места, знающие «что такое выданный трайл», расходятся молча — тесты
+    subscription.py остаются зелёными, а в PostgreSQL лежит другое.
+
     ON CONFLICT DO NOTHING, а не DO UPDATE: повторный вызов /start-trial не
     должен двигать trial_started_at, иначе трайл становится возобновляемым по
     одному клику. Отдельно заметим: это защита от «продлить самому себе», а не
     от «завести второй кошелёк» — с некастодиальным входом новый адрес это
     новый пользователь, и честного способа отказать ему без оплаты нет."""
-    now = datetime.now(UTC)
+    sub = start_trial(user_id)
     async with async_session_factory() as session:
         await session.execute(
             insert(SubscriptionRow)
             .values(
                 user_id=user_id,
-                tier=Tier.FREE_TRIAL.value,
-                started_at=now,
-                trial_started_at=now,
+                tier=sub.tier.value,
+                started_at=_moment(sub.started_at),
+                trial_started_at=_moment(sub.trial_started_at),
             )
             .on_conflict_do_nothing(index_elements=["user_id"])
         )
@@ -223,19 +236,32 @@ async def ensure_trial(user_id: str) -> Subscription:
     return _subscription(row)
 
 
-async def set_tier(user_id: str, tier: Tier) -> Subscription | None:
-    """Сменить тир. rowcount == 0 — подписки нет, и апгрейд её не создаёт:
-    /upgrade только для той строки, что уже заведена трайлом."""
+async def upgrade(user_id: str) -> Subscription | None:
+    """Выдать Pro поверх существующей подписки; None — если подписки нет.
+
+    Раньше тир назывался литералом в UPDATE, а subscription.upgrade_to_pro не
+    вызывался ниоткуда, кроме своих тестов: два описания одного решения, каждое
+    проверено по отдельности и ни одно не обязательно базе. Теперь в строку
+    уходит то, что вернул домен, — включая started_at, который апгрейд не
+    переставляет (подписка не начинается заново от того, что человек доплатил).
+
+    Строка читается до записи, и это не гонка за свои деньги: создать подписку
+    умеет только ensure_trial через ON CONFLICT DO NOTHING, то есть между чтением
+    и записью строка может только появиться (тогда UPDATE её заденет), но не
+    исчезнуть."""
+    sub = await get_subscription(user_id)
+    if sub is None:
+        return None
+    pro = upgrade_to_pro(sub)
     async with async_session_factory() as session:
-        result = await session.execute(
+        await session.execute(
             update(SubscriptionRow)
             .where(SubscriptionRow.user_id == user_id)
-            .values(tier=tier.value)
+            .values(
+                tier=pro.tier.value,
+                started_at=_moment(pro.started_at),
+                trial_started_at=_moment(pro.trial_started_at),
+            )
         )
         await session.commit()
-        if result.rowcount == 0:
-            return None
-        row = await session.scalar(
-            select(SubscriptionRow).where(SubscriptionRow.user_id == user_id)
-        )
-    return _subscription(row)
+    return pro

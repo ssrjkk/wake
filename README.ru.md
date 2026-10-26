@@ -248,13 +248,14 @@ PW_PORT=5178 npx playwright test
 - `backend/api/` — HTTP-роутеры по продуктовых областям:
   - `auth.py` — вход через Login Widget, `initData` мини-аппа и кошелёк
   - `markets.py` — `/markets/overview`: ранжирование перпов по 24ч-обороту
-  - `copy_trading.py` — followers, leaders, follows, журнал зеркалирования
+  - `copy_trading.py` — followers, leaders, follows, журнал зеркалирования; подписке нужен индекс аккаунта Lighter, подтверждённый wallet-входом, а план зеркала капится по стоимости самого аккаунта на площадке, а не по аллокации, которую вписал подписчик
   - `predict.py` — рынки цен и событий, резолюция под токеном куратора
   - `agent.py` — решения, память, подписки
   - `portfolio.py` — кросс-ассетный риск и хедж
   - `funding.py` — сравнение площадок и расчёты carry
   - `ops.py` — `/audit`: чтение аудита оператором, под токеном куратора
 - Хранилище одно — PostgreSQL: `database.py` (async-движок), `pg_models.py` (схема), `alembic/` (миграции) и репозитории `db.py`, `predict_db.py`, `agent_db.py`, `audit_log.py`, `subscription.py`
+- `backend/encrypted_key_store.py` — ключи подписчиков как Fernet-блоб на диске. Вход в него один: операторский CLI (`python -m encrypted_key_store store <follower_id> <api_key_index>`, `list`, `remove`), читающий секрет из stdin. HTTP-роут, принимающий ключ, положил бы секрет подписчика в тела запросов и в логи прокси. `list` печатает id и индексы, но не ключи.
 - Ядро логики — в корневых модулях, и тестируется отдельно: `mirror_engine.py`, `leader_position_tracker.py`, `predict_amm.py`, `predict_resolution.py`, `portfolio_risk.py`, `funding_arb.py`, `quant.py`, `agent_decision.py`, `agent_memory.py`, `risk_limits.py`, `rate_limiter.py`, `cache.py`
 - Конфигурация читается один раз — `backend/config.py`, и каждая его собственная переменная валидируется там: недопустимое сочетание (живые ордера на mainnet без второго переключателя, не-PostgreSQL URL) останавливает процесс на старте. Несколько переменных живут вне него, потому что относятся к одному процессу: тройка ключей подписи в `signing_service.py`, `WAKE_MASTER_KEY` и `WAKE_KEYSTORE_PATH` в `encrypted_key_store.py`, `WAKE_TEST_DATABASE_URL` в тестах, `WAKE_ORDER_*` в `place_order_example.py`. Все они перечислены в `backend/.env.example` с указанием, кто именно их читает.
 

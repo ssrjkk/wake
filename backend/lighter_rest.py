@@ -142,6 +142,33 @@ def get_account_index_by_l1(
     return int(accounts[0]["index"]) if accounts else None
 
 
+@cached("account_equity", ttl=30)
+def get_account_equity(
+    account_index: int, network: str = LIGHTER_NETWORK
+) -> float | None:
+    """Средства аккаунта Lighter (`total_asset_value`) или None, если аккаунта нет.
+
+    Нужен кап по марже, а не по слову клиента: подписчик сам пишет, сколько он
+    аллоцирует (до $1e9 в валидаторе), и без числа от площадки копиплан
+    ограничивается тем, что человек про себя заявил. `total_asset_value` — верхняя
+    граница обеспеченной маржи, а не свободная маржа: публичный `/account` её не
+    отдаёт, и вычесть занятое без известного плеча по каждой позиции нельзя. Это
+    всё равно число Lighter, и именно оно решает, существует ли ордер вообще.
+
+    Числа в ответе Lighter — строки (замер mainnet 2026-10-02); кривая строка
+    означает «данных нет», а не 0: на нулевой марже план был бы «не зеркалим» без
+    какой-либо причины в журнале."""
+    data = _get(f"{_base(network)}/account?by=index&value={int(account_index)}")
+    accounts = data.get("accounts") or []
+    if not accounts:
+        return None
+    try:
+        value = float(accounts[0]["total_asset_value"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    return value if math.isfinite(value) and value > 0 else None
+
+
 def get_mark_price(market_id: int, network: str = LIGHTER_NETWORK) -> float:
     """Последняя цена закрытия по market_id — close последней 1-минутной свечи.
     Для резолюции price-рынков достаточно точно; для чего-то более

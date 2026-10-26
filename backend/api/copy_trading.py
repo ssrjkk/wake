@@ -16,6 +16,7 @@ follower_id приезжал в теле или query, и эндпоинт ве�
 под чужим аккаунтом и его статистикой.
 """
 
+import logging
 import math
 import uuid
 from typing import Literal
@@ -26,14 +27,20 @@ from sqlalchemy.exc import IntegrityError
 
 import audit_log as al
 import db
+from starlette.concurrency import run_in_threadpool
 from api.guards import deny, require_curator, require_user
+import lighter_rest
+from config import LIGHTER_NETWORK
 from mirror_engine import (
     FollowerConfig,
     LeaderEvent,
     MarketConstraints,
     Side,
+    SkippedFollower,
     compute_mirror_plan,
 )
+
+logger = logging.getLogger("wake.api.copy_trading")
 
 router = APIRouter()
 
@@ -171,25 +178,18 @@ async def own_leader(user_id: str = Depends(require_user)):
 
 
 @router.get("/follows/by-leader/{leader_id}")
-async def list_follows_for_leader(leader_id: str):
-    """Публичная витрина лидера: сколько людей и какой капитал.
+async def leader_stats_for_leader(leader_id: str):
+    """Публичная витрина лидера: сколько людей и какой капитал — агрегатом.
 
-    `follower_id` наружу не отдаётся. Тот же ответ у оператора
-    (POST /simulate-mirror) закрыт токеном куратора именно потому, что
-    аллокации и размеры — не публичные данные; оставлять их в открытом роуте
-    противоречием было бы — это список людей с суммами, которые они вложили."""
+    Поштучных строк здесь нет. Тот же список по подписчику отдаёт
+    GET /leaders/{id}/followers, и он закрыт владением лидером: «аллокации и
+    размеры — не публичные данные» — это не про id подписчика, а про сами суммы,
+    и список людей с суммами, которые они вложили в чужие сделки, остаётся
+    списком людей с суммами, даже если имя каждого заменено на строку таблицы."""
     rows = await db.follows_for_leader(leader_id)
     return {
         "follower_count": len(rows),
         "total_aum_usd": sum(r["allocation_usd"] for r in rows),
-        "follows": [
-            {
-                "allocation_usd": r["allocation_usd"],
-                "max_leverage": r["max_leverage"],
-                "created_at": r["created_at"],
-            }
-            for r in rows
-        ],
     }
 
 
@@ -317,6 +317,13 @@ async def list_own_follows(user_id: str = Depends(require_user)):
 async def create_follow(req: CreateFollow, user_id: str = Depends(require_user)):
     """Подписка на чужого лидера.
 
+    Подтверждённого индекса аккаунта Lighter здесь ждут не для формы: копия
+    сделки ставится на счёт подписчика, и без индекса листенер не знает, чей это
+    счёт, — строка follows заводится, а каждый ордер по ней кончается
+    `failed / no_key` в mirror_log. Подписчик при этом видит в интерфейсе
+    «подписка записана» и считает, что копирует. Тот же вход кошельком нужен и
+    для публикации лидера (POST /leaders), отказ называется тем же кодом.
+
     На себя — отказ. Без этой строки лидер подписывается на себя своей же
     аллокацией и total_aum_usd на его витрине растёт из воздуха: AUM — единственное,
     чем Discover ранжирует лидеров, и иначе «сколько под ним капитала» остаётся
@@ -324,7 +331,15 @@ async def create_follow(req: CreateFollow, user_id: str = Depends(require_user))
     row = await db.leader(req.leader_id)
     if row is None:
         raise deny(404, "LEADER_NOT_FOUND", "Лидер не найден")
-    if row["lighter_account_index"] == await _own_account_index(user_id):
+    account_index = await _own_account_index(user_id)
+    if account_index is None:
+        raise deny(
+            403,
+            "LIGHTER_ACCOUNT_NOT_LINKED",
+            "Копирование идёт на твой счёт Lighter — войди ещё и кошельком, чтобы "
+            "адрес подтвердился подписью",
+        )
+    if row["lighter_account_index"] == account_index:
         raise deny(
             400,
             "SELF_FOLLOW_NOT_ALLOWED",
@@ -395,23 +410,45 @@ async def simulate_mirror(req: SimulateMirrorRequest):
     Полезно, чтобы своими глазами увидеть MirrorPlan для конкретных подписчиков
     из базы, не поднимая leader_listener.py целиком.
 
-    Под токеном куратора: ответ перечисляет аллокации и зеркаленные размеры всех
+    Под токеном куратора: ответ перечисляет аллокации и зеркальные размеры всех
     подписчиков лидера, а это не публичные данные.
-    """
+
+    Маржа берётся из Lighter (`get_account_equity`) — как в живом листенере, а не
+    из поля follows: план, посчитанный от числа, которое подписчик вписал себе сам
+    (до $1e9 на валидаторе), оператор читал бы как настоящий, и он расходился бы
+    с тем, что копия исполняет. Подписчик без подтверждённых средств попадает в
+    `skipped` с причиной `margin_unverified`, а не исчезает из плана молча."""
     rows = await db.active_follows_for_leader(req.leader_id)
 
-    followers = [
-        FollowerConfig(
-            follower_id=r["follower_id"],
-            allocation_usd=r["allocation_usd"],
-            available_margin_usd=r[
-                "allocation_usd"
-            ],  # упрощение: реальная свободная маржа с Lighter API не подтянута здесь
-            max_leverage=r["max_leverage"],
-            current_mirrored_size=r["current_mirrored_size"],
+    followers: list[FollowerConfig] = []
+    skipped: list[SkippedFollower] = []
+    for r in rows:
+        equity = None
+        if r["follower_account_index"] is not None:
+            try:
+                equity = await run_in_threadpool(
+                    lighter_rest.get_account_equity,
+                    r["follower_account_index"],
+                    LIGHTER_NETWORK,
+                )
+            except RuntimeError as e:
+                # Lighter не ответил — догадываться о марже нельзя, но отказ
+                # обязан быть различим в ответе оператора.
+                logger.warning(
+                    "маржа подписчика %s не получена: %s", r["follower_id"], e
+                )
+        if equity is None:
+            skipped.append(SkippedFollower(r["follower_id"], "margin_unverified"))
+            continue
+        followers.append(
+            FollowerConfig(
+                follower_id=r["follower_id"],
+                allocation_usd=r["allocation_usd"],
+                available_margin_usd=equity,
+                max_leverage=r["max_leverage"],
+                current_mirrored_size=r["current_mirrored_size"],
+            )
         )
-        for r in rows
-    ]
 
     event = LeaderEvent(
         market_id=req.market_id,
@@ -431,5 +468,5 @@ async def simulate_mirror(req: SimulateMirrorRequest):
     plan = compute_mirror_plan(event, followers, constraints)
     return {
         "orders": [o.__dict__ | {"side": o.side.value} for o in plan.orders],
-        "skipped": [s.__dict__ for s in plan.skipped],
+        "skipped": [s.__dict__ for s in [*skipped, *plan.skipped]],
     }

@@ -94,10 +94,15 @@ async def lifespan(app: FastAPI):
     # aclose() это соединение трогает) бросал исключение из lifespan — и пул
     # PostgreSQL не закрывался вовсе: рестарт оставлял открытые соединения от
     # мёртвого процесса.
-    try:
-        await _rate_limiter.close()
-    finally:
-        await database.close_db()
+    for label, close in (
+        ("rate limiter", _rate_limiter.close),
+        ("wallet_auth", wallet_auth.close),
+    ):
+        try:
+            await close()
+        except Exception:
+            logger.warning("%s не закрылся при остановке", label, exc_info=True)
+    await database.close_db()
     logger.info("Database connections closed")
 
 

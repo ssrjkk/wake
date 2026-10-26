@@ -84,13 +84,17 @@ def start_trial(user_id: str, now: float | None = None) -> Subscription:
     )
 
 
-def upgrade_to_pro(sub: Subscription, now: float | None = None) -> Subscription:
+def upgrade_to_pro(sub: Subscription) -> Subscription:
     """Апгрейд — новый объект, не мутация на месте, чтобы вызывающий код не мог
-    случайно забыть сохранить изменение в базу."""
-    now = now if now is not None else time.time()
+    случайно забыть сохранить изменение в базу.
+
+    Параметра времени здесь нет, и это не забывчивость: апгрейд ничего не
+    отсчитывает, а started_at трогает зря. started_at — «когда человек стал
+    клиентом»; если переставлять его на каждом апгрейде, по подписке больше не
+    отличить трёхлетнего пользователя от вчерашнего."""
     return Subscription(
         user_id=sub.user_id,
         tier=Tier.PRO,
-        started_at=now,
+        started_at=sub.started_at,
         trial_started_at=sub.trial_started_at,
     )

@@ -107,6 +107,19 @@ railway variables set WAKE_DRY_RUN=false WAKE_MAINNET_LIVE=true
 
 On mainnet the process refuses to start without `WAKE_MAINNET_LIVE=true` and says what is missing. On testnet the second switch is not required — that is where the order path gets checked, with dry-run off.
 
+Copy trading additionally needs the follower's API key on this machine, because signing happens here and not in the follower's browser. The keystore is a file, and the only way into it is the CLI — there is no endpoint that accepts a key:
+
+```bash
+cd backend
+python -m encrypted_key_store store <follower_id> <api_key_index>   # key is read from stdin
+python -m encrypted_key_store list
+python -m encrypted_key_store remove <follower_id>
+```
+
+The secret is never an argument: argv ends up in shell history and in the process list. `WAKE_MASTER_KEY` must be the same one the engine already runs with, otherwise the file decrypts into nothing and every mirror becomes `keystore_unavailable` in `mirror_log`.
+
+Mirror rows also carry `skipped / margin_unverified`: that follower's account value could not be read from Lighter, so the engine refused to guess how much margin he has. It is a read failure on the venue side, not a subscription to delete — the same follow mirrors normally on the next leader event once the account is reachable again.
+
 ## 7. Troubleshooting
 
 | Symptom | Cause |
@@ -115,7 +128,9 @@ On mainnet the process refuses to start without `WAKE_MAINNET_LIVE=true` and say
 | `/ready` → `redis: fail` | `WAKE_REDIS_URL` missing or Redis not attached; the rate limiter then lets everything through (fail open) and wallet sign-in answers 503 |
 | Sign-in → 503 `SESSION_NOT_CONFIGURED` | `WAKE_SESSION_SECRET` is empty |
 | Sign-in → 503 `CHALLENGE_STORE_UNAVAILABLE` | Redis is unreachable, so a challenge cannot be stored — verifying a signature "on trust" is not an option |
-| `POST /leaders` → 403 `LIGHTER_ACCOUNT_NOT_LINKED` | the session came from Telegram; a leader is published by the Lighter account index a wallet sign-in confirmed |
+| Sign-in → 503 `CHALLENGE_STORE_CORRUPTED` | the challenge record in Redis does not parse; `wake:wallet:*` is written only by this service, so something touched the store from outside — logging in again cannot fix it |
+| `POST /leaders` or `POST /follows` → 403 `LIGHTER_ACCOUNT_NOT_LINKED` | the session came from Telegram; a leader is published and a subscription is created by the Lighter account index a wallet sign-in confirmed |
+| `/agent/step` → 409 `AGENT_STEP_IN_PROGRESS` | a previous step of the same user still holds the advisory lock; the daily limits are checked against what has already been written, so two steps at once would both pass |
 | Operator endpoint → 503 `CURATOR_NOT_CONFIGURED` | `WAKE_CURATOR_TOKEN` is not set on the server |
 | Frontend says "there is no backend at this address" | `VITE_BACKEND_URL` was built with a different address, or Pages answered an unknown path with `index.html` — see `src/lib/backend.ts` |
 | CORS error in the browser console | the frontend origin is missing from `WAKE_CORS_ORIGINS`; the browser blocks the response, the backend is not failing to send it |

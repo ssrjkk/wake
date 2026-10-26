@@ -26,6 +26,7 @@ from unittest.mock import patch
 
 from cryptography.fernet import Fernet
 
+import encrypted_key_store
 from encrypted_key_store import EncryptedKeyStore, generate_master_key
 import leader_listener
 
@@ -155,6 +156,62 @@ class TestListenerKeyStoreBoundary(unittest.TestCase):
             self.assertIsInstance(store, EncryptedKeyStore)
             store.set_key("f1", 0, "0xsecret")
             self.assertEqual(store.get_key("f1")["api_key_index"], 0)
+
+
+class TestOperatorCli(KeyStoreCase):
+    """Ключ подписчику негде взять себя: HTTP-эндпоинта для приватного ключа в
+    проекте нет нарочно, и без CLI SECURITY.md описывал бы хранилище, в которое
+    нечем положить содержимое, а копи-движок отвечал бы `no_key` каждому.
+
+    Проверяется то, ради чего CLI существует: секрет приходит из stdin, не из
+    argv, и наружу не печатается."""
+
+    def setUp(self):
+        super().setUp()
+        patcher = patch.dict(
+            os.environ, {"WAKE_KEYSTORE_PATH": self.path, "WAKE_MASTER_KEY": self.key}
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_store_reads_the_key_from_stdin_and_never_prints_it(self):
+        with patch(
+            "encrypted_key_store._read_secret", return_value="0xsecret-from-pipe"
+        ):
+            with patch("builtins.print") as printed:
+                self.assertEqual(encrypted_key_store._cli(["store", "f1", "3"]), 0)
+            self.assertNotIn(
+                "0xsecret-from-pipe",
+                "".join(str(call.args) for call in printed.call_args_list),
+                "оператор печатает подтверждение, а не то, что положил",
+            )
+        self.assertEqual(
+            EncryptedKeyStore().get_key("f1"),
+            {"api_key_index": 3, "private_key": "0xsecret-from-pipe"},
+        )
+
+    def test_empty_secret_stores_nothing(self):
+        with patch("encrypted_key_store._read_secret", return_value="   "):
+            self.assertEqual(encrypted_key_store._cli(["store", "f1", "0"]), 2)
+        self.assertFalse(
+            os.path.exists(self.path),
+            "пустой ввод не должен порождать хранилище",
+        )
+
+    def test_list_and_remove(self):
+        with patch("encrypted_key_store._read_secret", return_value="0xk"):
+            encrypted_key_store._cli(["store", "f1", "0"])
+        self.assertEqual(encrypted_key_store._cli(["list"]), 0)
+        self.assertEqual(encrypted_key_store._cli(["remove", "f1"]), 0)
+        self.assertEqual(
+            encrypted_key_store._cli(["remove", "f1"]),
+            1,
+            "второе удаление — «такого нет», а не тихий успех",
+        )
+
+    def test_negative_api_key_index_is_refused(self):
+        with self.assertRaises(SystemExit):
+            encrypted_key_store._cli(["store", "f1", "-1"])
 
 
 if __name__ == "__main__":

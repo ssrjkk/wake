@@ -55,7 +55,7 @@ class TestUpgrade(unittest.TestCase):
         after_expiry = 1000 + (TRIAL_DURATION_DAYS + 1) * 86400
         self.assertFalse(sub.has_feature("ai_agent", now=after_expiry))
 
-        pro = upgrade_to_pro(sub, now=after_expiry)
+        pro = upgrade_to_pro(sub)
         self.assertTrue(pro.has_feature("ai_agent", now=after_expiry))
         self.assertFalse(
             pro.is_trial_expired(now=after_expiry),
@@ -70,16 +70,26 @@ class TestUpgrade(unittest.TestCase):
 
     def test_upgrade_does_not_mutate_original(self):
         sub = start_trial("u1", now=1000)
-        pro = upgrade_to_pro(sub, now=2000)
+        pro = upgrade_to_pro(sub)
         self.assertEqual(
             sub.tier, Tier.FREE_TRIAL, "апгрейд не должен мутировать исходный объект"
         )
         self.assertEqual(pro.tier, Tier.PRO)
 
+    def test_upgrade_keeps_the_subscription_clock(self):
+        """started_at и trial_started_at апгрейд не трогает: подписка не
+        начинается заново от того, что человек доплатил. Обнулённый started_at
+        стёр бы разницу между трёхлетним клиентом и вчерашним — и по base, и по
+        этой функции."""
+        sub = start_trial("u1", now=1000)
+        pro = upgrade_to_pro(sub)
+        self.assertEqual(pro.started_at, 1000)
+        self.assertEqual(pro.trial_started_at, 1000)
+
     def test_pro_never_expires_like_trial_does(self):
         sub = start_trial("u1", now=0)
-        pro = upgrade_to_pro(sub, now=100)
-        far_future = 100 + 10_000 * 86400
+        pro = upgrade_to_pro(sub)
+        far_future = 10_000 * 86400
         self.assertTrue(pro.has_feature("ai_agent", now=far_future))
 
 

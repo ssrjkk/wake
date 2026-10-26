@@ -555,6 +555,15 @@ export default function App() {
       );
       return;
     }
+    // Сервер отказывает на этом же условии (POST /follows →
+    // LIGHTER_ACCOUNT_NOT_LINKED): без подтверждённого индекса нечего зеркалить,
+    // и строка follows осталась бы пустой записью с обещанием копирования.
+    if (session?.lighterAccountIndex == null) {
+      setToast(
+        "Нужен индекс аккаунта Lighter: подтверди вход кошельком в меню профиля",
+      );
+      return;
+    }
     try {
       const followId = await createFollow(
         copyModal.id,

@@ -248,13 +248,14 @@ PW_PORT=5178 npx playwright test
 - `backend/api/` — HTTP routers by product area:
   - `auth.py` — Telegram Login Widget, Mini App `initData` and wallet sign-in
   - `markets.py` — `/markets/overview`: perp ranking by 24h quote volume
-  - `copy_trading.py` — followers, leaders, follows, mirror log
+  - `copy_trading.py` — followers, leaders, follows, mirror log; a follow needs a Lighter account confirmed by wallet sign-in, and the mirror plan is capped by that account's own value at the venue rather than by the allocation the follower typed
   - `predict.py` — price and event markets, curator-gated resolution
   - `agent.py` — decisions, memory, subscriptions
   - `portfolio.py` — cross-asset risk and hedge
   - `funding.py` — venue comparison and carry calculations
   - `ops.py` — `/audit`: the operator read of the audit trail, curator token required
 - Storage is one PostgreSQL base: `database.py` (async engine), `pg_models.py` (schema), `alembic/` (migrations), and the repositories `db.py`, `predict_db.py`, `agent_db.py`, `audit_log.py`, `subscription.py`
+- `backend/encrypted_key_store.py` — follower API keys as a Fernet blob on disk. The only way in is the operator CLI (`python -m encrypted_key_store store <follower_id> <api_key_index>`, `list`, `remove`), which reads the secret from stdin: an HTTP route accepting a key would put a signing secret into request bodies and proxy logs. `list` prints ids and indexes, never a key.
 - Core logic lives in root modules and is tested on its own: `mirror_engine.py`, `leader_position_tracker.py`, `predict_amm.py`, `predict_resolution.py`, `portfolio_risk.py`, `funding_arb.py`, `quant.py`, `agent_decision.py`, `agent_memory.py`, `risk_limits.py`, `rate_limiter.py`, `cache.py`
 - Configuration is read once in `backend/config.py`, and every variable it owns is validated there — a bad combination (live orders on mainnet without the second switch, a non-Postgres URL) stops the process at startup. A handful of variables stay outside it because they belong to one process: the signing key triple in `signing_service.py`, `WAKE_MASTER_KEY` and `WAKE_KEYSTORE_PATH` in `encrypted_key_store.py`, `WAKE_TEST_DATABASE_URL` in the tests, `WAKE_ORDER_*` in `place_order_example.py`. They are listed in `backend/.env.example` too, with the process that reads each one.
 

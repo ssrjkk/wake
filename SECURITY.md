@@ -55,7 +55,11 @@ Three paths, one result (`backend/api/auth.py`):
   captured `(message, signature)` pair cannot be replayed for a second login.
   Addresses are normalised to EIP-55 because they are the primary key of the
   follower record. With no Redis, wallet sign-in answers 503 instead of accepting
-  the client's word.
+  the client's word. A challenge record that does not parse is the same class of
+  failure and answers the same way: `wake:wallet:*` is written only by this
+  module, so a malformed value means the store was touched from outside, and a
+  400 would blame the client for a server incident and hide it in the audit trail
+  as a failed login attempt.
 - **Telegram Login Widget**: `secret_key = SHA256(bot_token)`, then HMAC-SHA256
   over the sorted `key=value` lines, compared in constant time.
 - **Telegram Mini App**: `initData` verified through aiogram
@@ -149,6 +153,19 @@ size below `min_base_amount` is rejected rather than silently raised.
 running system: it defaults to testnet through its own `WAKE_LIGHTER_NETWORK`
 check and needs an explicit API key in the environment.
 
+The copy engine sizes a mirror order against the follower's own money at the
+venue, not against the number typed into the follow row. `allocation_usd` is what
+a follower said he is willing to risk; the cap that has to hold before an order is
+built is free margin, and the only honest reading of it is the account value
+Lighter publishes for that `account_index` (`lighter_rest.get_account_equity`,
+cached 30 s). When the venue cannot be read, the follower is skipped and the skip
+is written to `mirror_log` as `margin_unverified` — the alternative was to assume
+the allocation was available margin, which is exactly the assumption a cap exists
+to make. `POST /follows` refuses a follower whose wallet sign-in never produced a
+Lighter account index (403 `LIGHTER_ACCOUNT_NOT_LINKED`), because an unlinked
+subscriber is a row that cannot be verified, mirrored or unsubscribed from real
+money.
+
 `/place-order` has no authentication. A secret bundled into a public browser
 build is not a secret, so access control is placement: in the Compose stack its
 port is published on `127.0.0.1` only, and containers reach it on the internal
@@ -180,6 +197,15 @@ never hands the raw key to the process; that is infrastructure, not tidier
 Python, and it is not implemented here. `backend/.env`, `*.enc` and `*.db` are
 gitignored; the master key belongs in a real secret manager.
 
+Keys are provisioned through a CLI, not through an HTTP route:
+`python -m encrypted_key_store store <follower_id> <api_key_index>` reads the
+secret from stdin (terminal echo off on a tty, one line when piped) and
+`remove`/`list` work on the same file. A route that accepted an API key would put
+a follower's signing secret in request bodies — in proxied logs, in any
+`curl -v` transcript, and in front of every middleware that records payloads.
+`list` prints ids and indexes only and never a key, so the operator can compare
+the store against the `followers` table without opening it.
+
 ### Data layer
 
 PostgreSQL only — `backend/config.py` rejects any `WAKE_DATABASE_URL` that is not
@@ -193,6 +219,24 @@ first, 500 rows per response) is the operator's way to answer "who actually
 signed in". A write that fails — the database blinked, a detail would not
 serialise — is logged at ERROR and never turns into a 500 on the caller, because
 that caller has already moved money and would reasonably retry the request.
+
+`success` in those rows means "the operation ran", not "the caller liked the
+answer". A Predict claim that pays 0 — a losing position, or a second claim on an
+already-paid one — is a completed operation; the market that is not resolved yet
+is the refusal. Getting this backwards fills `GET /audit?failed_only` with normal
+traffic, and a filter an operator has learned to skim is worse than no filter.
+
+Two money paths take a PostgreSQL lock before they read the state they are about
+to spend. `record_trade` in Predict locks the market row `FOR UPDATE`; a step of
+the agent takes a session-scoped advisory lock on the user
+(`pg_try_advisory_lock(hashtextextended(...))`) because its limit check is an
+aggregate over many rows with no single row to hold. Without that second lock two
+parallel requests from one person — two tabs, a double tap, a `curl` in a loop —
+read the same `risk_state_today` and both pass, spending the daily volume cap and
+the per-market position cap twice. A contended step answers 409
+`AGENT_STEP_IN_PROGRESS`; a lock whose connection died is dropped with the socket
+by invalidating the connection rather than being inherited by the next owner in
+the pool.
 
 Markets in the Predict module settle on the same layer as the money paths, not on
 the interface. `record_trade()` refuses a market whose `resolve_at` has passed:
@@ -375,7 +419,10 @@ dry-run-инстанс), видимый эффект, предложение п�
   лежит в Redis (`SET ex=300`) и снимается одним `GETDEL`, поэтому перехваченная
   пара `(message, signature)` не даёт второй вход. Адрес нормализуется по EIP-55:
   он первичный ключ записи подписчика. Без Redis вход кошельком отвечает 503, а не
-  верит клиенту на слово.
+  верит клиенту на слово. Неразбирающаяся запись challenge — та же категория
+  отказа: ключ `wake:wallet:*` пишет только этот модуль, значит битое значение
+  кто-то положил извне, а 400 свалил бы серверный инцидент на клиента и спрятал бы
+  его в аудите под «неудачной попыткой входа».
 - **Telegram Login Widget**: `secret_key = SHA256(bot_token)`, затем HMAC-SHA256
   по отсортированным строкам `key=value`, сравнение по постоянному времени.
 - **Telegram Mini App**: `initData` проверяется через aiogram
@@ -450,6 +497,18 @@ Lighter, и из него нет ни одного пути к `/place-order`: �
 часть работающей системы: он по умолчанию на тестнете (собственная проверка
 `WAKE_LIGHTER_NETWORK`) и требует явно положенный в окружение API-ключ.
 
+Копи-движок считает размер зеркала по деньгам подписчика на площадке, а не по
+числу, вбитому в строку подписки. `allocation_usd` — сколько человек сам сказал,
+что готов рисковать; капиться до построения ордера надо по свободной марже, а
+честно её прочесть можно только из аккаунта Lighter для этого `account_index`
+(`lighter_rest.get_account_equity`, кэш 30 с). Когда площадка не отдала значение,
+подписчик пропускается, и пропуск пишется в `mirror_log` как `margin_unverified`:
+альтернатива — считать аллокацию доступной маржой на веру, то есть ровно то
+допущение, ради которого кап и существует. `POST /follows` отклоняет подписчика,
+у которого wallet-вход не дал индекса аккаунта Lighter (403
+`LIGHTER_ACCOUNT_NOT_LINKED`): строка без привязки — это запись, которую нельзя
+ни проверить, ни зеркалить, ни отменить.
+
 У `/place-order` нет аутентификации. Секрет, вшитый в публичную браузерную
 сборку, секретом не является, поэтому граница — это размещение: в Compose его порт
 публикуется только на `127.0.0.1`, контейнеры достают его по внутренней сети.
@@ -481,6 +540,14 @@ IAM-контура и не отдают сырой ключ процессу; э
 более аккуратный Python, и здесь её нет. `backend/.env`, `*.enc` и `*.db` в
 .gitignore; мастер-ключу место в нормальном секрет-менеджере.
 
+Ключи кладут в хранилище через CLI, а не через HTTP-роут:
+`python -m encrypted_key_store store <follower_id> <api_key_index>` читает секрет
+из stdin (без эха в терминале, одной строкой при пайпе), `remove` и `list` работают
+с тем же файлом. Роут, принимающий API-ключ, положил бы секрет подписчика в тела
+запросов — в логи прокси, в распечатку `curl -v` и под каждый middleware, который
+пишет полезную нагрузку. `list` печатает только id и индексы, без ключей: оператор
+может сверить хранилище с таблицей `followers`, не открывая его.
+
 ### Данные
 
 Только PostgreSQL: `backend/config.py` отклоняет `WAKE_DATABASE_URL`, который не
@@ -494,6 +561,23 @@ Core/ORM со связанными параметрами; строк SQL в б�
 деталь не сериализуется — уходит в лог уровнем ERROR и никогда не становится 500 у
 вызывающего кода: там уже изменены деньги, и повтор такого запроса означал бы вторую
 сделку вместо одной.
+
+`success` в этих строках значит «операция исполнилась», а не «ответ понравился».
+Клима Predict с выплатой 0 — проигравшая ставка или повторный claim по уже
+выплаченному — исполнившаяся операция; отказ здесь другой: рынок без резолюции.
+Если считать иначе, `GET /audit?failed_only` заполняется обычной работой, а
+фильтром, который оператор научился проматывать, пользоваться нельзя.
+
+Два денежных пути берут блокировку PostgreSQL до чтения состояния, которое
+собираются потратить. `record_trade` в Predict держит строку рынка `FOR UPDATE`;
+шаг агента берёт сессионный advisory-замок на пользователе
+(`pg_try_advisory_lock(hashtextextended(...))`), потому что его лимит — агрегат по
+многим строкам и держать тут нечего. Без второго замка два параллельных запроса
+одного человека (две вкладки, двойной тап, `curl` в цикле) читают один и тот же
+`risk_state_today` и проходят оба, расходуя дневной объём и лимит открытой позиции
+по рынку дважды. Спорный шаг отвечает 409 `AGENT_STEP_IN_PROGRESS`; замок, у
+которого умерло соединение, снимается вместе с сокетом — соединение инвалидируется,
+чтобы следующий владелец в пуле не унаследовал чужую блокировку.
 
 Рынки Predict сходятся тем же слоем, что и денежные пути, а не интерфейсом.
 `record_trade()` отказывает рынку, у которого `resolve_at` уже прошёл: исход

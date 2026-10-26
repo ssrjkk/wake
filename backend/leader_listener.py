@@ -51,6 +51,7 @@ import logging
 
 import db
 import audit_log as al
+from starlette.concurrency import run_in_threadpool
 from encrypted_key_store import EncryptedKeyStore
 from mirror_engine import (
     LeaderEvent,
@@ -61,7 +62,8 @@ from mirror_engine import (
     compute_mirror_plan,
 )
 from quant import scale_to_int
-from config import DRY_RUN, LIGHTER_BASE_URL, LIGHTER_WS_URL
+import lighter_rest
+from config import DRY_RUN, LIGHTER_BASE_URL, LIGHTER_NETWORK, LIGHTER_WS_URL
 
 logger = logging.getLogger("wake.leader_listener")
 
@@ -130,7 +132,7 @@ async def handle_leader_event(
     """raw_event — форма из leader_position_tracker.py, проверенная тестами против
     официальной схемы сообщений. constraints=None означает, что рынка нет в
     полученной книге: посчитать base_amount можно только с шагом и минимумом
-    конкретного рынка, поэтому такой событие не исполняется, а логируется как
+    конкретного рынка, поэтому такое событие не исполняется, а логируется как
     skip — молча угаданный размер зеркального ордера стоит реальных денег."""
     event = LeaderEvent(
         market_id=raw_event["market_id"],
@@ -144,18 +146,6 @@ async def handle_leader_event(
 
     rows = await db.active_follows_for_leader(leader_id)
     by_follower = {r["follower_id"]: r for r in rows}
-    followers = [
-        FollowerConfig(
-            follower_id=r["follower_id"],
-            allocation_usd=r["allocation_usd"],
-            available_margin_usd=r[
-                "allocation_usd"
-            ],  # см. app.py — то же упрощение, требует реальной margin-проверки
-            max_leverage=r["max_leverage"],
-            current_mirrored_size=r["current_mirrored_size"],
-        )
-        for r in rows
-    ]
 
     if constraints is None:
         reason = f"market_constraints_unavailable:{event.market_id}"
@@ -177,7 +167,65 @@ async def handle_leader_event(
             )
         return
 
+    # Маржа — число Lighter, а не заявка подписчика. Подписчик сам пишет
+    # allocation_usd (до $1e9 на валидаторе), а единственный кап в планировщике —
+    # `доступная маржа × max_leverage`: на заявленном числе он не ограничивает
+    # ничем реальным, и ордер на $50-аккаунт планировался бы на $1e9. Ответ
+    # `/account` даёт total_asset_value — верхнюю границу обеспеченной маржи
+    # (свободную маржу публичный ответ не отдаёт), и этого достаточно, чтобы кап
+    # считался по средствам, которые площадка подтверждает.
+    #
+    # Аккаунт, по которому числа нет (Lighter не ответил, аккаунта нет, средства
+    # нулевые), в план не попадает и уходит в mirror_log с причиной: молча
+    # просчитать его по прежней схеме значило бы спланировать ордер, который
+    # биржа отклонит, и подписчик увидит в журнале «ордер не прошёл» вместо
+    # «маржа не подтверждена».
+    #
+    # Проверка рынка стоит выше этого цикла нарочно: считывать маржу подписчиков
+    # ради события, которое всё равно не исполнится, — это запрос к Lighter на
+    # каждого подписчика впустую.
+    followers: list[FollowerConfig] = []
+    margin_unverified: list[dict] = []
+    for r in rows:
+        equity = None
+        if r["follower_account_index"] is not None:
+            try:
+                equity = await run_in_threadpool(
+                    lighter_rest.get_account_equity,
+                    r["follower_account_index"],
+                    LIGHTER_NETWORK,
+                )
+            except RuntimeError as e:
+                logger.warning(
+                    "маржа подписчика %s не получена: %s", r["follower_id"], e
+                )
+        if equity is None:
+            margin_unverified.append(r)
+            continue
+        followers.append(
+            FollowerConfig(
+                follower_id=r["follower_id"],
+                allocation_usd=r["allocation_usd"],
+                available_margin_usd=equity,
+                max_leverage=r["max_leverage"],
+                current_mirrored_size=r["current_mirrored_size"],
+            )
+        )
+
     plan = compute_mirror_plan(event, followers, constraints)
+
+    for r in margin_unverified:
+        logger.info("skip follower=%s reason=margin_unverified", r["follower_id"])
+        await db.log_mirror_result(
+            str(uuid.uuid4()),
+            r["follow_id"],
+            event.market_id,
+            event.side.value,
+            0,
+            event.is_increase is False,
+            "skipped",
+            "margin_unverified",
+        )
 
     for skipped in plan.skipped:
         logger.info("skip follower=%s reason=%s", skipped.follower_id, skipped.reason)

@@ -30,6 +30,18 @@ class ListenerDbCase(testsupport.PgCase):
         self.addCleanup(_patch_module(leader_listener, "DRY_RUN", True))
         self.leader_id = "leader-live"
         self.follow_ids = {}
+        # Маржа подписчика в живом пути читается с Lighter (get_account_equity);
+        # в песочнице вместо неё таблица по индексам, которую тесты меняют сами.
+        import lighter_rest
+
+        self.margin_by_index: dict[int, float | None] = {900: 100_000.0}
+        self.addCleanup(
+            _patch_module(
+                lighter_rest,
+                "get_account_equity",
+                lambda index, network=None: self.margin_by_index.get(index),
+            )
+        )
         await db.upsert_leader(
             self.leader_id,
             lighter_account_index=7,
@@ -321,6 +333,43 @@ class TestHandleLeaderEvent(ListenerDbCase):
             MarketConstraints(min_base_amount=0.001, size_decimals=3, price_decimals=2),
         )
         self.assertEqual(await self.mirror_log(follower_id), [])
+
+    async def test_margin_cap_uses_the_venue_number(self):
+        """Заявка подписчика — не обеспеченная маржа. Без числа от Lighter кап
+        `маржа × max_leverage` стоит на том, что человек вписал себе сам, и
+        план на $50-аккаунт выходился бы на $20 000: биржа такой ордер отклонит,
+        а подпись к нему уже стоит реальных денег и реального проскальзывания.
+
+        Арифметика ряда: доля риска лидера 0.5×2000/50000 = 2%, desired = 2% от
+        заявленной $1 000 000 = $20 000, кап от марки Lighter = 200×5 = $1 000,
+        base_amount = 1000/2000 = 0.5 (без капа было бы 10.0)."""
+        follower_id = await self.add_follower(1_000_000.0)
+        self.margin_by_index[900] = 200.0
+        await self.run_event(
+            raw_event(),
+            MarketConstraints(min_base_amount=0.001, size_decimals=3, price_decimals=2),
+        )
+
+        rows = await self.mirror_log(follower_id)
+        self.assertEqual([r["status"] for r in rows], ["dry_run"])
+        self.assertAlmostEqual(rows[0]["base_amount"], 0.5)
+
+    async def test_follower_without_verified_margin_is_skipped_by_name(self):
+        """Ни аккаунта, ни средств — подписчик не зеркалится, и в журнале это
+        называется отдельно от «не хватило на минимальный ордер»: у отказов разные
+        последствия для человека, и «no_key» тут было бы неправдой."""
+        follower_id = await self.add_follower(1000.0)
+        self.margin_by_index[900] = None
+        await self.run_event(
+            raw_event(),
+            MarketConstraints(min_base_amount=0.001, size_decimals=3, price_decimals=2),
+        )
+
+        rows = await self.mirror_log(follower_id)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["status"], "skipped")
+        self.assertEqual(rows[0]["reason"], "margin_unverified")
+        self.assertEqual(rows[0]["base_amount"], 0)
 
 
 if __name__ == "__main__":
