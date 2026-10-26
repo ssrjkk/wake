@@ -609,6 +609,12 @@ from the commit history rather than from a release.
   claim of an "optional KMS mode", which the removed file could not deliver.
 
 ### Fixed
+- The Terminal's price line overflowed a 320 px viewport in CI: the price and the
+  change chip are both `nowrap`, `.desk-quote` was a non-wrapping flex row, and
+  on Linux font metrics the chip `-3.08% / 24ч` reached right=334. It fit on the
+  author's machine, so the local run of the same gate was green — the row wraps
+  now, and the gate has a second case at 320 px with the type scale doubled
+  (WCAG 1.4.10 reflow), which is what actually caught the class of bug.
 - Wide tables clipped their own content on every screen. A grid/flex child
   defaults to `min-width: auto`, so a panel with a 9-column table grew past its
   column while the shell had `overflow-x: hidden` — the document never
