@@ -91,6 +91,42 @@ class TestMarkets(PredictCase):
         )
         self.assertEqual((m["threshold"], m["comparator"]), (120_000, ">="))
 
+    def test_pages_are_ordered_by_deadline_and_do_not_overlap(self):
+        """Страницы витрины (limit/offset) не пересекаются и не пропускают
+        рынки: порядок — по дедлайну, и потолок у ответа есть, потому что без
+        него список рос бы вместе с числом созданных рынков, а рисует его один
+        человек. limit=None — весь список: так читает резолвер, и ему пропускать
+        просроченный рынок нельзя."""
+        for i in range(3):
+            _run(
+                pdb.create_market(
+                    f"m-page-{i}",
+                    "event",
+                    f"Событие {i}?",
+                    resolve_at=self.now + (i + 2) * 86400,
+                    b=10,
+                )
+            )
+
+        page_one = _run(pdb.list_markets("open", limit=2))
+        page_two = _run(pdb.list_markets("open", limit=2, offset=2))
+        ids = [m["id"] for m in page_one + page_two]
+        self.assertEqual(len(ids), len(set(ids)), "вторая страница повторила первую")
+        self.assertEqual(len(page_one), 2)
+        self.assertEqual(
+            {m["id"] for m in page_one},
+            {"m-price", "m-event"},
+            "первые строки — самые близкие дедлайны",
+        )
+
+        every = _run(pdb.list_markets("open", limit=None))
+        self.assertEqual(len(every), 5)
+        self.assertEqual(
+            [m["id"] for m in every][:2],
+            [m["id"] for m in page_one],
+            "страница — префикс полного списка, а не другая выборка",
+        )
+
     def test_resolved_market_stays_visible_and_carries_outcome(self):
         self.resolve()
         rows = _run(pdb.list_markets("resolved"))

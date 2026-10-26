@@ -2573,6 +2573,37 @@ class TestPredictMarketBoundary(HttpCase):
         )
         self.assertEqual(r.status_code, 422, "пустой вопрос — не рынок")
 
+    async def test_list_is_served_by_pages(self):
+        """GET /predict/markets отдаёт страницу. Без потолка ответ рос бы
+        вместе с числом созданных рынков, а рисует его один человек: карточка
+        рынка — это ~20 узлов и две кнопки (замер e2e/render-budget.spec.ts:
+        60 рынков = 1 369 узлов). Потолок показан на границе — 422, а не
+        «отрежем молча»."""
+        for i in range(3):
+            r = await self.client.post(
+                "/predict/markets/event",
+                json={
+                    "question": f"Событие {i}?",
+                    "resolve_at": 1999999999 + i,
+                    "b": 100,
+                },
+                headers={"X-Curator-Token": testsupport.CURATOR_TOKEN},
+            )
+            self.assertEqual(r.status_code, 200, r.text)
+
+        first = (await self.client.get("/predict/markets?limit=2")).json()
+        self.assertEqual(len(first), 2)
+        second = (await self.client.get("/predict/markets?limit=2&offset=2")).json()
+        self.assertEqual(
+            {m["id"] for m in first} & {m["id"] for m in second},
+            set(),
+            "страницы не пересекаются",
+        )
+        self.assertEqual(len(first + second), 3)
+
+        r = await self.client.get("/predict/markets?limit=9999")
+        self.assertEqual(r.status_code, 422, "потолок страницы — часть контракта")
+
     async def test_claim_on_open_market_is_audited_as_refusal(self):
         """Claim по нерезолвленному рынку — отказ, и в аудит он обязан лечь
         отказом. Успех помечается фактом исполнения, а не суммой выплаты,
@@ -2691,6 +2722,132 @@ class TestPredictMarketBoundary(HttpCase):
             lighter_rest.get_price_at = original
         self.assertEqual(r.status_code, 409, r.text[:200])
         self.assertIn("=>", r.json()["error"]["message"])
+
+
+class TestLeaderHydration(HttpCase):
+    """GET /leaders/hydrated — карточка лидера собирается на сервере.
+
+    Фронт собирал её сам: по запросу статистики подписки и по запросу счёта
+    Lighter на каждую строку, то есть два round-trip'а на карточку (замер
+    e2e/render-budget.spec.ts: 40 лидеров = 80 запросов на один экран). Здесь
+    проверяются две вещи, без которых замена была бы честной только на словах:
+    агрегат считает те же фильтры, что и поштучный список, и счета читаются
+    ОДНИМ пакетным вызовом, а не циклом."""
+
+    async def publish(self, wallet_id: int, handle: str) -> tuple[dict, str]:
+        headers, _ = await self.sign_in_wallet(wallet_id)
+        r = await self.client.post(
+            "/leaders", json={"handle": handle, "fee_bps": 8}, headers=headers
+        )
+        self.assertEqual(r.status_code, 200, r.text)
+        return headers, r.json()["leader_id"]
+
+    async def follow(self, headers: dict, leader_id: str, allocation: float) -> str:
+        r = await self.client.post(
+            "/follows",
+            json={"leader_id": leader_id, "allocation_usd": allocation},
+            headers=headers,
+        )
+        self.assertEqual(r.status_code, 200, r.text)
+        return r.json()["follow_id"]
+
+    async def snapshot_stub(self):
+        """Подмена источника, а не ответа роута: ровно как в живом пути, где
+        lighter_rest читает аккаунты параллельно и кэширует их."""
+        import lighter_rest
+
+        calls: list[list[int]] = []
+
+        def snapshots(indices, network=None):
+            calls.append([int(i) for i in indices])
+            return {
+                int(i): {
+                    "equity_usd": 1000.0 + int(i),
+                    "realized_pnl_usd": 5.0,
+                    "positions": [
+                        {
+                            "market_id": 1,
+                            "symbol": "BTC",
+                            "size": 0.25,
+                            "avg_entry": 85_000.0,
+                            "value": 21_000.0,
+                            "unrealized_pnl": 12.0,
+                            "realized_pnl": 5.0,
+                            "liquidation_price": 60_000.0,
+                        }
+                    ],
+                }
+                for i in indices
+            }
+
+        original = lighter_rest.get_account_snapshots
+        lighter_rest.get_account_snapshots = snapshots
+        self.addCleanup(setattr, lighter_rest, "get_account_snapshots", original)
+        return calls
+
+    async def test_hydrated_carries_stats_and_account_in_one_request(self):
+        _, leader_id = await self.publish(901, "@hydr")
+        _, other_leader_id = await self.publish(902, "@second")
+
+        follower_headers, _ = await self.sign_in_wallet(903)
+        await self.follow(follower_headers, leader_id, 500)
+        paused_headers, _ = await self.sign_in_wallet(904)
+        paused_follow = await self.follow(paused_headers, leader_id, 300)
+        gone_headers, _ = await self.sign_in_wallet(905)
+        gone_follow = await self.follow(gone_headers, leader_id, 700)
+
+        r = await self.client.post(
+            f"/follows/{paused_follow}/pause", headers=paused_headers
+        )
+        self.assertEqual(r.status_code, 200, r.text)
+        r = await self.client.delete(f"/follows/{gone_follow}", headers=gone_headers)
+        self.assertEqual(r.status_code, 200, r.text)
+
+        calls = await self.snapshot_stub()
+        rows = (await self.client.get("/leaders/hydrated")).json()
+        by_id = {row["id"]: row for row in rows}
+
+        self.assertEqual(
+            by_id[leader_id]["follower_count"], 1, "пауза и отписка вне AUM"
+        )
+        self.assertAlmostEqual(by_id[leader_id]["total_aum_usd"], 500.0)
+        self.assertEqual(by_id[other_leader_id]["follower_count"], 0)
+        self.assertEqual(by_id[other_leader_id]["total_aum_usd"], 0.0)
+
+        # пакет, а не цикл: один вызов на весь список, по индексу на лидера
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(len(calls[0]), len(rows))
+        self.assertEqual(by_id[leader_id]["account"]["positions"][0]["symbol"], "BTC")
+        self.assertEqual(by_id[leader_id]["handle"], "@hydr")
+        self.assertEqual(by_id[leader_id]["fee_bps"], 8)
+
+    async def test_unreadable_account_stays_null_not_zero(self):
+        """Счёта нет или Lighter не ответил — account: null. Нули читались бы как
+        «лидер с пустым счётом», и по этой лжи в Discover ранжировали бы."""
+        _, leader_id = await self.publish(906, "@noacct")
+
+        import lighter_rest
+
+        original = lighter_rest.get_account_snapshots
+        lighter_rest.get_account_snapshots = lambda indices, network=None: {}
+        self.addCleanup(setattr, lighter_rest, "get_account_snapshots", original)
+
+        rows = (await self.client.get("/leaders/hydrated")).json()
+        row = next(r for r in rows if r["id"] == leader_id)
+        self.assertIsNone(row["account"])
+        self.assertEqual(row["follower_count"], 0)
+
+    async def test_inactive_leader_is_not_published(self):
+        headers, leader_id = await self.publish(907, "@switch")
+        r = await self.client.patch(
+            f"/leaders/{leader_id}/active",
+            json={"active": False},
+            headers=headers,
+        )
+        self.assertEqual(r.status_code, 200, r.text)
+        await self.snapshot_stub()
+        rows = (await self.client.get("/leaders/hydrated")).json()
+        self.assertNotIn(leader_id, [row["id"] for row in rows])
 
 
 class TestShutdown(HttpCase):

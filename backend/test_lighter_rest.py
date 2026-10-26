@@ -244,6 +244,150 @@ class TestAccountEquity(unittest.TestCase):
             lighter_rest.get_account_equity(7, "mainnet")
 
 
+class TestAccountSnapshot(unittest.TestCase):
+    """Снимок счёта кормит GET /leaders/hydrated: витрина лидеров читается одним
+    ответом вместо двух запросов на карточку. Форма строки — живая (замер
+    mainnet 2026-10-26, account 12: 19 позиций, все суммы строками)."""
+
+    def setUp(self):
+        cache.clear()
+
+    @staticmethod
+    def position(
+        market_id, symbol, position, *, value="0", unrealized="0", realized="0"
+    ):
+        """Одна строка account.positions — те же поля и те же строки, что у биржи."""
+        return {
+            "market_id": market_id,
+            "symbol": symbol,
+            "position": position,
+            "avg_entry_price": "85000.00",
+            "position_value": value,
+            "unrealized_pnl": unrealized,
+            "realized_pnl": realized,
+            "liquidation_price": "60000",
+            "allocated_margin": "1.5",
+            "margin_mode": "cross",
+            "sign": 1,
+        }
+
+    def _account(self, positions, value="9.089455"):
+        return {
+            "accounts": [
+                {
+                    "index": 12,
+                    "total_asset_value": value,
+                    "positions": positions,
+                }
+            ]
+        }
+
+    def test_strings_become_floats_and_zero_positions_are_dropped(self):
+        """«Открытые позиции» — это ненулевые строки: аккаунт хранит запись по
+        каждому рынку, которого когда-либо касался, и 19 строк у живого счёта —
+        не 19 позиций."""
+        payload = self._account(
+            [
+                self.position(1, "ETH", "0.0000", realized="50.000000"),
+                self.position(2, "BTC", "-0.2500", value="21000.5", unrealized="-12.5"),
+                self.position(3, "SOL", "12.0000", value="900.00", unrealized="3.5"),
+            ]
+        )
+        with patch("urllib.request.urlopen", Transport(payload)):
+            snapshot = lighter_rest.get_account_snapshot(12, "mainnet")
+        self.assertAlmostEqual(snapshot["equity_usd"], 9.089455)
+        self.assertEqual([p["market_id"] for p in snapshot["positions"]], [2, 3])
+        self.assertAlmostEqual(snapshot["positions"][0]["size"], -0.25)
+        self.assertAlmostEqual(snapshot["positions"][0]["value"], 21000.5)
+        self.assertAlmostEqual(snapshot["positions"][0]["unrealized_pnl"], -12.5)
+
+    def test_realized_pnl_includes_closed_positions(self):
+        """Прибыль закрывается, строка остаётся с position=0. Считать realized
+        только по открытым — значит занижать PnL лидера, по которому его и
+        выбирают в Discover."""
+        payload = self._account(
+            [
+                self.position(1, "ETH", "0.0000", realized="50.000000"),
+                self.position(
+                    2, "BTC", "0.2500", value="21000.5", realized="25.000000"
+                ),
+            ]
+        )
+        with patch("urllib.request.urlopen", Transport(payload)):
+            snapshot = lighter_rest.get_account_snapshot(12, "mainnet")
+        self.assertEqual(len(snapshot["positions"]), 1)
+        self.assertAlmostEqual(snapshot["realized_pnl_usd"], 75.0)
+
+    def test_unreadable_capital_is_no_snapshot(self):
+        """Без капитала снимка нет: карточка покажет прочерк, а не «$0» —
+        ноль на месте мусора это утверждение о чужих деньгах."""
+        for value in ("", "abc", None, "NaN", "Infinity"):
+            cache.clear()
+            with (
+                self.subTest(value=value),
+                patch(
+                    "urllib.request.urlopen", Transport(self._account([], value=value))
+                ),
+            ):
+                self.assertIsNone(lighter_rest.get_account_snapshot(12, "mainnet"))
+
+    def test_zero_capital_is_a_number_not_absence(self):
+        """Свежий счёт с нулевым обеспечением — факт, а не отсутствие данных:
+        карточка обязана уметь показать $0."""
+        with patch("urllib.request.urlopen", Transport(self._account([], value="0"))):
+            snapshot = lighter_rest.get_account_snapshot(12, "mainnet")
+        self.assertEqual(snapshot["equity_usd"], 0.0)
+
+    def test_absent_account_is_none(self):
+        for payload in ({"accounts": []}, {}):
+            cache.clear()
+            with (
+                self.subTest(payload=payload),
+                patch("urllib.request.urlopen", Transport(payload)),
+            ):
+                self.assertIsNone(lighter_rest.get_account_snapshot(12, "mainnet"))
+
+    def test_snapshot_is_cached_per_account(self):
+        transport = Transport(self._account([]))
+        with patch("urllib.request.urlopen", transport):
+            lighter_rest.get_account_snapshot(12, "mainnet")
+            lighter_rest.get_account_snapshot(12, "mainnet")
+        self.assertEqual(len(transport.urls), 1)
+
+    def test_snapshots_read_every_account_once_and_dedupe(self):
+        """Повторный индекс в списке — один запрос: два лидера могут сидеть на
+        одном аккаунте, и платить за это сетевым round-trip'ом дважды незачем."""
+
+        def route(req, timeout=None):
+            index = int(req.full_url.split("value=")[1])
+            return _Response(
+                json.dumps(self._account([], value=str(100 + index))).encode()
+            )
+
+        with patch("urllib.request.urlopen", side_effect=route) as calls:
+            snapshots = lighter_rest.get_account_snapshots([12, 34, 12], "mainnet")
+        self.assertEqual(calls.call_count, 2)
+        self.assertEqual(sorted(snapshots), [12, 34])
+        self.assertAlmostEqual(snapshots[12]["equity_usd"], 112.0)
+        self.assertAlmostEqual(snapshots[34]["equity_usd"], 134.0)
+
+    def test_one_dead_account_does_not_empty_the_list(self):
+        """Lighter не ответил по одному счёту — остальные карточки остаются с
+        цифрами: отсутствие данных видно по лидеру, а не превращается в пустой
+        экран."""
+
+        def route(req, timeout=None):
+            index = int(req.full_url.split("value=")[1])
+            if index == 34:
+                raise urllib.error.URLError("connection refused")
+            return _Response(json.dumps(self._account([], value="55")).encode())
+
+        with patch("urllib.request.urlopen", side_effect=route):
+            snapshots = lighter_rest.get_account_snapshots([12, 34], "mainnet")
+        self.assertEqual(snapshots[12]["equity_usd"], 55.0)
+        self.assertIsNone(snapshots[34])
+
+
 class TestRetryPolicy(unittest.TestCase):
     def setUp(self):
         cache.clear()

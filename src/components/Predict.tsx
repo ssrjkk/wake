@@ -5,6 +5,7 @@ import {
   claimPredictMarket,
   getPredictMarkets,
   getPredictPositions,
+  PREDICT_PAGE_SIZE,
   predictOutcomeWorth,
   predictTimeLeft,
   previewPredictTrade,
@@ -70,6 +71,10 @@ export default function Predict({
   );
   const [markets, setMarkets] = useState<PredictMarket[] | null>(null);
   const [marketsError, setMarketsError] = useState<string | null>(null);
+  // Страница витрины: ответ бэкенда ограничен (limit ≤ 200), и «показаны не все»
+  // должно быть видно, а не выводиться из длины списка молча.
+  const [moreMarkets, setMoreMarkets] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [positions, setPositions] = useState<PredictPosition[] | null>(null);
   const [positionsError, setPositionsError] = useState<string | null>(null);
   // Выплата — один сет на рынок: без блокировки второй клик долетал до бэкенда
@@ -126,10 +131,12 @@ export default function Predict({
 
   useEffect(() => {
     let live = true;
+    // Первая страница; «показать ещё» добирает следующие (PREDICT_PAGE_SIZE).
     getPredictMarkets(status)
       .then((rows) => {
         if (live) {
           setMarkets(rows);
+          setMoreMarkets(rows.length === PREDICT_PAGE_SIZE);
           setMarketsError(null);
         }
       })
@@ -142,6 +149,19 @@ export default function Predict({
       live = false;
     };
   }, [status, nonce]);
+
+  async function loadMoreMarkets() {
+    setLoadingMore(true);
+    try {
+      const rows = await getPredictMarkets(status, markets?.length ?? 0);
+      setMarkets((prev) => [...(prev ?? []), ...rows]);
+      setMoreMarkets(rows.length === PREDICT_PAGE_SIZE);
+    } catch (e) {
+      setMarketsError(errorText(e, 160));
+    } finally {
+      setLoadingMore(false);
+    }
+  }
 
   useEffect(() => {
     if (!signedIn) return;
@@ -566,6 +586,17 @@ export default function Predict({
           </div>
         )}
 
+        {markets && markets.length > 0 && moreMarkets && (
+          <button
+            onClick={() => void loadMoreMarkets()}
+            disabled={loadingMore}
+            className="link-action"
+            style={{ marginTop: "12px" }}
+          >
+            {loadingMore ? "Загружаю…" : `Показать ещё ${PREDICT_PAGE_SIZE}`}
+          </button>
+        )}
+
         <p className="fineprint" style={{ marginTop: "4px" }}>
           Объём и число сделок — сделки через Wake, а не глубина пула: прямого
           доступа к книге LMSR у сайта нет. Рынок с нулевым объёмом ещё никто не
@@ -578,7 +609,7 @@ export default function Predict({
             onClose={() => setTrade(null)}
           >
             <div
-              className="modal-card overlay-card"
+              className="overlay-shell"
               onClick={(e) => e.stopPropagation()}
             >
               <div className="overlay-head">

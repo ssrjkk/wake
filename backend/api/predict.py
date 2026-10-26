@@ -157,8 +157,15 @@ async def create_event_market(
 @router.get("/predict/markets")
 async def list_predict_markets(
     status: str = Query("open", pattern="^(open|resolved|all)$"),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int = Query(0, ge=0),
 ):
-    rows = await pdb.list_markets(status)
+    """Страница рынков. Без потолка этот ответ рос бы вместе с числом рынков,
+    а фронт рендерил бы их все: карточка рынка — это ~20 узлов и две кнопки, и
+    витрина из 60 рынков стоила 1 369 узлов (замер e2e/render-budget.spec.ts).
+    Порядок — по дедлайну, поэтому первая страница это «что закрывается раньше»,
+    а не «что случайнее»."""
+    rows = await pdb.list_markets(status, limit=limit, offset=offset)
     stats = await pdb.market_stats()
     return [_with_prices(r, stats) for r in rows]
 

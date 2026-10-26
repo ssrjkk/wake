@@ -246,6 +246,34 @@ async def follows_for_leader(leader_id: str) -> list[dict]:
         return [_follow_dict(r) for r in rows]
 
 
+async def leader_stats() -> dict[str, dict]:
+    """Подписчики и AUM по всем лидерам одним GROUP BY.
+
+    Тот же фильтр, что у follows_for_leader (без паузы, без отписки), иначе
+    витрина и консоль лидера показывали бы разные числа. Поштучный
+    follows_for_leader() на каждого лидера — это N round-trip'ов там, где база
+    отвечает одним запросом, и фронт платил за это ещё и N запросами к Lighter."""
+    async with async_session_factory() as session:
+        rows = await session.execute(
+            select(
+                Follow.leader_id,
+                func.count().label("follower_count"),
+                func.coalesce(func.sum(Follow.allocation_usd), 0.0).label(
+                    "total_aum_usd"
+                ),
+            )
+            .where(Follow.paused.is_(False), Follow.deleted_at.is_(None))
+            .group_by(Follow.leader_id)
+        )
+        return {
+            leader_id: {
+                "follower_count": int(count),
+                "total_aum_usd": float(aum),
+            }
+            for leader_id, count, aum in rows.all()
+        }
+
+
 async def follows_for_follower(follower_id: str) -> list[dict]:
     async with async_session_factory() as session:
         rows = (

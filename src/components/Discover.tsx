@@ -1,8 +1,8 @@
 import { useState, useEffect } from "react";
 import { Users, DollarSign, Copy as CopyIcon, Wallet, TrendingUp, TrendingDown } from "lucide-react";
-import { listLeaders } from "../lib/lighter";
+import { listHydratedLeaders } from "../lib/lighter";
 import { errorText } from "../lib/backend";
-import { buildLeader } from "../lib/leaders";
+import { leaderFromHydrated } from "../lib/leaders";
 import { fmt, shortHandle, usd, avatarColor } from "./utils";
 import type { Leader } from "./types";
 
@@ -16,13 +16,14 @@ export default function Discover({ setCopyModal }: DiscoverProps) {
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
   useEffect(() => {
-    // Витрина собирается по каждому лидеру отдельно: список из leaders один, а
-    // каптал и PnL — публичный ответ Lighter на строку (buildLeader). Поэтому
-    // вкладка не работает без бэкенда: список лидеров взять неоткуда.
+    // Витрина собирается на сервере (GET /leaders/hydrated): каптал и PnL —
+    // публичный ответ Lighter на строку, и поштучная сборка на фронте стоила по
+    // два запроса на карточку. Поэтому вкладка не работает без бэкенда: список
+    // лидеров взять неоткуда.
     async function load() {
       try {
-        const rows = await listLeaders();
-        const built = await Promise.all(rows.map(buildLeader));
+        const rows = await listHydratedLeaders();
+        const built = rows.map(leaderFromHydrated);
         const rank = (t: Leader) => (t.exchange ? t.exchange.realizedPnlUsd : -1e12);
         setLeaders(built.sort((a, b) => rank(b) - rank(a) || b.aumUsd - a.aumUsd));
         setError(null);
@@ -42,7 +43,7 @@ export default function Discover({ setCopyModal }: DiscoverProps) {
       <div className="terminal-main">
         <div className="terminal-header" style={{ flexDirection: "column", alignItems: "flex-start" }}>
           <div style={{ display: "flex", alignItems: "center", gap: "12px", width: "100%" }}>
-            <h2 style={{ fontSize: "16px", fontWeight: 600, color: "#fafafa", margin: 0 }}>Кого копируют</h2>
+            <h2 style={{ fontSize: "16px", fontWeight: 600, color: "var(--fg)", margin: 0 }}>Кого копируют</h2>
             {lastUpdated && (
               <span
                 style={{ marginLeft: "auto", fontSize: "10px", color: "var(--text-muted)", fontFamily: "'JetBrains Mono', monospace" }}
@@ -59,7 +60,7 @@ export default function Discover({ setCopyModal }: DiscoverProps) {
         </div>
 
         {error && (
-          <div style={{ padding: "10px 16px", background: "rgba(239, 68, 68, 0.08)", border: "1px solid rgba(239, 68, 68, 0.2)", borderRadius: "6px", fontSize: "12px", color: "#ef4444" }}>
+          <div className="notice notice-error">
             Список лидеров не загружен: {error}
           </div>
         )}
@@ -67,16 +68,16 @@ export default function Discover({ setCopyModal }: DiscoverProps) {
         {leaders === null ? (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: "8px" }}>
             {[0, 1, 2].map((i) => (
-              <div key={i} style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", padding: "16px" }}>
-                <div style={{ height: "12px", background: "#1a1a1a", borderRadius: "3px", width: "50%", marginBottom: "12px" }} />
-                <div style={{ height: "24px", background: "#1a1a1a", borderRadius: "3px" }} />
+              <div key={i} style={{ background: "var(--bg-1)", border: "1px solid var(--line)", borderRadius: "6px", padding: "16px" }}>
+                <div style={{ height: "12px", background: "var(--bg-2)", borderRadius: "3px", width: "50%", marginBottom: "12px" }} />
+                <div style={{ height: "24px", background: "var(--bg-2)", borderRadius: "3px" }} />
               </div>
             ))}
           </div>
         ) : leaders.length === 0 && !error ? (
           <div className="empty-state">
             <Users style={{ width: "24px", height: "24px", color: "var(--text-muted)", marginBottom: "12px" }} />
-            <p style={{ fontSize: "12px", color: "#ccc", margin: "0 0 4px 0" }}>В базе пока нет ни одного лидера</p>
+            <p style={{ fontSize: "12px", color: "var(--fg-2)", margin: "0 0 4px 0" }}>В базе пока нет ни одного лидера</p>
             <p style={{ fontSize: "10px", color: "var(--text-muted)", margin: 0, maxWidth: "500px", marginLeft: "auto", marginRight: "auto" }}>
               Лидер появляется сам: в Терминале включи «Публиковать мои сделки».
             </p>
@@ -86,23 +87,23 @@ export default function Discover({ setCopyModal }: DiscoverProps) {
             {leaders.map((t) => {
               const pnl = t.exchange?.realizedPnlUsd ?? null;
               return (
-                <div key={t.id} style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", padding: "16px", transition: "border-color 0.15s" }}
-                  onMouseEnter={(e) => e.currentTarget.style.borderColor = "#333"}
-                  onMouseLeave={(e) => e.currentTarget.style.borderColor = "#1e1e1e"}
+                <div key={t.id} style={{ background: "var(--bg-1)", border: "1px solid var(--line)", borderRadius: "6px", padding: "16px", transition: "border-color 0.15s" }}
+                  onMouseEnter={(e) => e.currentTarget.style.borderColor = "var(--line-strong)"}
+                  onMouseLeave={(e) => e.currentTarget.style.borderColor = "var(--line)"}
                 >
                   <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px" }}>
                     <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
                       <div
-                        style={{ width: "40px", height: "40px", borderRadius: "50%", background: avatarColor(t.handle), display: "flex", alignItems: "center", justifyContent: "center", fontSize: "14px", fontWeight: 700, color: "#fff" }}
+                        style={{ width: "40px", height: "40px", borderRadius: "50%", background: avatarColor(t.handle), display: "flex", alignItems: "center", justifyContent: "center", fontSize: "14px", fontWeight: 700, color: "var(--on-accent)" }}
                       >
                         {shortHandle(t.handle)}
                       </div>
                       <div>
-                        <div style={{ fontSize: "13px", color: "#fafafa", fontWeight: 600 }}>{t.handle}</div>
+                        <div style={{ fontSize: "13px", color: "var(--fg)", fontWeight: 600 }}>{t.handle}</div>
                         <div style={{ fontSize: "10px", color: "var(--text-muted)", fontFamily: "'JetBrains Mono', monospace" }}>Lighter #{t.lighterAccountIndex}</div>
                       </div>
                     </div>
-                    <span style={{ fontSize: "10px", color: "#ccc", padding: "3px 8px", background: "#1a1a1a", borderRadius: "3px", border: "1px solid #2a2a2a" }}>{(t.feeBps / 100).toFixed(2)}%</span>
+                    <span style={{ fontSize: "10px", color: "var(--fg-2)", padding: "3px 8px", background: "var(--bg-2)", borderRadius: "3px", border: "1px solid var(--line-strong)" }}>{(t.feeBps / 100).toFixed(2)}%</span>
                   </div>
 
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px", marginBottom: "12px" }}>
@@ -110,24 +111,24 @@ export default function Discover({ setCopyModal }: DiscoverProps) {
                       <div style={{ fontSize: "10px", color: "var(--text-muted)", display: "flex", alignItems: "center", gap: "4px", marginBottom: "4px" }}>
                         <Wallet style={{ width: "10px", height: "10px" }} /> Капитал
                       </div>
-                      <div style={{ fontSize: "12px", color: "#fafafa", fontFamily: "'JetBrains Mono', monospace" }}>{pnl === null ? "—" : usd(t.exchange!.equityUsd, 0)}</div>
+                      <div style={{ fontSize: "12px", color: "var(--fg)", fontFamily: "'JetBrains Mono', monospace" }}>{pnl === null ? "—" : usd(t.exchange!.equityUsd, 0)}</div>
                     </div>
                     <div>
                       <div style={{ fontSize: "10px", color: "var(--text-muted)", display: "flex", alignItems: "center", gap: "4px", marginBottom: "4px" }}>
                         {pnl != null && pnl >= 0 ? <TrendingUp style={{ width: "10px", height: "10px" }} /> : <TrendingDown style={{ width: "10px", height: "10px" }} />} PnL
                       </div>
-                      <div style={{ fontSize: "12px", color: pnl == null ? "#666" : pnl >= 0 ? "#10b981" : "#ef4444", fontFamily: "'JetBrains Mono', monospace" }}>
+                      <div style={{ fontSize: "12px", color: pnl == null ? "var(--fg-3)" : pnl >= 0 ? "var(--up)" : "var(--down)", fontFamily: "'JetBrains Mono', monospace" }}>
                         {pnl === null ? "—" : `${pnl >= 0 ? "+" : ""}${usd(pnl, 0)}`}
                       </div>
                     </div>
                   </div>
 
                   <div style={{ display: "flex", justifyContent: "space-between", fontSize: "11px", fontFamily: "'JetBrains Mono', monospace", marginBottom: "4px" }}>
-                    <span style={{ color: "#ccc", display: "flex", alignItems: "center", gap: "4px" }}>
+                    <span style={{ color: "var(--fg-2)", display: "flex", alignItems: "center", gap: "4px" }}>
                       <Users style={{ width: "11px", height: "11px" }} />
                       {fmt(t.followers)}
                     </span>
-                    <span style={{ color: "#ccc", display: "flex", alignItems: "center", gap: "4px" }}>
+                    <span style={{ color: "var(--fg-2)", display: "flex", alignItems: "center", gap: "4px" }}>
                       <DollarSign style={{ width: "11px", height: "11px" }} />
                       {fmt(t.aumUsd)}
                     </span>
@@ -137,7 +138,8 @@ export default function Discover({ setCopyModal }: DiscoverProps) {
                   </div>
                   <button
                     onClick={() => setCopyModal(t)}
-                    style={{ width: "100%", background: "#3b82f6", color: "#fff", fontSize: "12px", fontWeight: 600, padding: "10px 0", border: "none", borderRadius: "4px", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: "6px", minHeight: "44px" }}
+                    className="btn-primary"
+                    style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: "6px" }}
                   >
                     <CopyIcon style={{ width: "12px", height: "12px" }} /> Copy
                   </button>

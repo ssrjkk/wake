@@ -34,25 +34,55 @@ const files = Object.entries(sources).map(([file, text]) => ({
   text,
 }));
 
-// Зеркало :root из index.css.
-const TOKENS = new Set(
-  `#0b0b0c #101011 #161618 #1c1c1f #232326 #303035 #e6e6e8 #a0a0a7 #75757d
-   #ff6b35 #0a0a0a #ff8c5a #10b981 #ef4444 #3b82f6 #fbbf24`.split(/\s+/),
-);
+// Зеркало :root из index.css: имя токена → значение. TOKENS выводится отсюда,
+// поэтому токен, добавленный в тему и забытый здесь, перестаёт быть разрешённым
+// цветом в панелях — разойтись молча он не может.
+const TOKEN_VALUES: Record<string, string> = {
+  "--bg-0": "#0b0b0c",
+  "--bg-1": "#101011",
+  "--bg-2": "#161618",
+  "--bg-3": "#1c1c1f",
+  "--line": "#232326",
+  "--line-strong": "#303035",
+  "--fg": "#e6e6e8",
+  "--fg-2": "#a0a0a7",
+  "--fg-3": "#8f8f97",
+  "--accent": "#ff6b35",
+  "--accent-hi": "#ff8c5a",
+  "--on-accent": "#0a0a0a",
+  "--up": "#10b981",
+  "--down": "#ef4444",
+  "--down-hi": "#f87171",
+  "--info": "#60a5fa",
+  "--warn": "#fbbf24",
+};
+
+const TOKENS = new Set(Object.values(TOKEN_VALUES));
 
 // Наследие: поверхности и тексты, которые панели до сих пор печатают числом.
-// Заменять на var(...) — по одному файлу за раз, с проверкой снимком.
-const LEGACY = new Set(
-  `#04100b #0a1a2a #0a2a1a #111 #1a1500 #1a1a1a #1a3050 #1a3d2a #1e1e1e
-   #2563eb #2a0a0a #2a1a0a #2a2000 #2a2a2a #333 #3a3a3a #3d1a1a #3d3000 #4d3310
-   #5c1a1a #5c3a1a #60a5fa #666 #7f1d1d #888 #a0a0a0 #aaa #ccc #fafafa #f59e0b
-   #fff`.split(/\s+/),
-);
+// Пустой список — не формальность: панели переводились на var(--...) до последней
+// литеры, и с этого места любая новая литера вне токенов красная сразу. Возвращать
+// сюда значение можно только вместе с причиной (например палитра категорий,
+// которой в токенах места нет).
+const LEGACY = new Set<string>([]);
 
 const BANNED: [RegExp, string][] = [
   [/linear-gradient|radial-gradient|conic-gradient/, "градиент фона"],
   [/boxShadow|textShadow/, "тень"],
   [/backdrop-filter|backdropFilter/, "блюр под слоем"],
+  // Кольцо фокуса рисует index.css: `:focus-visible { outline: 2px solid
+  // var(--accent) !important }`. Отказ от outline в панели поэтому не ломает
+  // клавиатуру сегодня — он ломает её в тот день, когда правило правят, и
+  // молча: проверить это может только браузер. Плюс `outline: none` в JSX
+  // означает «здесь фокус не нужен», что для поля ввода неправда. Кавычки и
+  // хвостовая форма (`outline-none`) обязательны: прошлая версия вида
+  // /outline:\s*none/ не совпадала ни с `outline: "none"` в Risk, ни с
+  // Tailwind-классом в App.tsx, и три поля печатали отказ от фокуса инлайном.
+  [/outline:\s*["']?(none|0)\b|outline-(none|0)\b/, "снятый outline вне правил темы"],
+  // rgba(...) числом — второй способ нарисовать цвет вне темы: hex-проверка его
+  // не видит, а именно так в панелях завели четыре разных «красный статус».
+  // Прозрачные слои темы живут в TINT_VALUES и вызываются как var(--...).
+  [/rgba?\s*\(/, "цвет числом через rgb()/rgba() — возьмите токен темы"],
 ];
 
 const HEX = /#[0-9a-fA-F]{3,8}\b/g;
@@ -90,5 +120,146 @@ describe("тема: ни градиентов, ни теней, ни новых 
     );
     const stale = [...LEGACY].filter((hex) => !used.has(hex) && !TOKENS.has(hex));
     expect(stale, `устаревшие значения всё ещё в списке: ${stale.join(" ")}`).toEqual([]);
+  });
+});
+
+// ── Контраст токенов: числа, а не вкус ──────────────────────────────────────
+//
+// Пороги взяты не «на глаз»: они равняются на WCAG 2.1 (1.4.3 — 4.5:1 для
+// обычного текста, 1.4.11 — 3:1 для нефоровых частей интерфейса), а фактические
+// отношения считаются из тех же hex'ов, что лежат в зеркале темы выше. Это и
+// есть причина, по которой тема существует как значения, а не как имена:
+// #75757d на #1c1c1f давал 3.72:1 — «серый подписьный текст» выглядел нормально
+// на мониторе автора и был нечитаем в таблице.
+
+const PANELS = ["--bg-0", "--bg-1", "--bg-2", "--bg-3"] as const;
+
+/** Токены, которые тема использует как цвет текста или цифр. */
+const TEXTS = ["--fg", "--fg-2", "--fg-3", "--accent", "--accent-hi", "--up", "--down", "--down-hi", "--info", "--warn"] as const;
+
+/** Заполненные поверхности, на которые тема кладёт тёмные чернила. */
+const FILLS = ["--accent", "--up", "--down"] as const;
+
+// Зеркало прозрачных слоёв темы — подложек статусов. Отдельно от TOKEN_VALUES
+// нарочно: TOKEN_VALUES удваивается как список разрешённых литералов в панелях,
+// а rgba(...) панели печатать не имеют права (см. BANNED ниже) — только токен.
+const TINT_VALUES: Record<string, string> = {
+  "--up-faint": "rgba(16, 185, 129, 0.14)",
+  "--down-faint": "rgba(239, 68, 68, 0.14)",
+  "--info-faint": "rgba(96, 165, 250, 0.12)",
+  "--warn-faint": "rgba(251, 191, 36, 0.12)",
+  "--accent-dim": "rgba(255, 107, 53, 0.12)",
+};
+
+// Подпись статуса печатается цветом, который лежит и в её собственной подложке.
+// Это единственная пара в теме, где контраст считается не «буквы против слоя», а
+// «буквы против слоя, в который те же буквы уже подмешаны»: красным по красной
+// подложке журнал копи-движка давал 4.44:1, и ни одна проверка «текст на панели»
+// этого не видела, потому что подложка была прозрачной.
+const TINTED: [text: string, tint: string][] = [
+  ["--up", "--up-faint"],
+  ["--down-hi", "--down-faint"],
+  ["--info", "--info-faint"],
+  ["--warn", "--warn-faint"],
+  ["--accent", "--accent-dim"],
+];
+
+function channel(hex: string, from: number): number {
+  const value = parseInt(hex.slice(from, from + 2), 16) / 255;
+  return value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+}
+
+function luminance(hex: string): number {
+  return (
+    0.2126 * channel(hex, 1) + 0.7152 * channel(hex, 3) + 0.0722 * channel(hex, 5)
+  );
+}
+
+function contrast(a: string, b: string): number {
+  const one = luminance(a);
+  const two = luminance(b);
+  return (Math.max(one, two) + 0.05) / (Math.min(one, two) + 0.05);
+}
+
+function rgb(hex: string): [number, number, number] {
+  return [
+    parseInt(hex.slice(1, 3), 16),
+    parseInt(hex.slice(3, 5), 16),
+    parseInt(hex.slice(5, 7), 16),
+  ];
+}
+
+function asHex(channels: [number, number, number]): string {
+  return `#${channels.map((c) => Math.round(c).toString(16).padStart(2, "0")).join("")}`;
+}
+
+/** Смешать прозрачный слой с непрозрачной подложкой так, как это делает браузер. */
+function over(tint: string, surface: string): string {
+  const m = tint.match(/rgba\((\d+), (\d+), (\d+), ([\d.]+)\)/);
+  if (!m) throw new Error(`не-rgba токен подложки: ${tint}`);
+  const [r, g, b] = [+m[1], +m[2], +m[3]];
+  const a = +m[4];
+  const base = rgb(surface);
+  return asHex([r * a + base[0] * (1 - a), g * a + base[1] * (1 - a), b * a + base[2] * (1 - a)]);
+}
+
+describe("тема: контраст считается из значений токенов", () => {
+  it("каждый текстовый токен читается на каждой поверхности панели (4.5:1)", () => {
+    const weak: string[] = [];
+    for (const text of TEXTS) {
+      for (const surface of PANELS) {
+        const ratio = contrast(TOKEN_VALUES[text], TOKEN_VALUES[surface]);
+        if (ratio < 4.5) weak.push(`${text} на ${surface}: ${ratio.toFixed(2)}`);
+      }
+    }
+    expect(weak, "подписи и числа темы обязаны давать WCAG AA на всех слоях панели").toEqual([]);
+  });
+
+  it("тёмные чернила на заполненном статусе читаются (4.5:1)", () => {
+    const weak: string[] = [];
+    for (const fill of FILLS) {
+      const ratio = contrast(TOKEN_VALUES["--on-accent"], TOKEN_VALUES[fill]);
+      if (ratio < 4.5) weak.push(`--on-accent на ${fill}: ${ratio.toFixed(2)}`);
+    }
+    expect(weak, "текст кнопки и чипа статуса — тёмным по цвету-заполнению").toEqual([]);
+  });
+
+  it("подпись статуса читается на своей подложке (4.5:1)", () => {
+    // Именно здесь тема ломалась молча: красный текст на красной подложке
+    // оставался «красным на тёмном» для проверки глазами и давал 4.44:1 в
+    // живом дереве. Подложка смешивается с каждой поверхностью панели, потому
+    // что чип одинаково живёт и на --bg-0, и на --bg-3.
+    const weak: string[] = [];
+    for (const [text, tint] of TINTED) {
+      for (const surface of PANELS) {
+        const ratio = contrast(TOKEN_VALUES[text], over(TINT_VALUES[tint], TOKEN_VALUES[surface]));
+        if (ratio < 4.5) weak.push(`${text} на ${tint}+${surface}: ${ratio.toFixed(2)}`);
+      }
+    }
+    expect(weak, "прозрачный слой под текстом обязан входить в его фон").toEqual([]);
+  });
+
+  it("кольцо фокуса заметно на любой поверхности (3:1)", () => {
+    // 1.4.11 про нефоровые части: кольцо :focus-visible рисуется токеном marca,
+    // и оно обязано быть видно на любом из слоёв панели. Границы (--line,
+    // --line-strong) под проверку не попадают нарочно: это hairline между
+    // панелями, а не идентификатор компонента — контрол различается ещё и
+    // подложкой, а поднять его до 3:1 означало бы белую сетку вместо прибора.
+    const weak: string[] = [];
+    for (const surface of PANELS) {
+      const ratio = contrast(TOKEN_VALUES["--accent"], TOKEN_VALUES[surface]);
+      if (ratio < 3) weak.push(`--accent на ${surface}: ${ratio.toFixed(2)}`);
+    }
+    expect(weak).toEqual([]);
+  });
+
+  it("ни один токен текста не совпадает со своим фоном", () => {
+    // Отдельная ловушка: #fff на #fff проходит любую «равен ли цвет фону»
+    // проверку только если сравнивать отношения, а не строки.
+    for (const text of TEXTS) {
+      for (const surface of PANELS) {
+        expect(TOKEN_VALUES[text]).not.toBe(TOKEN_VALUES[surface]);
+      }
+    }
   });
 });

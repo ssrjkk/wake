@@ -624,7 +624,7 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
             disabled={orderSending || !currentMarket || price == null}
             aria-busy={orderSending}
             className="btn-action"
-            style={{ background: side === "long" ? "var(--up)" : "var(--down)", color: "#04100b", opacity: orderSending || !currentMarket || price == null ? 0.45 : 1 }}
+            style={{ background: side === "long" ? "var(--up)" : "var(--down)", color: "var(--on-accent)", opacity: orderSending || !currentMarket || price == null ? 0.45 : 1 }}
           >
             {orderSending ? "Отправка…" : !currentMarket ? "Рынок не загружен" : price == null ? "Цена недоступна" : `${side === "long" ? "Открыть long" : "Открыть short"} · ${usd(size, 0)}`}
           </button>
@@ -755,7 +755,7 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
 
       {showOrderConfirm && currentMarket && price != null && (
         <Modal label="Подтверждение ордера" onClose={() => setShowOrderConfirm(false)}>
-          <div className="modal-card" style={{ maxWidth: "400px", width: "100%", padding: "20px" }}>
+          <div className="overlay-shell">
             <h3 className="panel-title" style={{ margin: "0 0 14px" }}>Подтверждение ордера</h3>
             <div className="kv kv-cols" style={{ marginBottom: "16px" }}>
               <span className="label">Рынок</span><b className="num">{currentMarket.symbol}</b>
@@ -775,7 +775,7 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
               <button
                 onClick={() => void placeOrder()}
                 className="btn-action"
-                style={{ flex: 1, background: side === "long" ? "var(--up)" : "var(--down)", color: "#04100b" }}
+                style={{ flex: 1, background: side === "long" ? "var(--up)" : "var(--down)", color: "var(--on-accent)" }}
               >
                 Подтвердить
               </button>

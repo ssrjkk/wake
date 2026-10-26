@@ -169,6 +169,96 @@ def get_account_equity(
     return value if math.isfinite(value) and value > 0 else None
 
 
+def _float_of(value, default: float | None = None) -> float | None:
+    """Число из строки ответа Lighter; кривая строка — «данных нет», а не 0.
+
+    Lighter отдаёт суммы строками (замер mainnet 2026-10-02), и 0 на месте
+    прочитанного мусора означал бы «позиции нет» или «капитал нулевой» — то есть
+    карточка врала бы вместо того, чтобы показать прочерк."""
+    try:
+        out = float(value)
+    except (TypeError, ValueError):
+        return default
+    return out if math.isfinite(out) else default
+
+
+@cached("account_snapshot", ttl=60)
+def get_account_snapshot(
+    account_index: int, network: str = LIGHTER_NETWORK
+) -> dict | None:
+    """Капитал, реализованный PnL и открытые позиции аккаунта — публичный ответ Lighter.
+
+    Нужен серверу, а не только фронту: карточка лидера в Discover читала счёт
+    сама, и экран из 40 лидеров стоил 80 запросов (по одному на статистику
+    подписки и по одному на аккаунт, замер e2e/render-budget). Здесь один
+    ответ на весь список, кэш на минуту и общий для всех клиентов.
+
+    Реализованный PnL суммируется по ВСЕМ строкам аккаунта, а не по открытым:
+    закрытая позиция остаётся в ответе с position=0 и уносит свою долю прибыли,
+    поэтому «3 позиции» и «$120 реализовано» — считать по разным наборам строк.
+    """
+    data = _get(f"{_base(network)}/account?by=index&value={int(account_index)}")
+    accounts = data.get("accounts") or []
+    if not accounts:
+        return None
+    account = accounts[0]
+    realized_total = 0.0
+    open_positions = []
+    for row in account.get("positions") or []:
+        realized = _float_of(row.get("realized_pnl"), 0.0)
+        realized_total += realized
+        size = _float_of(row.get("position"))
+        if not size:
+            continue
+        open_positions.append(
+            {
+                "market_id": int(row.get("market_id") or 0),
+                "symbol": str(row.get("symbol") or ""),
+                "size": size,
+                "avg_entry": _float_of(row.get("avg_entry_price"), 0.0),
+                "value": _float_of(row.get("position_value"), 0.0),
+                "unrealized_pnl": _float_of(row.get("unrealized_pnl"), 0.0),
+                "realized_pnl": realized,
+                "liquidation_price": _float_of(row.get("liquidation_price"), 0.0),
+            }
+        )
+    equity = _float_of(account.get("total_asset_value"))
+    if equity is None:
+        # Капитал не прочитан — снимка нет. Отдавать позиции без числа, ради
+        # которого они и читаются, значит заставлять интерфейс выбирать между
+        # «0$» и «—».
+        return None
+    return {
+        "equity_usd": equity,
+        "realized_pnl_usd": round(realized_total, 6),
+        "positions": open_positions,
+    }
+
+
+def get_account_snapshots(
+    account_indices: list[int], network: str = LIGHTER_NETWORK
+) -> dict[int, dict | None]:
+    """Снимки нескольких аккаунтов одним вызовом, параллельно и с тем же потолком
+    потоков, что у свечей (CANDLES_WORKERS).
+
+    Аккаунт, по которому Lighter не ответил, приходит как None, а не роняет весь
+    список: карточка лидера остаётся с подписками и AUM из нашей базы, и это
+    честнее, чем пустой экран из-за одного мёртвого счёта."""
+    unique = list(dict.fromkeys(int(i) for i in account_indices))
+    if not unique:
+        return {}
+    out: dict[int, dict | None] = {}
+    with ThreadPoolExecutor(max_workers=min(len(unique), CANDLES_WORKERS)) as pool:
+        futures = {i: pool.submit(get_account_snapshot, i, network) for i in unique}
+        for index, future in futures.items():
+            try:
+                out[index] = future.result()
+            except Exception as e:
+                logger.warning("аккаунт %s не прочитан: %s", index, e)
+                out[index] = None
+    return out
+
+
 def get_mark_price(market_id: int, network: str = LIGHTER_NETWORK) -> float:
     """Последняя цена закрытия по market_id — close последней 1-минутной свечи.
     Для резолюции price-рынков достаточно точно; для чего-то более

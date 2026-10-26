@@ -2,8 +2,14 @@ import { useState, useEffect } from "react";
 import { ChevronRight, Pause, Play, Wallet, X } from "lucide-react";
 import { getAccountByIndex, getMirrorLog, type LighterAccount, type MirrorLogRow, type OrderBook } from "../lib/lighter";
 import { errorText } from "../lib/backend";
+import { useRowWindow } from "../lib/useRowWindow";
 import type { Following, Tab } from "./types";
 import { avatarColor, shortHandle, fmt, usd } from "./utils";
+
+// Шаг строки журнала: 40 px — высота td вместе с padding 10+10 и нижним
+// бордером (box-sizing: border-box делает высоту включённой). Окно считает
+// позиции по этому числу, поэтому оно обязано совпадать с .log-row в index.css.
+const LOG_ROW_PITCH = 40;
 
 interface PortfolioProps {
   following: Following[];
@@ -21,18 +27,18 @@ interface PortfolioProps {
 }
 
 const STATUS_STYLE: Record<MirrorLogRow["status"], { bg: string; color: string; border?: string }> = {
-  planned: { bg: "#1a1a1a", color: "#a0a0a0" },
-  skipped: { bg: "#2a2000", color: "#fbbf24", border: "#3d3000" },
-  dry_run: { bg: "#0a1a2a", color: "#3b82f6", border: "#1a3050" },
-  sent: { bg: "#0a2a1a", color: "#10b981", border: "#1a3d2a" },
-  failed: { bg: "#2a0a0a", color: "#ef4444", border: "#3d1a1a" },
+  planned: { bg: "var(--bg-2)", color: "var(--fg-2)" },
+  skipped: { bg: "var(--warn-faint)", color: "var(--warn)", border: "var(--warn-line)" },
+  dry_run: { bg: "var(--info-faint)", color: "var(--info)", border: "var(--info-line)" },
+  sent: { bg: "var(--up-faint)", color: "var(--up)", border: "var(--up-line)" },
+  failed: { bg: "var(--down-faint)", color: "var(--down-hi)", border: "var(--down-line)" },
 };
 
 // mirror_log.status — обычная колонка String, новый статус в неё может попасть
 // раньше, чем этот файл узнает о ней. Неизвестный статус обязан отличаться от
 // «failed» и не имеет права ронять панель: статус = единственное, чем человек
 // проверяет, что движок сделал с его деньгами.
-const UNKNOWN_STATUS = { bg: "#1a1a1a", color: "#a0a0a0" };
+const UNKNOWN_STATUS = { bg: "var(--bg-2)", color: "var(--fg-2)" };
 
 function statusStyle(status: string) {
   return STATUS_STYLE[status as MirrorLogRow["status"]] ?? UNKNOWN_STATUS;
@@ -43,6 +49,13 @@ export default function Portfolio({ following, followsError, setTab, togglePause
   const [accountError, setAccountError] = useState<string | null>(null);
   const [mirrorLog, setMirrorLog] = useState<MirrorLogRow[] | null>(null);
   const [mirrorLogError, setMirrorLogError] = useState<string | null>(null);
+  // Журнал рендерится окном: 200 строк (потолок /mirror-log) mounted целиком
+  // делали страницу 10 317 px и 2 348 узлов (замер e2e/render-budget.spec.ts).
+  // Шаг строки = height из .log-row, менять вместе.
+  const { attach: attachLog, ...logWindow } = useRowWindow<HTMLDivElement>(
+    mirrorLog?.length ?? 0,
+    LOG_ROW_PITCH,
+  );
 
   useEffect(() => {
     if (lighterAccountIndex == null) return;
@@ -106,32 +119,32 @@ export default function Portfolio({ following, followsError, setTab, togglePause
     <div className="terminal-layout terminal-stack" style={{ gap: "16px" }}>
       <section>
         <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: "12px" }}>
-          <h2 style={{ fontSize: "16px", fontWeight: 600, color: "#fafafa", margin: 0 }}>Мои подписки</h2>
+          <h2 style={{ fontSize: "16px", fontWeight: 600, color: "var(--fg)", margin: 0 }}>Мои подписки</h2>
           <span style={{ fontSize: "11px", color: "var(--text-muted)", fontFamily: "JetBrains Mono, monospace" }}>таблица follows</span>
         </div>
         {followsError && (
-          <div style={{ padding: "10px 16px", background: "rgba(239, 68, 68, 0.08)", border: "1px solid rgba(239, 68, 68, 0.2)", borderRadius: "6px", fontSize: "12px", color: "#ef4444", marginBottom: "12px" }}>
+          <div className="notice notice-error">
             Подписки не загружены: {followsError}. Пустой список ниже — не ответ базы, а её отсутствие.
           </div>
         )}
         {following.length === 0 ? (
           <div className="empty-state">
-            <p style={{ fontSize: "14px", color: "#a0a0a0", marginBottom: "4px" }}>
+            <p style={{ fontSize: "14px", color: "var(--fg-2)", marginBottom: "4px" }}>
               {signedIn ? "Ты пока никого не копируешь" : "Войди через Telegram или кошелёк — подписки привязаны к подтверждённому входу"}
             </p>
             <p style={{ fontSize: "12px", color: "var(--text-muted)", marginBottom: "16px", maxWidth: "400px" }}>
-              Подписка — это строка в <code style={{ color: "#a0a0a0" }}>follows</code> с аллокацией и потолком плеча. Её читает копи-движок из{" "}
-              <code style={{ color: "#a0a0a0" }}>mirror_engine.py</code>.
+              Подписка — это строка в <code style={{ color: "var(--fg-2)" }}>follows</code> с аллокацией и потолком плеча. Её читает копи-движок из{" "}
+              <code style={{ color: "var(--fg-2)" }}>mirror_engine.py</code>.
             </p>
             <button className="link-action" onClick={() => setTab("discover")}>
               Найти трейдера <ChevronRight style={{ width: "16px", height: "16px" }} />
             </button>
           </div>
         ) : (
-          <div className="table-scroll" style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", padding: "16px" }}>
+          <div className="table-scroll" style={{ background: "var(--bg-1)", border: "1px solid var(--line)", borderRadius: "6px", padding: "16px" }}>
             <table style={{ width: "100%", fontSize: "13px" }}>
               <thead>
-                <tr style={{ textAlign: "left", fontSize: "11px", color: "var(--text-muted)", borderBottom: "1px solid #1e1e1e" }}>
+                <tr style={{ textAlign: "left", fontSize: "11px", color: "var(--text-muted)", borderBottom: "1px solid var(--line)" }}>
                   <th style={{ paddingBottom: "8px", fontWeight: 400 }}>Лидер</th>
                   <th style={{ paddingBottom: "8px", fontWeight: 400 }}>Аллокация</th>
                   <th style={{ paddingBottom: "8px", fontWeight: 400 }}>Плечо</th>
@@ -142,22 +155,22 @@ export default function Portfolio({ following, followsError, setTab, togglePause
               </thead>
               <tbody>
                 {following.map((t) => (
-                  <tr key={t.followId} style={{ borderBottom: "1px solid #1e1e1e" }}>
+                  <tr key={t.followId} style={{ borderBottom: "1px solid var(--line)" }}>
                     <td style={{ padding: "12px 0" }}>
                       <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                        <div style={{ width: "28px", height: "28px", borderRadius: "50%", background: avatarColor(t.handle), display: "flex", alignItems: "center", justifyContent: "center", fontSize: "11px", fontWeight: 600, color: "#fff" }}>
+                        <div style={{ width: "28px", height: "28px", borderRadius: "50%", background: avatarColor(t.handle), display: "flex", alignItems: "center", justifyContent: "center", fontSize: "11px", fontWeight: 600, color: "var(--on-accent)" }}>
                           {shortHandle(t.handle)}
                         </div>
-                        <span style={{ color: "#fafafa", fontWeight: 500 }}>{t.handle}</span>
+                        <span style={{ color: "var(--fg)", fontWeight: 500 }}>{t.handle}</span>
                       </div>
                     </td>
-                    <td style={{ padding: "12px 0", fontFamily: "JetBrains Mono, monospace", color: "#a0a0a0" }}>{usd(t.allocationUsd)}</td>
-                    <td style={{ padding: "12px 0", fontFamily: "JetBrains Mono, monospace", color: "#a0a0a0" }}>{t.maxLeverage}x</td>
-                    <td style={{ padding: "12px 0", fontFamily: "JetBrains Mono, monospace", color: "#a0a0a0" }}>{fmt(t.mirroredSize, 4)}</td>
+                    <td style={{ padding: "12px 0", fontFamily: "JetBrains Mono, monospace", color: "var(--fg-2)" }}>{usd(t.allocationUsd)}</td>
+                    <td style={{ padding: "12px 0", fontFamily: "JetBrains Mono, monospace", color: "var(--fg-2)" }}>{t.maxLeverage}x</td>
+                    <td style={{ padding: "12px 0", fontFamily: "JetBrains Mono, monospace", color: "var(--fg-2)" }}>{fmt(t.mirroredSize, 4)}</td>
                     <td style={{ padding: "12px 0" }}>
                       <button
                         onClick={() => togglePause(t.followId)}
-                        style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11px", padding: "8px 10px", borderRadius: "4px", border: "none", cursor: "pointer", background: t.paused ? "#1a1a1a" : "#0a2a1a", color: t.paused ? "#666" : "#10b981", minHeight: "var(--touch)" }}
+                        style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "11px", padding: "8px 10px", borderRadius: "4px", border: "none", cursor: "pointer", background: t.paused ? "var(--bg-2)" : "var(--up-faint)", color: t.paused ? "var(--fg-3)" : "var(--up)", minHeight: "var(--touch)" }}
                       >
                         {t.paused ? <Play style={{ width: "12px", height: "12px" }} /> : <Pause style={{ width: "12px", height: "12px" }} />}
                         {t.paused ? "На паузе" : "Копирует"}
@@ -187,54 +200,54 @@ export default function Portfolio({ following, followsError, setTab, togglePause
 
       <section>
         <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: "12px" }}>
-          <h2 style={{ fontSize: "16px", fontWeight: 600, color: "#fafafa", margin: 0 }}>Счёт на Lighter</h2>
+          <h2 style={{ fontSize: "16px", fontWeight: 600, color: "var(--fg)", margin: 0 }}>Счёт на Lighter</h2>
           <span style={{ fontSize: "11px", color: "var(--text-muted)", fontFamily: "JetBrains Mono, monospace" }}>GET /api/v1/account?by=index</span>
         </div>
         {!hasWallet ? (
           <div className="empty-state">
-            <div style={{ width: "28px", height: "28px", borderRadius: "50%", background: "#1a1a1a", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: "12px" }}>
+            <div style={{ width: "28px", height: "28px", borderRadius: "50%", background: "var(--bg-2)", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: "12px" }}>
               <Wallet style={{ width: "20px", height: "20px", color: "var(--text-muted)" }} />
             </div>
-            <p style={{ fontSize: "14px", color: "#a0a0a0", margin: 0 }}>Кошелёк не подключён — позиции по адресу не видны</p>
+            <p style={{ fontSize: "14px", color: "var(--fg-2)", margin: 0 }}>Кошелёк не подключён — позиции по адресу не видны</p>
             <p style={{ fontSize: "12px", color: "var(--text-muted)", marginTop: "4px", maxWidth: "400px" }}>
               Вход через Telegram даёт подписки и журнал, но сам счёт на Lighter привязан к адресу. Подключи кошелёк в шапке.
             </p>
           </div>
         ) : lighterAccountIndex == null ? (
           <div className="empty-state">
-            <p style={{ fontSize: "14px", color: "#a0a0a0", margin: 0 }}>Аккаунт на Lighter не найден</p>
+            <p style={{ fontSize: "14px", color: "var(--fg-2)", margin: 0 }}>Аккаунт на Lighter не найден</p>
             <p style={{ fontSize: "12px", color: "var(--text-muted)", marginTop: "4px", maxWidth: "400px" }}>
               Регистрация — на app.lighter.xyz. Wake читает только публичные данные счёта и никогда не просит приватный ключ.
             </p>
           </div>
         ) : accountError ? (
-          <div style={{ background: "#1a1500", border: "1px solid #3d3000", borderRadius: "6px", padding: "12px 16px", fontSize: "13px", color: "#fbbf24" }}>
+          <div style={{ background: "var(--warn-faint)", border: "1px solid var(--warn-line)", borderRadius: "6px", padding: "12px 16px", fontSize: "13px", color: "var(--warn)" }}>
             Lighter не ответил: <span style={{ fontFamily: "JetBrains Mono, monospace", fontSize: "12px" }}>{accountError}</span>
           </div>
         ) : account ? (
-          <div style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", padding: "16px" }}>
+          <div style={{ background: "var(--bg-1)", border: "1px solid var(--line)", borderRadius: "6px", padding: "16px" }}>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "16px", marginBottom: "16px" }}>
               <div>
                 <div style={{ fontSize: "12px", color: "var(--text-muted)", marginBottom: "4px" }}>Капитал</div>
-                <div style={{ fontSize: "18px", fontFamily: "JetBrains Mono, monospace", color: "#fafafa" }}>{usd(account.equityUsd, 2)}</div>
+                <div style={{ fontSize: "18px", fontFamily: "JetBrains Mono, monospace", color: "var(--fg)" }}>{usd(account.equityUsd, 2)}</div>
               </div>
               <div>
                 <div style={{ fontSize: "12px", color: "var(--text-muted)", marginBottom: "4px" }}>Нереализованный PnL</div>
-                <div style={{ fontSize: "18px", fontFamily: "JetBrains Mono, monospace", color: unrealized >= 0 ? "#10b981" : "#ef4444" }}>
+                <div style={{ fontSize: "18px", fontFamily: "JetBrains Mono, monospace", color: unrealized >= 0 ? "var(--up)" : "var(--down)" }}>
                   {unrealized >= 0 ? "+" : ""}
                   {usd(unrealized, 2)}
                 </div>
               </div>
               <div>
                 <div style={{ fontSize: "12px", color: "var(--text-muted)", marginBottom: "4px" }}>Реализованный PnL</div>
-                <div style={{ fontSize: "18px", fontFamily: "JetBrains Mono, monospace", color: account.realizedPnlUsd >= 0 ? "#10b981" : "#ef4444" }}>
+                <div style={{ fontSize: "18px", fontFamily: "JetBrains Mono, monospace", color: account.realizedPnlUsd >= 0 ? "var(--up)" : "var(--down)" }}>
                   {account.realizedPnlUsd >= 0 ? "+" : ""}
                   {usd(account.realizedPnlUsd, 2)}
                 </div>
               </div>
               <div>
                 <div style={{ fontSize: "12px", color: "var(--text-muted)", marginBottom: "4px" }}>Открытых позиций</div>
-                <div style={{ fontSize: "18px", fontFamily: "JetBrains Mono, monospace", color: "#fafafa" }}>{fmt(openPositions.length)}</div>
+                <div style={{ fontSize: "18px", fontFamily: "JetBrains Mono, monospace", color: "var(--fg)" }}>{fmt(openPositions.length)}</div>
               </div>
             </div>
 
@@ -244,7 +257,7 @@ export default function Portfolio({ following, followsError, setTab, togglePause
               <div className="table-scroll">
               <table style={{ width: "100%", fontSize: "13px", minWidth: "600px" }}>
                 <thead>
-                  <tr style={{ textAlign: "left", fontSize: "11px", color: "var(--text-muted)", borderBottom: "1px solid #1e1e1e" }}>
+                  <tr style={{ textAlign: "left", fontSize: "11px", color: "var(--text-muted)", borderBottom: "1px solid var(--line)" }}>
                     <th style={{ paddingBottom: "8px", fontWeight: 400 }}>Рынок</th>
                     <th style={{ paddingBottom: "8px", fontWeight: 400 }}>Размер</th>
                     <th style={{ paddingBottom: "8px", fontWeight: 400 }}>Средняя входа</th>
@@ -255,15 +268,15 @@ export default function Portfolio({ following, followsError, setTab, togglePause
                 </thead>
                 <tbody>
                   {openPositions.map((p) => (
-                    <tr key={p.marketId} style={{ borderBottom: "1px solid #1e1e1e" }}>
+                    <tr key={p.marketId} style={{ borderBottom: "1px solid var(--line)" }}>
                       <td style={{ padding: "10px 0" }}>
-                        <span style={{ color: "#fafafa", fontWeight: 500 }}>{p.symbol}</span>
-                        <span style={{ marginLeft: "8px", fontSize: "11px", color: p.size >= 0 ? "#10b981" : "#ef4444" }}>{p.size >= 0 ? "LONG" : "SHORT"}</span>
+                        <span style={{ color: "var(--fg)", fontWeight: 500 }}>{p.symbol}</span>
+                        <span style={{ marginLeft: "8px", fontSize: "11px", color: p.size >= 0 ? "var(--up)" : "var(--down)" }}>{p.size >= 0 ? "LONG" : "SHORT"}</span>
                       </td>
-                      <td style={{ padding: "10px 0", fontFamily: "JetBrains Mono, monospace", color: "#a0a0a0" }}>{fmt(p.size, 4)}</td>
-                      <td style={{ padding: "10px 0", fontFamily: "JetBrains Mono, monospace", color: "#a0a0a0" }}>{fmt(p.avgEntry, decimalsOf(p.marketId))}</td>
-                      <td style={{ padding: "10px 0", fontFamily: "JetBrains Mono, monospace", color: "#a0a0a0" }}>{usd(Math.abs(p.value), 0)}</td>
-                      <td style={{ padding: "10px 0", fontFamily: "JetBrains Mono, monospace", color: p.unrealizedPnl >= 0 ? "#10b981" : "#ef4444" }}>
+                      <td style={{ padding: "10px 0", fontFamily: "JetBrains Mono, monospace", color: "var(--fg-2)" }}>{fmt(p.size, 4)}</td>
+                      <td style={{ padding: "10px 0", fontFamily: "JetBrains Mono, monospace", color: "var(--fg-2)" }}>{fmt(p.avgEntry, decimalsOf(p.marketId))}</td>
+                      <td style={{ padding: "10px 0", fontFamily: "JetBrains Mono, monospace", color: "var(--fg-2)" }}>{usd(Math.abs(p.value), 0)}</td>
+                      <td style={{ padding: "10px 0", fontFamily: "JetBrains Mono, monospace", color: p.unrealizedPnl >= 0 ? "var(--up)" : "var(--down)" }}>
                         {p.unrealizedPnl >= 0 ? "+" : ""}
                         {usd(p.unrealizedPnl, 2)}
                       </td>
@@ -276,35 +289,35 @@ export default function Portfolio({ following, followsError, setTab, togglePause
             )}
           </div>
         ) : (
-          <div style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", padding: "24px", fontSize: "13px", color: "var(--text-muted)" }}>Загружаю счёт…</div>
+          <div style={{ background: "var(--bg-1)", border: "1px solid var(--line)", borderRadius: "6px", padding: "24px", fontSize: "13px", color: "var(--text-muted)" }}>Загружаю счёт…</div>
         )}
       </section>
 
       {signedIn && (
         <section>
           <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: "12px" }}>
-            <h2 style={{ fontSize: "16px", fontWeight: 600, color: "#fafafa", margin: 0 }}>Журнал копи-движка</h2>
+            <h2 style={{ fontSize: "16px", fontWeight: 600, color: "var(--fg)", margin: 0 }}>Журнал копи-движка</h2>
             <span style={{ fontSize: "11px", color: "var(--text-muted)", fontFamily: "JetBrains Mono, monospace" }}>таблица mirror_log</span>
           </div>
-          <div style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", padding: "16px" }}>
+          <div style={{ background: "var(--bg-1)", border: "1px solid var(--line)", borderRadius: "6px", padding: "16px" }}>
             {mirrorLog === null ? (
               <p style={{ fontSize: "13px", color: "var(--text-muted)", margin: 0 }}>Читаю журнал…</p>
             ) : mirrorLogError ? (
-              <p style={{ fontSize: "13px", color: "#ef4444", margin: 0 }}>
+              <p style={{ fontSize: "13px", color: "var(--down)", margin: 0 }}>
                 Не удалось загрузить журнал: {mirrorLogError}
               </p>
             ) : mirrorLog.length === 0 ? (
               <p style={{ fontSize: "13px", color: "var(--text-muted)", lineHeight: 1.6, margin: 0 }}>
-                Пусто. Строки появляются, когда <code style={{ color: "#a0a0a0" }}>leader_listener.py</code> видит изменение позиции лидера по одной из
-                твоих подписок. С <code style={{ color: "#a0a0a0" }}>WAKE_DRY_RUN=true</code> (значение по умолчанию) исход пишется как{" "}
-                <code style={{ color: "#a0a0a0" }}>dry_run</code>, ордер на Lighter не уходит. Проверить расчёт без листенера можно запросом{" "}
-                <code style={{ color: "#a0a0a0" }}>POST /simulate-mirror</code>.
+                Пусто. Строки появляются, когда <code style={{ color: "var(--fg-2)" }}>leader_listener.py</code> видит изменение позиции лидера по одной из
+                твоих подписок. С <code style={{ color: "var(--fg-2)" }}>WAKE_DRY_RUN=true</code> (значение по умолчанию) исход пишется как{" "}
+                <code style={{ color: "var(--fg-2)" }}>dry_run</code>, ордер на Lighter не уходит. Проверить расчёт без листенера можно запросом{" "}
+                <code style={{ color: "var(--fg-2)" }}>POST /simulate-mirror</code>.
               </p>
             ) : (
-              <div className="table-scroll">
+              <div className="table-scroll log-scroll" ref={attachLog}>
                 <table style={{ width: "100%", fontSize: "13px" }}>
                   <thead>
-                    <tr style={{ textAlign: "left", fontSize: "11px", color: "var(--text-muted)", borderBottom: "1px solid #1e1e1e" }}>
+                    <tr style={{ textAlign: "left", fontSize: "11px", color: "var(--text-muted)" }}>
                       <th style={{ paddingBottom: "8px", fontWeight: 400 }}>Время</th>
                       <th style={{ paddingBottom: "8px", fontWeight: 400 }}>Лидер</th>
                       <th style={{ paddingBottom: "8px", fontWeight: 400 }}>Рынок</th>
@@ -314,17 +327,22 @@ export default function Portfolio({ following, followsError, setTab, togglePause
                     </tr>
                   </thead>
                   <tbody>
-                    {mirrorLog.map((r) => (
-                      <tr key={r.id} style={{ borderBottom: "1px solid #1e1e1e" }}>
-                        <td style={{ padding: "10px 0", color: "var(--text-muted)", fontFamily: "JetBrains Mono, monospace", fontSize: "12px", whiteSpace: "nowrap" }}>{new Date(r.created_at * 1000).toLocaleString("ru-RU")}</td>
-                        <td style={{ padding: "10px 0", color: "#a0a0a0" }}>{r.leader_handle}</td>
-                        <td style={{ padding: "10px 0", color: "#fafafa" }}>
+                    {logWindow.padTop > 0 && (
+                      <tr aria-hidden="true">
+                        <td colSpan={6} style={{ height: logWindow.padTop, padding: 0, border: "none" }} />
+                      </tr>
+                    )}
+                    {mirrorLog.slice(logWindow.start, logWindow.end).map((r) => (
+                      <tr key={r.id} className="log-row">
+                        <td style={{ color: "var(--text-muted)", fontFamily: "JetBrains Mono, monospace", fontSize: "12px", whiteSpace: "nowrap" }}>{new Date(r.created_at * 1000).toLocaleString("ru-RU")}</td>
+                        <td style={{ color: "var(--fg-2)" }}>{r.leader_handle}</td>
+                        <td style={{ color: "var(--fg)" }}>
                           {symbolOf(r.market_id)}
                           {r.reduce_only === 1 && <span style={{ marginLeft: "6px", fontSize: "11px", color: "var(--text-muted)" }}>закрытие</span>}
                         </td>
-                        <td style={{ padding: "10px 0", fontFamily: "JetBrains Mono, monospace", fontSize: "12px", color: r.side === "long" ? "#10b981" : "#ef4444" }}>{r.side.toUpperCase()}</td>
-                        <td style={{ padding: "10px 0", fontFamily: "JetBrains Mono, monospace", color: "#a0a0a0" }}>{fmt(r.base_amount, 4)}</td>
-                        <td style={{ padding: "10px 0" }}>
+                        <td style={{ fontFamily: "JetBrains Mono, monospace", fontSize: "12px", color: r.side === "long" ? "var(--up)" : "var(--down)" }}>{r.side.toUpperCase()}</td>
+                        <td style={{ fontFamily: "JetBrains Mono, monospace", color: "var(--fg-2)" }}>{fmt(r.base_amount, 4)}</td>
+                        <td>
                           <span style={{ fontSize: "11px", padding: "2px 8px", borderRadius: "3px", fontFamily: "JetBrains Mono, monospace", background: statusStyle(r.status).bg, color: statusStyle(r.status).color, border: statusStyle(r.status).border ? `1px solid ${statusStyle(r.status).border}` : "none" }}>{r.status}</span>
                           {r.reason && <span style={{ marginLeft: "8px", fontSize: "12px", color: "var(--text-muted)" }}>{r.reason}</span>}
                           {r.tx_hash && (
@@ -335,6 +353,11 @@ export default function Portfolio({ following, followsError, setTab, togglePause
                         </td>
                       </tr>
                     ))}
+                    {logWindow.padBottom > 0 && (
+                      <tr aria-hidden="true">
+                        <td colSpan={6} style={{ height: logWindow.padBottom, padding: 0, border: "none" }} />
+                      </tr>
+                    )}
                   </tbody>
                 </table>
               </div>

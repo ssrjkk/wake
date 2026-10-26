@@ -106,9 +106,17 @@ async def get_market(market_id: str) -> dict | None:
         return _market_dict(m) if m else None
 
 
-async def list_markets(status: str = "open") -> list[dict]:
+async def list_markets(
+    status: str = "open", limit: int | None = None, offset: int = 0
+) -> list[dict]:
     """'open' | 'resolved' | 'all'. Резолванные нужны интерфейсу: показать исход и
-    дать забрать выигрыш, а не выбросить рынок из вида вместе с деньгами юзера."""
+    дать забрать выигрыш, а не выбросить рынок из вида вместе с деньгами юзера.
+
+    limit=None — весь список, так читает резолвер: ему нужен каждый просроченный
+    рынок, и пропустить часть из-за страницы значило бы оставить рынок без
+    резолюции. HTTP-роут передаёт страницу (см. GET /predict/markets), потому что
+    витрина без потолка росла бы вместе с числом рынков, а рисует её один
+    пользователь."""
     if status == "all":
         stmt = select(PredictMarket).order_by(PredictMarket.resolve_at.desc())
     elif status in ("open", "resolved"):
@@ -119,6 +127,8 @@ async def list_markets(status: str = "open") -> list[dict]:
         )
     else:
         raise ValueError(f"неизвестный статус фильтра: {status}")
+    if limit is not None:
+        stmt = stmt.limit(int(limit)).offset(int(offset))
     async with async_session_factory() as session:
         return [_market_dict(m) for m in (await session.scalars(stmt)).all()]
 

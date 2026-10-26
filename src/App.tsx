@@ -42,6 +42,7 @@ import {
 } from "./lib/lighter";
 import { LIGHTER_NETWORK, TELEGRAM_BOT_NAME } from "./lib/config";
 import { readEntryFromSearch } from "./lib/deeplink";
+import { useRowWindow } from "./lib/useRowWindow";
 import { TABS } from "./lib/tabs";
 import { setNetwork as setArcusNetwork } from "./lib/arcus";
 import {
@@ -105,6 +106,12 @@ const MARKETS_TABS: readonly Tab[] = [
   "funding",
   "agent",
 ];
+
+// Шаг строки окна выбора рынка: 46 px самой строки (.picker-row) плюс 4 px
+// зазора (.picker-list). Виртуализация считает позиции арифметикой, поэтому
+// высота обязана быть одной и той же с обеих сторон — проверяется гейтом
+// e2e/render-budget.spec.ts, который меряет смещение последней видимой строки.
+const PICKER_ROW_PITCH = 50;
 
 export default function App() {
   const { address, isConnected } = useAccount();
@@ -366,6 +373,14 @@ export default function App() {
       return !q || m.symbol.toUpperCase().includes(q);
     })
     .slice(0, 200);
+
+  // Книга Lighter отдаёт 246 строк (226 активных), и в mounted-виде это стоило
+  // 1 018 узлов и 615 мс на открытие окна (замер e2e/render-budget.spec.ts).
+  // Поиск по этому списку перерисовывал все двести кнопок на каждый keystroke.
+  const { attach: attachPicker, ...pickerWindow } = useRowWindow<HTMLDivElement>(
+    filteredMarkets.length,
+    PICKER_ROW_PITCH,
+  );
 
   useEffect(() => {
     if (!toast) return;
@@ -1465,46 +1480,53 @@ export default function App() {
                   </button>
                 ))}
               </div>
-              <div className="flex-1 overflow-y-auto space-y-1">
-                <p
-                  style={{
-                    fontSize: "10px",
-                    color: "var(--text-muted)",
-                    margin: "0 0 6px",
-                    lineHeight: 1.5,
-                  }}
-                >
-                  Категория определяется по списку тикеров: у книги Lighter нет
-                  поля «тип инструмента». Всё, чего в списке нет, показывается
-                  как Crypto — для отдельной строки это допущение, а не факт.
-                </p>
+              <p
+                style={{
+                  fontSize: "10px",
+                  color: "var(--text-muted)",
+                  margin: 0,
+                  lineHeight: 1.5,
+                }}
+              >
+                Категория определяется по списку тикеров: у книги Lighter нет
+                поля «тип инструмента». Всё, чего в списке нет, показывается как
+                Crypto — для отдельной строки это допущение, а не факт.
+              </p>
+              <div
+                ref={attachPicker}
+                className="overflow-y-auto picker-list"
+              >
                 {filteredMarkets.length === 0 && (
-                  <p className="text-[color:var(--text-muted)] text-sm text-center py-8 font-mono">
+                  <p className="picker-empty">
                     Ничего не найдено
                   </p>
                 )}
-                {filteredMarkets.map((m) => (
-                  <button
-                    key={m.market_id}
-                    onClick={() => {
-                      setAsset(m.symbol);
-                      setMarketPickerOpen(false);
-                      setMarketSearch("");
-                    }}
-                    className="row-button"
-                    aria-current={m.symbol === asset ? "true" : undefined}
-                  >
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium font-mono">{m.symbol}</span>
-                      <span className="text-[color:var(--text-muted)] text-xs">
-                        {categorizeMarket(m)}
+                <div style={{ height: pickerWindow.padTop }} />
+                {filteredMarkets
+                  .slice(pickerWindow.start, pickerWindow.end)
+                  .map((m) => (
+                    <button
+                      key={m.market_id}
+                      onClick={() => {
+                        setAsset(m.symbol);
+                        setMarketPickerOpen(false);
+                        setMarketSearch("");
+                      }}
+                      className="row-button picker-row"
+                      aria-current={m.symbol === asset ? "true" : undefined}
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium font-mono">{m.symbol}</span>
+                        <span className="text-[color:var(--text-muted)] text-xs">
+                          {categorizeMarket(m)}
+                        </span>
+                      </div>
+                      <span className="text-[color:var(--text-muted)] text-xs font-mono">
+                        {m.market_type}
                       </span>
-                    </div>
-                    <span className="text-[color:var(--text-muted)] text-xs font-mono">
-                      {m.market_type}
-                    </span>
-                  </button>
-                ))}
+                    </button>
+                  ))}
+                <div style={{ height: pickerWindow.padBottom }} />
               </div>
             </div>
           </Modal>
@@ -1604,7 +1626,7 @@ export default function App() {
                     const raw = e.target.valueAsNumber;
                     setAllocation(Number.isFinite(raw) ? Math.max(0, raw) : 0);
                   }}
-                  className="input-mono bg-transparent outline-none w-full"
+                  className="input-mono bg-transparent w-full"
                 />
               </div>
 

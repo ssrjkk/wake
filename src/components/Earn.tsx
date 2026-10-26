@@ -81,13 +81,13 @@ export default function Earn({ isCopyable, setTab, leaderId, leaderFeeBps, setLe
     return (
       <div className="terminal-layout terminal-stack">
         <div className="empty-state">
-          <div style={{ width: "48px", height: "48px", borderRadius: "50%", background: "#1a1a1a", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: "12px" }}>
+          <div style={{ width: "48px", height: "48px", borderRadius: "50%", background: "var(--bg-2)", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: "12px" }}>
             <Radio style={{ width: "24px", height: "24px", color: "var(--text-muted)" }} />
           </div>
-          <p style={{ fontSize: "14px", color: "#a0a0a0", marginBottom: "4px" }}>Публикация выключена</p>
+          <p style={{ fontSize: "14px", color: "var(--fg-2)", marginBottom: "4px" }}>Публикация выключена</p>
           <p style={{ fontSize: "12px", color: "var(--text-muted)", marginBottom: "16px", maxWidth: "400px" }}>
-            «Публиковать мои сделки» в Терминале записывает твой аккаунт Lighter в таблицу <code style={{ color: "#a0a0a0" }}>leaders</code> — после этого
-            карточка появляется в Discover, а сюда начинают приходить подписки из <code style={{ color: "#a0a0a0" }}>follows</code>.
+            «Публиковать мои сделки» в Терминале записывает твой аккаунт Lighter в таблицу <code style={{ color: "var(--fg-2)" }}>leaders</code> — после этого
+            карточка появляется в Discover, а сюда начинают приходить подписки из <code style={{ color: "var(--fg-2)" }}>follows</code>.
           </p>
           <button className="link-action" onClick={() => setTab("terminal")}>
             Перейти в Терминал <ChevronRight style={{ width: "16px", height: "16px" }} />
@@ -101,10 +101,10 @@ export default function Earn({ isCopyable, setTab, leaderId, leaderFeeBps, setLe
     return (
       <div className="terminal-layout terminal-stack">
         <div className="empty-state">
-          <div style={{ width: "48px", height: "48px", borderRadius: "50%", background: "#2a2000", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: "12px" }}>
-            <Radio style={{ width: "24px", height: "24px", color: "#fbbf24" }} />
+          <div style={{ width: "48px", height: "48px", borderRadius: "50%", background: "var(--warn-faint)", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: "12px" }}>
+            <Radio style={{ width: "24px", height: "24px", color: "var(--warn)" }} />
           </div>
-          <p style={{ fontSize: "14px", color: "#a0a0a0", marginBottom: "4px" }}>Переключатель включён, лидера в базе нет</p>
+          <p style={{ fontSize: "14px", color: "var(--fg-2)", marginBottom: "4px" }}>Переключатель включён, лидера в базе нет</p>
           <p style={{ fontSize: "12px", color: "var(--text-muted)", marginBottom: "16px", maxWidth: "400px" }}>
             Не удалось зарегистрировать лидера: бэкенд недоступен{lighterAccountIndex == null ? ", либо по этому адресу нет аккаунта Lighter" : ""}.
           </p>
@@ -124,56 +124,56 @@ export default function Earn({ isCopyable, setTab, leaderId, leaderFeeBps, setLe
   return (
     <div className="terminal-layout terminal-stack" style={{ gap: "12px" }}>
       <div className="terminal-main">
-        <div style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", padding: "16px", marginBottom: "12px" }}>
+        <div style={{ background: "var(--bg-1)", border: "1px solid var(--line)", borderRadius: "6px", padding: "16px", marginBottom: "12px" }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", flexWrap: "wrap" }}>
             <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-              <div style={{ width: "44px", height: "44px", borderRadius: "50%", background: avatarColor(leader?.handle ?? ""), display: "flex", alignItems: "center", justifyContent: "center", fontSize: "14px", fontWeight: 600, color: "#fff" }}>
+              <div style={{ width: "44px", height: "44px", borderRadius: "50%", background: avatarColor(leader?.handle ?? ""), display: "flex", alignItems: "center", justifyContent: "center", fontSize: "14px", fontWeight: 600, color: "var(--on-accent)" }}>
                 {shortHandle(leader?.handle ?? "?")}
               </div>
               <div>
-                <div style={{ fontSize: "14px", fontWeight: 600, color: "#fafafa" }}>{leader?.handle ?? "загрузка…"}</div>
+                <div style={{ fontSize: "14px", fontWeight: 600, color: "var(--fg)" }}>{leader?.handle ?? "загрузка…"}</div>
                 <div style={{ fontSize: "12px", color: "var(--text-muted)", fontFamily: "JetBrains Mono, monospace" }}>
                   Lighter #{leader?.lighterAccountIndex ?? lighterAccountIndex ?? "—"}
                   {leader && <> · в сети с {new Date(leader.since * 1000).toLocaleDateString("ru-RU")}</>}
                 </div>
               </div>
             </div>
-            {loadError && <span style={{ fontSize: "12px", color: "#fbbf24" }}>{loadError}</span>}
+            {loadError && <span style={{ fontSize: "12px", color: "var(--warn)" }}>{loadError}</span>}
           </div>
         </div>
 
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: "12px", marginBottom: "12px" }}>
-          <div style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", padding: "16px" }}>
+          <div style={{ background: "var(--bg-1)", border: "1px solid var(--line)", borderRadius: "6px", padding: "16px" }}>
             <div style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "8px", display: "flex", alignItems: "center", gap: "6px" }}>
               <Users style={{ width: "12px", height: "12px" }} /> Активные подписки
             </div>
-            <div style={{ fontSize: "24px", fontFamily: "JetBrains Mono, monospace", fontWeight: 600, color: "#fafafa" }}>{leader ? fmt(leader.followers) : "—"}</div>
+            <div style={{ fontSize: "24px", fontFamily: "JetBrains Mono, monospace", fontWeight: 600, color: "var(--fg)" }}>{leader ? fmt(leader.followers) : "—"}</div>
             <div style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "4px" }}>строки follows где paused = 0</div>
           </div>
-          <div style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", padding: "16px" }}>
+          <div style={{ background: "var(--bg-1)", border: "1px solid var(--line)", borderRadius: "6px", padding: "16px" }}>
             <div style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "8px", display: "flex", alignItems: "center", gap: "6px" }}>
               <DollarSign style={{ width: "12px", height: "12px" }} /> AUM в копиях
             </div>
-            <div style={{ fontSize: "24px", fontFamily: "JetBrains Mono, monospace", fontWeight: 600, color: "#fafafa" }}>{leader ? usd(aum, 0) : "—"}</div>
+            <div style={{ fontSize: "24px", fontFamily: "JetBrains Mono, monospace", fontWeight: 600, color: "var(--fg)" }}>{leader ? usd(aum, 0) : "—"}</div>
             <div style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "4px" }}>сумма allocation_usd</div>
           </div>
-          <div style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", padding: "16px" }}>
+          <div style={{ background: "var(--bg-1)", border: "1px solid var(--line)", borderRadius: "6px", padding: "16px" }}>
             <div style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "8px", display: "flex", alignItems: "center", gap: "6px" }}>
               {pnl != null && pnl >= 0 ? <TrendingUp style={{ width: "12px", height: "12px" }} /> : <TrendingDown style={{ width: "12px", height: "12px" }} />} Реализованный PnL
             </div>
-            <div style={{ fontSize: "24px", fontFamily: "JetBrains Mono, monospace", fontWeight: 600, color: pnl == null ? "#666" : pnl >= 0 ? "#10b981" : "#ef4444" }}>
+            <div style={{ fontSize: "24px", fontFamily: "JetBrains Mono, monospace", fontWeight: 600, color: pnl == null ? "var(--fg-3)" : pnl >= 0 ? "var(--up)" : "var(--down)" }}>
               {pnl == null ? "—" : `${pnl >= 0 ? "+" : ""}${usd(pnl, 0)}`}
             </div>
             <div style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "4px" }}>{pnl == null ? "Lighter не ответил" : "публичный GET /account?by=index"}</div>
           </div>
         </div>
 
-        <div style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", padding: "16px", marginBottom: "12px" }}>
+        <div style={{ background: "var(--bg-1)", border: "1px solid var(--line)", borderRadius: "6px", padding: "16px", marginBottom: "12px" }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px" }}>
             <span style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.5px", display: "flex", alignItems: "center", gap: "6px" }}>
               <Percent style={{ width: "12px", height: "12px" }} /> Комиссия за скопированную сделку
             </span>
-            <span style={{ fontFamily: "JetBrains Mono, monospace", color: "#fafafa", fontSize: "13px" }}>{(feeDraft / 100).toFixed(2)}%</span>
+            <span style={{ fontFamily: "JetBrains Mono, monospace", color: "var(--fg)", fontSize: "13px" }}>{(feeDraft / 100).toFixed(2)}%</span>
           </div>
           <input
             type="range"
@@ -182,60 +182,61 @@ export default function Earn({ isCopyable, setTab, leaderId, leaderFeeBps, setLe
             step={1}
             value={feeDraft}
             onChange={(e) => setFeeDraft(Number(e.target.value))}
-            style={{ width: "100%", accentColor: "#3b82f6", margin: "8px 0" }}
+            style={{ width: "100%", accentColor: "var(--info)", margin: "8px 0" }}
           />
           <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
             <button
               onClick={() => void saveFee()}
               disabled={feeSaving || !leader || feeDraft === leader.feeBps}
-              style={{ background: feeSaving || !leader || feeDraft === leader.feeBps ? "#333" : "#3b82f6", color: "#fff", fontSize: "12px", fontWeight: 600, padding: "8px 12px", borderRadius: "4px", border: "none", cursor: feeSaving || !leader || feeDraft === leader.feeBps ? "not-allowed" : "pointer", minHeight: "44px" }}
+              className="btn-primary"
             >
               {feeSaving ? "Записываю…" : feeDraft === leader?.feeBps ? "Сохранено" : "Сохранить в leaders.fee_bps"}
             </button>
-            {feeError && <span style={{ fontSize: "12px", color: "#ef4444" }}>{feeError}</span>}
+            {feeError && <span style={{ fontSize: "12px", color: "var(--down)" }}>{feeError}</span>}
           </div>
           <div style={{ fontSize: "11px", color: "var(--text-muted)", marginTop: "8px" }}>
             Сейчас в базе: {(feeBps / 100).toFixed(2)}% — это значение видят подписчики в Discover.
           </div>
         </div>
 
-        <div style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", padding: "16px", marginBottom: "12px" }}>
+        <div style={{ background: "var(--bg-1)", border: "1px solid var(--line)", borderRadius: "6px", padding: "16px", marginBottom: "12px" }}>
           <div style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "8px" }}>Сколько это может быть в месяц</div>
           <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "12px" }}>
-            <span style={{ fontSize: "13px", color: "#a0a0a0" }}>Оборотов на подписчика в месяц</span>
+            <span style={{ fontSize: "13px", color: "var(--fg-2)" }}>Оборотов на подписчика в месяц</span>
             <input
               type="number"
               min={0}
               max={200}
               value={turnsPerMonth}
               onChange={(e) => setTurnsPerMonth(Math.max(0, Number(e.target.value)))}
-              style={{ background: "#1a1a1a", border: "1px solid #2a2a2a", borderRadius: "4px", padding: "8px", width: "100px", color: "#fafafa", fontSize: "13px", fontFamily: "JetBrains Mono, monospace", outline: "none" }}
+              className="input-mono"
+              style={{ width: "100px" }}
             />
           </div>
-          <div style={{ fontFamily: "JetBrains Mono, monospace", fontSize: "13px", color: "#a0a0a0", marginBottom: "8px" }}>
-            {usd(aum, 0)} × {feeBps} bps × {turnsPerMonth} = <span style={{ color: "#fbbf24" }}>{usd(projected, 2)}</span>
+          <div style={{ fontFamily: "JetBrains Mono, monospace", fontSize: "13px", color: "var(--fg-2)", marginBottom: "8px" }}>
+            {usd(aum, 0)} × {feeBps} bps × {turnsPerMonth} = <span style={{ color: "var(--warn)" }}>{usd(projected, 2)}</span>
           </div>
           <p style={{ fontSize: "12px", color: "var(--text-muted)", margin: 0 }}>
             Арифметика по твоему допущению об обороте, а не начисление: в репозитории нет кода, который удерживает fee_bps со сделок подписчика.
-            Комиссия сейчас — объявленное условие в таблице <code style={{ color: "#a0a0a0" }}>leaders</code>, которое видно в Discover, но которое пока
-            не списывается. Сбор появится вместе с расчётным контуром поверх <code style={{ color: "#a0a0a0" }}>mirror_log</code>.
+            Комиссия сейчас — объявленное условие в таблице <code style={{ color: "var(--fg-2)" }}>leaders</code>, которое видно в Discover, но которое пока
+            не списывается. Сбор появится вместе с расчётным контуром поверх <code style={{ color: "var(--fg-2)" }}>mirror_log</code>.
           </p>
         </div>
 
-        <div style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", padding: "16px", marginBottom: "12px" }}>
+        <div style={{ background: "var(--bg-1)", border: "1px solid var(--line)", borderRadius: "6px", padding: "16px", marginBottom: "12px" }}>
           <div style={{ fontSize: "11px", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "12px" }}>Подписчики</div>
           {!follows ? (
             <p style={{ fontSize: "13px", color: "var(--text-muted)" }}>Читаю follows…</p>
           ) : follows.length === 0 ? (
             <p style={{ fontSize: "13px", color: "var(--text-muted)" }}>
               На тебя пока никто не подписан. Карточка появляется в Discover сразу после регистрации лидера — подписчик выбирает аллокацию и плечо,
-              они попадают в <code style={{ color: "#a0a0a0" }}>follows</code>.
+              они попадают в <code style={{ color: "var(--fg-2)" }}>follows</code>.
             </p>
           ) : (
             <div className="table-scroll">
             <table style={{ width: "100%", fontSize: "13px", minWidth: "500px" }}>
               <thead>
-                <tr style={{ textAlign: "left", fontSize: "11px", color: "var(--text-muted)", borderBottom: "1px solid #1e1e1e" }}>
+                <tr style={{ textAlign: "left", fontSize: "11px", color: "var(--text-muted)", borderBottom: "1px solid var(--line)" }}>
                   <th style={{ paddingBottom: "8px", fontWeight: 400 }}>Подписчик</th>
                   <th style={{ paddingBottom: "8px", fontWeight: 400 }}>Аллокация</th>
                   <th style={{ paddingBottom: "8px", fontWeight: 400 }}>Плечо</th>
@@ -245,13 +246,13 @@ export default function Earn({ isCopyable, setTab, leaderId, leaderFeeBps, setLe
               </thead>
               <tbody>
                 {follows.map((f) => (
-                  <tr key={f.id} style={{ borderBottom: "1px solid #1e1e1e" }}>
-                    <td style={{ padding: "10px 0", fontFamily: "JetBrains Mono, monospace", color: "#a0a0a0", fontSize: "12px" }} title={f.follower_id}>
+                  <tr key={f.id} style={{ borderBottom: "1px solid var(--line)" }}>
+                    <td style={{ padding: "10px 0", fontFamily: "JetBrains Mono, monospace", color: "var(--fg-2)", fontSize: "12px" }} title={f.follower_id}>
                       {f.follower_id.slice(0, 8)}…
                     </td>
-                    <td style={{ padding: "10px 0", fontFamily: "JetBrains Mono, monospace", color: "#fafafa" }}>{usd(f.allocation_usd, 0)}</td>
-                    <td style={{ padding: "10px 0", fontFamily: "JetBrains Mono, monospace", color: "#a0a0a0" }}>{f.max_leverage}x</td>
-                    <td style={{ padding: "10px 0", fontFamily: "JetBrains Mono, monospace", color: "#a0a0a0" }}>{fmt(f.current_mirrored_size, 4)}</td>
+                    <td style={{ padding: "10px 0", fontFamily: "JetBrains Mono, monospace", color: "var(--fg)" }}>{usd(f.allocation_usd, 0)}</td>
+                    <td style={{ padding: "10px 0", fontFamily: "JetBrains Mono, monospace", color: "var(--fg-2)" }}>{f.max_leverage}x</td>
+                    <td style={{ padding: "10px 0", fontFamily: "JetBrains Mono, monospace", color: "var(--fg-2)" }}>{fmt(f.current_mirrored_size, 4)}</td>
                     <td style={{ padding: "10px 0", fontFamily: "JetBrains Mono, monospace", color: "var(--text-muted)", fontSize: "11px" }}>{new Date(f.created_at * 1000).toLocaleDateString("ru-RU")}</td>
                   </tr>
                 ))}
@@ -265,10 +266,10 @@ export default function Earn({ isCopyable, setTab, leaderId, leaderFeeBps, setLe
         </div>
 
         <p style={{ fontSize: "12px", color: "var(--text-muted)" }}>
-          Чтобы сделки действительно копировались, на сервере запущен <code style={{ color: "#a0a0a0" }}>backend/leader_listener.py</code>: он слушает
-          позиции лидера, считает <code style={{ color: "#a0a0a0" }}>mirror_engine.compute_mirror_plan()</code> по каждой активной подписке и пишет итог
-          в <code style={{ color: "#a0a0a0" }}>mirror_log</code>. Пока <code style={{ color: "#a0a0a0" }}>WAKE_DRY_RUN=true</code> (значение по умолчанию),
-          статус строки — <code style={{ color: "#a0a0a0" }}>dry_run</code>, ордер на Lighter не уходит.
+          Чтобы сделки действительно копировались, на сервере запущен <code style={{ color: "var(--fg-2)" }}>backend/leader_listener.py</code>: он слушает
+          позиции лидера, считает <code style={{ color: "var(--fg-2)" }}>mirror_engine.compute_mirror_plan()</code> по каждой активной подписке и пишет итог
+          в <code style={{ color: "var(--fg-2)" }}>mirror_log</code>. Пока <code style={{ color: "var(--fg-2)" }}>WAKE_DRY_RUN=true</code> (значение по умолчанию),
+          статус строки — <code style={{ color: "var(--fg-2)" }}>dry_run</code>, ордер на Lighter не уходит.
         </p>
       </div>
     </div>

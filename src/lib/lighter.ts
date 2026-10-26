@@ -462,6 +462,33 @@ export async function listLeaders(): Promise<LeaderRow[]> {
   return backendJson<LeaderRow[]>("/leaders");
 }
 
+// Витрина лидеров одним ответом (backend/api/copy_trading.py): строка leaders +
+// подписчики + снимок счёта Lighter. Поштучная сборка на фронте стоила два
+// запроса на карточку — 80 запросов на экран из 40 лидеров (замер
+// e2e/render-budget.spec.ts); здесь сервер читает их один раз на всех и кэширует.
+export type HydratedLeaderRow = LeaderRow & {
+  follower_count: number;
+  total_aum_usd: number;
+  account: {
+    equity_usd: number;
+    realized_pnl_usd: number;
+    positions: {
+      market_id: number;
+      symbol: string;
+      size: number;
+      avg_entry: number;
+      value: number;
+      unrealized_pnl: number;
+      realized_pnl: number;
+      liquidation_price: number;
+    }[];
+  } | null;
+};
+
+export async function listHydratedLeaders(): Promise<HydratedLeaderRow[]> {
+  return backendJson<HydratedLeaderRow[]>("/leaders/hydrated");
+}
+
 // Ордер подписывает и отправляет локальный backend/signing_service.py; адрес — из
 // VITE_SIGNING_SERVICE_URL. Если сервис не запущен, запрос падает явной ошибкой —
 // интерфейс не делает вид, что сделка прошла. Пока у сервиса включён сухой ход

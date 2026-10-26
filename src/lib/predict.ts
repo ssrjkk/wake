@@ -49,8 +49,19 @@ export type PredictPosition = {
 // Все запросы идут через backendJson (lib/backend.ts): там различены «бэкенд не
 // отвечает», «бэкенд вернул ошибку» и «бэкенда нет вовсе» — на хостинге SPA-заглушка
 // отвечает 200 + HTML, и голый res.json() печатал бы SyntaxError вместо причины.
-export function getPredictMarkets(status: PredictStatus = "open"): Promise<PredictMarket[]> {
-  return backendJson<PredictMarket[]>(`/predict/markets?status=${status}`);
+// Размер страницы витрины. Бэкенд ограничивает ответ (GET /predict/markets,
+// limit ≤ 200) и порядок — по дедлайну, поэтому первая страница это «что
+// закрывается раньше», а не «что случайнее».
+export const PREDICT_PAGE_SIZE = 50;
+
+export function getPredictMarkets(
+  status: PredictStatus = "open",
+  offset = 0,
+  limit = PREDICT_PAGE_SIZE,
+): Promise<PredictMarket[]> {
+  return backendJson<PredictMarket[]>(
+    `/predict/markets?status=${status}&limit=${limit}&offset=${offset}`,
+  );
 }
 
 // Позиции юзера: бэкенд отдаёт только строки с shares > 0, поэтому полностью

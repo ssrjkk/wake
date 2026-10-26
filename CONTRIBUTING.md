@@ -108,7 +108,7 @@ Four rules the suite enforces on itself (the first three come from `backend/test
 npm ci
 npm run lint                      # ESLint over src/, e2e/ and the config files
 npx tsc --noEmit
-npm run test:run                  # vitest: 216 tests in 16 files
+npm run test:run                  # vitest: 228 tests in 17 files
 node scripts/brand-assets.mjs       # re-render public/og.png and apple-touch-icon.png
 npm run build
 PW_PORT=5178 npx playwright test  # first run needs `npx playwright install chromium`
@@ -116,9 +116,40 @@ PW_PORT=5178 npx playwright test  # first run needs `npx playwright install chro
 
 `src/components/theme.gate.test.ts` keeps the panel honest about its own style:
 no gradients, no shadows and no blur in components (elevation lives in
-`index.css`, where the theme says so), and no colour literal outside the token
-palette — the list of legacy literals it carries may only shrink, and the test
-fails if an entry stops being used.
+`index.css`, where the theme says so), no `outline: none` without a focus ring,
+and no colour literal outside the token palette — `rgba(...)` included, since a
+translucent literal is the same escape from the palette wearing a different hat.
+The list of legacy literals is now empty — every colour a panel paints is a
+token — and the same file computes WCAG contrast from the token values
+themselves: each text token on each panel surface must clear 4.5:1, dark ink on
+a filled status chip too, and the focus ring 3:1. A third table takes the status
+tints seriously as backgrounds: a text token is measured against its own
+translucent underlay composited onto every panel, which is where `#ef4444` on
+`--down-faint` sat at 4.44:1 while every "text on panel" check stayed green.
+These are numbers from the palette, not opinions about a screenshot.
+
+`e2e/design-gate.spec.ts` measures the same promises in a browser, on rendered
+DOM: text that disappears without a scroll container and without an ellipsis,
+contrast computed from resolved `getComputedStyle` colours with every translucent
+layer composited (an opaque-ancestor-only probe cannot see a chip's own
+background), the focus ring under real Tab navigation (`element.focus()` does not
+trigger `:focus-visible` after a click, so a probe that calls it finds no
+violation to find), touch target sizes (≥44 px at 390/320, ≥24 px under a
+pointer), and horizontal overflow at four widths — both `scrollWidth` of the
+root and the `scrollX` the page reaches when asked to pan, because a wide table
+inside a static scroll container can leave the body at 320 px while the document
+still slides 451 px sideways. The data behind those panels comes from
+`e2e/fixtures.ts`, whose row counts are measured from live responses (Lighter
+`/orderBooks` 246 rows, `/funding-rates` 733, Arcus `/markets` 70, the backend's
+`MAJOR_PERPS` 18, the `/mirror-log` ceiling 200) — a budget test on invented
+volumes either misses the real slowdown or fails without cause.
+
+`e2e/render-budget.spec.ts` then puts numbers on what those volumes cost: nodes
+per panel, page height, mounted rows in the market picker (windowed, not all
+246), whether the copy journal scrolls inside its own region instead of growing
+a 10 317 px page, and how many requests a leader list costs (one hydrated
+endpoint, not two requests per card). Thresholds are the measured values with
+headroom: they may go down, and the test is written to fail if they go up.
 
 CI runs `npm run test:run -- --coverage` and `npm run test:e2e`. The e2e suite drives the frontend alone against the vite dev server — its route stubs intercept everything outside their own origin, so it neither needs nor tests the backend.
 
@@ -298,7 +329,7 @@ alembic check
 
 ## Тесты
 
-**Бэкенд** — одна команда, 548 тестов, против настоящего PostgreSQL:
+**Бэкенд** — одна команда, 613 тестов, против настоящего PostgreSQL:
 
 ```bash
 cd backend
@@ -320,7 +351,7 @@ python -m pytest . -q
 npm ci
 npm run lint                      # ESLint по src/, e2e/ и конфигам
 npx tsc --noEmit
-npm run test:run                  # vitest: 216 тестов в 16 файлах
+npm run test:run                  # vitest: 228 тестов в 17 файлах
 node scripts/brand-assets.mjs       # перерендерить public/og.png и apple-touch-icon.png
 npm run build
 PW_PORT=5178 npx playwright test  # первый прогон требует `npx playwright install chromium`
@@ -328,8 +359,40 @@ PW_PORT=5178 npx playwright test  # первый прогон требует `np
 
 `src/components/theme.gate.test.ts` следит за стилем самой панели: ни градиентов,
 ни теней, ни блюра в компонентах (приподнятость слоя живёт в `index.css`, где это
-решила тема) и ни одного цвета вне палитры токенов — список наследия умеет только
-сохнуть, и тест падает, если значение из него исчезло из кода.
+решила тема), ни одного `outline: none` без кольца фокуса и ни одного цвета вне
+палитры токенов — `rgba(...` там же, потому что прозрачный литерал есть тот же
+выход за палитру, только в другой шапке. Список наследия теперь пуст: вся окраска
+панелей идёт из токенов. Тем же файлом считается и контраст — по значениям
+токенов, а не глазами: каждый текстовый токен на каждой поверхности панели
+обязан давать 4.5:1, тёмные чернила на залитом статусном чипе тоже, кольцо
+фокуса — 3:1. Третья таблица относит к делу подложки статусов: текст меряется
+против его же полупрозрачного слоя, смешанного с каждой поверхностью панели, —
+именно там `#ef4444` на `--down-faint` давал 4.44:1, пока все проверки «текст на
+панели» оставались зелёными.
+
+`e2e/design-gate.spec.ts` меряет те же обещания в браузере на живом DOM: текст,
+который исчезает без контейнера со скроллом и без многоточия; контраст по
+фактически вычисленным `getComputedStyle` цветам, где смешивается каждый
+полупрозрачный слой до первого непрозрачного предка (проверка, которая берёт
+только непрозрачного предка, не видит подложку самого чипа); кольцо фокуса при
+настоящей Tab-навигации (после клика `element.focus()` не включает
+`:focus-visible`, и проверка, которая зовёт его сама, нарушения не нашла бы
+вообще); размеры целей касания (≥44 px на 390/320 и ≥24 px под указателем) и
+горизонтальное переполнение на четырёх ширинах — и по `scrollWidth` корня, и по
+`scrollX`, до которого страница действительно доезжает: широкая таблица внутри
+статичного скролл-контейнера оставляет `body` на 320 px, пока документ едет
+боком на 451. Данные для панелей берёт `e2e/fixtures.ts`, а объёмы в нём —
+замеры живых ответов (Lighter `/orderBooks` — 246 строк, `/funding-rates` — 733,
+Arcus `/markets` — 70, `MAJOR_PERPS` бэкенда — 18, потолок `/mirror-log` — 200):
+бюджет на выдуманном объёме либо не замечает настоящую просадку, либо краснеет
+без причины.
+
+`e2e/render-budget.spec.ts` ставит числа на то, сколько этот объём стоит: узлов
+на панель, высота страницы, сколько строк окна рынка живёт в DOM (окно, а не все
+246), скроллится ли журнал копи-движка внутри своей области вместо страницы в
+10 317 px и сколько запросов стоит список лидеров (один гидратированный эндпоинт
+вместо двух на карточку). Пороги — замер с запасом: они могут только уменьшаться,
+и тест написан так, чтобы рост его валил.
 
 CI запускает `npm run test:run -- --coverage` и `npm run test:e2e`. E2e-проверка работает только с фронтом против dev-сервера vite: её route-заглушки отсекают весь трафик вне собственного origin, поэтому бэкенд ей не нужен и не проверяется.
 

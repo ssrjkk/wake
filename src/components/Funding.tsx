@@ -166,7 +166,7 @@ export default function Funding({ markets, setToast }: FundingProps) {
       <div className="terminal-main">
         <div className="terminal-header" style={{ flexDirection: "column", alignItems: "flex-start" }}>
           <div style={{ display: "flex", alignItems: "center", gap: "12px", width: "100%" }}>
-            <h2 style={{ fontSize: "16px", fontWeight: 600, color: "#fafafa", margin: 0 }}>Funding и carry</h2>
+            <h2 style={{ fontSize: "16px", fontWeight: 600, color: "var(--fg)", margin: 0 }}>Funding и carry</h2>
             <button
               onClick={() => {
                 void getFundingRates()
@@ -180,7 +180,7 @@ export default function Funding({ markets, setToast }: FundingProps) {
                   })
                   .catch((e) => setLoadError(errorText(e)));
               }}
-              style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: "6px", fontSize: "11px", color: "#888", background: "transparent", border: "1px solid #2a2a2a", borderRadius: "4px", padding: "6px 10px", cursor: "pointer" }}
+              style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: "6px", fontSize: "11px", color: "var(--fg-2)", background: "transparent", border: "1px solid var(--line-strong)", borderRadius: "4px", padding: "6px 10px", cursor: "pointer" }}
             >
               <RefreshCw style={{ width: "12px", height: "12px" }} /> обновить
             </button>
@@ -194,16 +194,16 @@ export default function Funding({ markets, setToast }: FundingProps) {
         </div>
 
       <div className="terminal-header" style={{ gap: "16px", flexWrap: "wrap" }}>
-        <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "11px", color: "#ccc", cursor: "pointer" }}>
+        <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "11px", color: "var(--fg-2)", cursor: "pointer" }}>
           <input
             type="checkbox"
             checked={onlyDeltaNeutral}
             onChange={(e) => setOnlyDeltaNeutral(e.target.checked)}
-            style={{ accentColor: "#3b82f6" }}
+            style={{ accentColor: "var(--info)" }}
           />
           только там, где есть и перп, и спот
         </label>
-        <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "11px", color: "#ccc" }}>
+        <label style={{ display: "flex", alignItems: "center", gap: "8px", fontSize: "11px", color: "var(--fg-2)" }}>
           <Percent style={{ width: "12px", height: "12px" }} />
           порог APR
           <input
@@ -216,7 +216,7 @@ export default function Funding({ markets, setToast }: FundingProps) {
               const raw = e.target.valueAsNumber;
               setMinApy(Number.isFinite(raw) ? Math.max(0, raw) : 0);
             }}
-            style={{ width: "60px", background: "#0a0a0a", border: "1px solid #1e1e1e", borderRadius: "4px", padding: "4px 8px", color: "#fafafa", fontFamily: "'JetBrains Mono', monospace", fontSize: "11px" }}
+            style={{ width: "60px", background: "var(--on-accent)", border: "1px solid var(--line)", borderRadius: "4px", padding: "4px 8px", color: "var(--fg)", fontFamily: "'JetBrains Mono', monospace", fontSize: "11px" }}
           />
           %
         </label>
@@ -227,16 +227,16 @@ export default function Funding({ markets, setToast }: FundingProps) {
       </div>
 
       {loadError && (
-        <div className="terminal-header" style={{ color: "#fbbf24", fontSize: "12px" }}>
+        <div className="terminal-header" style={{ color: "var(--warn)", fontSize: "12px" }}>
           funding-rates не ответили: {loadError}
         </div>
       )}
 
-      <div style={{ background: "#111", border: "1px solid #1e1e1e", borderRadius: "6px", overflow: "hidden" }}>
+      <div style={{ background: "var(--bg-1)", border: "1px solid var(--line)", borderRadius: "6px", overflow: "hidden" }}>
         <div className="table-scroll">
         <table style={{ width: "100%", fontSize: "12px", borderCollapse: "collapse", minWidth: "700px" }}>
           <thead>
-            <tr style={{ textAlign: "left", fontSize: "11px", color: "var(--text-muted)", borderBottom: "1px solid #1e1e1e" }}>
+            <tr style={{ textAlign: "left", fontSize: "11px", color: "var(--text-muted)", borderBottom: "1px solid var(--line)" }}>
               <th style={{ padding: "10px 16px", fontWeight: 500 }}>Актив</th>
               <th style={{ padding: "10px 8px", fontWeight: 500, textAlign: "right" }}>Lighter, %/час</th>
               <th style={{ padding: "10px 8px", fontWeight: 500, textAlign: "right" }}>APR</th>
@@ -244,7 +244,7 @@ export default function Funding({ markets, setToast }: FundingProps) {
               <th style={{ padding: "10px 8px", fontWeight: 500, textAlign: "right" }}>Bybit, %/эпоху</th>
               <th style={{ padding: "10px 8px", fontWeight: 500, textAlign: "right" }}>Hyperliquid, %/эпоху</th>
               <th style={{ padding: "10px 8px", fontWeight: 500, textAlign: "right" }}>
-                Arcus{arcusError && <span style={{ color: "#ef4444", fontSize: "10px", display: "block", fontWeight: 400 }}>ошибка загрузки</span>}
+                Arcus{arcusError && <span style={{ color: "var(--down)", fontSize: "10px", display: "block", fontWeight: 400 }}>ошибка загрузки</span>}
               </th>
               <th style={{ padding: "10px 8px", fontWeight: 500 }}>Спот-нога</th>
               <th style={{ padding: "10px 8px" }}></th>
@@ -254,33 +254,33 @@ export default function Funding({ markets, setToast }: FundingProps) {
             {visible.map((r) => {
               const ref = (name: string) => r.reference.find((x) => x.exchange === name)?.rate;
               return (
-                <tr key={r.marketId} style={{ borderBottom: "1px solid #1a1a1a", transition: "background 0.1s" }}
-                  onMouseEnter={(e) => e.currentTarget.style.background = "#1a1a1a"}
+                <tr key={r.marketId} style={{ borderBottom: "1px solid var(--bg-2)", transition: "background 0.1s" }}
+                  onMouseEnter={(e) => e.currentTarget.style.background = "var(--bg-2)"}
                   onMouseLeave={(e) => e.currentTarget.style.background = "transparent"}
                 >
-                  <td style={{ padding: "8px 16px", color: "#fafafa", fontWeight: 500 }}>
+                  <td style={{ padding: "8px 16px", color: "var(--fg)", fontWeight: 500 }}>
                     {r.symbol}
                     {r.perp == null && <span style={{ color: "var(--text-muted)", fontSize: "10px", marginLeft: "6px" }}>нет перпа</span>}
                   </td>
-                  <td style={{ padding: "8px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: r.rate >= 0 ? "#10b981" : "#ef4444" }}>
+                  <td style={{ padding: "8px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: r.rate >= 0 ? "var(--up)" : "var(--down)" }}>
                     {(r.rate * 100).toFixed(4)}
                   </td>
-                  <td style={{ padding: "8px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: "#fafafa" }}>{r.apy >= 0 ? "+" : ""}{r.apy.toFixed(1)}%</td>
+                  <td style={{ padding: "8px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: "var(--fg)" }}>{r.apy >= 0 ? "+" : ""}{r.apy.toFixed(1)}%</td>
                   {["binance", "bybit", "hyperliquid"].map((exch) => (
-                    <td key={exch} style={{ padding: "8px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: "#888" }}>
+                    <td key={exch} style={{ padding: "8px", textAlign: "right", fontFamily: "'JetBrains Mono', monospace", color: "var(--fg-2)" }}>
                       {ref(exch) != null ? `${(ref(exch)! * 100).toFixed(4)}` : "—"}
                     </td>
                   ))}
                   <td style={{ padding: "8px", textAlign: "right" }}>
                     {arcusPerps.some((p) => p.baseAsset === r.symbol) ? (
-                      <span style={{ fontSize: "10px", color: "#10b981" }}>есть перп</span>
+                      <span style={{ fontSize: "10px", color: "var(--up)" }}>есть перп</span>
                     ) : (
                       <span style={{ fontSize: "10px", color: "var(--text-muted)" }}>—</span>
                     )}
                   </td>
                   <td style={{ padding: "8px" }}>
                     {r.spot ? (
-                      <span style={{ fontSize: "10px", color: "#3b82f6" }}>{r.spot.symbol}</span>
+                      <span style={{ fontSize: "10px", color: "var(--info)" }}>{r.spot.symbol}</span>
                     ) : (
                       <span style={{ fontSize: "10px", color: "var(--text-muted)" }}>—</span>
                     )}
@@ -289,7 +289,8 @@ export default function Funding({ markets, setToast }: FundingProps) {
                     <button
                       onClick={() => void runCheck(r)}
                       disabled={r.perp == null || busy}
-                      style={{ fontSize: "11px", color: r.perp == null || busy ? "#666" : "#3b82f6", background: "transparent", border: "none", cursor: r.perp == null || busy ? "default" : "pointer", display: "flex", alignItems: "center", gap: "4px", marginLeft: "auto" }}
+                      className="link-action"
+                      style={{ fontSize: "11px", marginLeft: "auto", color: r.perp == null || busy ? "var(--fg-3)" : undefined }}
                     >
                       проверить <ArrowUpRight style={{ width: "12px", height: "12px" }} />
                     </button>
@@ -306,9 +307,9 @@ export default function Funding({ markets, setToast }: FundingProps) {
             )}
             {rates == null &&
               [0, 1, 2, 3, 4].map((i) => (
-                <tr key={i} style={{ borderBottom: "1px solid #1a1a1a" }}>
+                <tr key={i} style={{ borderBottom: "1px solid var(--bg-2)" }}>
                   <td colSpan={9} style={{ padding: "8px" }}>
-                    <div style={{ height: "16px", background: "#1a1a1a", borderRadius: "3px", animation: "wakeShimmer 1.6s ease-in-out infinite" }} />
+                    <div style={{ height: "16px", background: "var(--bg-2)", borderRadius: "3px", animation: "wakeShimmer 1.6s ease-in-out infinite" }} />
                   </td>
                 </tr>
               ))}
@@ -330,24 +331,24 @@ export default function Funding({ markets, setToast }: FundingProps) {
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: "12px", marginBottom: "16px" }}>
               <div>
                 <div style={{ color: "var(--text-muted)", fontSize: "11px", marginBottom: "4px" }}>Нога перпа</div>
-                <div style={{ color: "#ef4444", fontFamily: "'JetBrains Mono', monospace", fontSize: "12px", textTransform: "uppercase" }}>{check.opportunity.perp_side}</div>
+                <div style={{ color: "var(--down)", fontFamily: "'JetBrains Mono', monospace", fontSize: "12px", textTransform: "uppercase" }}>{check.opportunity.perp_side}</div>
               </div>
               <div>
                 <div style={{ color: "var(--text-muted)", fontSize: "11px", marginBottom: "4px" }}>Нога спота</div>
-                <div style={{ color: "#10b981", fontFamily: "'JetBrains Mono', monospace", fontSize: "12px" }}>{check.opportunity.spot_needed ? "buy" : "не нужна"}</div>
+                <div style={{ color: "var(--up)", fontFamily: "'JetBrains Mono', monospace", fontSize: "12px" }}>{check.opportunity.spot_needed ? "buy" : "не нужна"}</div>
               </div>
               <div>
                 <div style={{ color: "var(--text-muted)", fontSize: "11px", marginBottom: "4px" }}>APR простая</div>
-                <div style={{ color: "#fafafa", fontFamily: "'JetBrains Mono', monospace", fontSize: "12px" }}>{(check.opportunity.annualized_yield * 100).toFixed(1)}%</div>
+                <div style={{ color: "var(--fg)", fontFamily: "'JetBrains Mono', monospace", fontSize: "12px" }}>{(check.opportunity.annualized_yield * 100).toFixed(1)}%</div>
               </div>
               <div>
                 <div style={{ color: "var(--text-muted)", fontSize: "11px", marginBottom: "4px" }}>Ставка за час</div>
-                <div style={{ color: "#fafafa", fontFamily: "'JetBrains Mono', monospace", fontSize: "12px" }}>{(check.opportunity.hourly_rate * 100).toFixed(4)}%</div>
+                <div style={{ color: "var(--fg)", fontFamily: "'JetBrains Mono', monospace", fontSize: "12px" }}>{(check.opportunity.hourly_rate * 100).toFixed(4)}%</div>
               </div>
             </div>
           ) : (
             !busy && (
-              <p style={{ color: "#888", fontSize: "12px", marginBottom: "16px" }}>
+              <p style={{ color: "var(--fg-2)", fontSize: "12px", marginBottom: "16px" }}>
                 {selected.rate < 0
                   ? `Отрицательный funding: платят шорты, а лонгам. Симметричная нога требовала бы займа базового актива.`
                   : `APR ${(Math.abs(selected.apy)).toFixed(1)}% ниже порога ${minApy}%.`}
@@ -355,11 +356,11 @@ export default function Funding({ markets, setToast }: FundingProps) {
             )
           )}
 
-          <div style={{ borderTop: "1px solid #1e1e1e", paddingTop: "12px", width: "100%" }}>
+          <div style={{ borderTop: "1px solid var(--line)", paddingTop: "12px", width: "100%" }}>
             <div style={{ display: "flex", flexWrap: "wrap", alignItems: "flex-end", gap: "12px" }}>
               <div>
-                <label style={{ fontSize: "11px", color: "#ccc", marginBottom: "4px", display: "block" }}>Капитал на обе ноги, USD</label>
-                <div style={{ display: "flex", alignItems: "center", background: "#0a0a0a", border: "1px solid #1e1e1e", borderRadius: "4px", padding: "8px 12px" }}>
+                <label style={{ fontSize: "11px", color: "var(--fg-2)", marginBottom: "4px", display: "block" }}>Капитал на обе ноги, USD</label>
+                <div style={{ display: "flex", alignItems: "center", background: "var(--on-accent)", border: "1px solid var(--line)", borderRadius: "4px", padding: "8px 12px" }}>
                   <span style={{ color: "var(--text-muted)", marginRight: "4px" }}>$</span>
                   <input
                     type="number"
@@ -372,37 +373,38 @@ export default function Funding({ markets, setToast }: FundingProps) {
                       const raw = e.target.valueAsNumber;
                       setCapital(Number.isFinite(raw) ? Math.max(0, raw) : 0);
                     }}
-                    style={{ background: "transparent", color: "#fafafa", fontFamily: "'JetBrains Mono', monospace", border: "none", outline: "none", width: "100px" }}
+                    className="input-plain"
+                    style={{ width: "100px" }}
                   />
                 </div>
               </div>
               <button
                 onClick={() => void runSizing(selected)}
                 disabled={busy || !selected.spot}
-                style={{ background: busy || !selected.spot ? "#333" : "#3b82f6", color: "#fafafa", fontSize: "12px", fontWeight: 600, padding: "8px 16px", border: "none", borderRadius: "4px", cursor: busy || !selected.spot ? "default" : "pointer" }}
+                className="btn-primary"
               >
                 {busy ? "Считаю…" : "Разложить по ногам"}
               </button>
-              {!selected.spot && <span style={{ fontSize: "11px", color: "#fbbf24" }}>нет спот-двойника</span>}
+              {!selected.spot && <span style={{ fontSize: "11px", color: "var(--warn)" }}>нет спот-двойника</span>}
             </div>
 
             {sizing?.position && (
               <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: "12px", marginTop: "16px" }}>
                 <div>
                   <div style={{ color: "var(--text-muted)", fontSize: "11px", marginBottom: "4px" }}>Перп, notional</div>
-                  <div style={{ color: "#fafafa", fontFamily: "'JetBrains Mono', monospace", fontSize: "12px" }}>${fmt(sizing.position.perp_notional_usd, 2)}</div>
+                  <div style={{ color: "var(--fg)", fontFamily: "'JetBrains Mono', monospace", fontSize: "12px" }}>${fmt(sizing.position.perp_notional_usd, 2)}</div>
                 </div>
                 <div>
                   <div style={{ color: "var(--text-muted)", fontSize: "11px", marginBottom: "4px" }}>Спот, notional</div>
-                  <div style={{ color: "#fafafa", fontFamily: "'JetBrains Mono', monospace", fontSize: "12px" }}>${fmt(sizing.position.spot_notional_usd, 2)}</div>
+                  <div style={{ color: "var(--fg)", fontFamily: "'JetBrains Mono', monospace", fontSize: "12px" }}>${fmt(sizing.position.spot_notional_usd, 2)}</div>
                 </div>
                 <div>
                   <div style={{ color: "var(--text-muted)", fontSize: "11px", marginBottom: "4px" }}>Перп, базовая</div>
-                  <div style={{ color: "#fafafa", fontFamily: "'JetBrains Mono', monospace", fontSize: "12px" }}>{sizing.position.perp_base_amount}</div>
+                  <div style={{ color: "var(--fg)", fontFamily: "'JetBrains Mono', monospace", fontSize: "12px" }}>{sizing.position.perp_base_amount}</div>
                 </div>
                 <div>
                   <div style={{ color: "var(--text-muted)", fontSize: "11px", marginBottom: "4px" }}>Спот, базовая</div>
-                  <div style={{ color: "#fafafa", fontFamily: "'JetBrains Mono', monospace", fontSize: "12px" }}>{sizing.position.spot_base_amount}</div>
+                  <div style={{ color: "var(--fg)", fontFamily: "'JetBrains Mono', monospace", fontSize: "12px" }}>{sizing.position.spot_base_amount}</div>
                 </div>
                 <div style={{ gridColumn: "1 / -1", fontSize: "11px", color: "var(--text-muted)" }}>
                   Округление вниз по supported_size_decimals обеих ног, цена — последняя 1h-свеча: ${fmt(sizing.price ?? 0, 4)}
@@ -410,7 +412,7 @@ export default function Funding({ markets, setToast }: FundingProps) {
               </div>
             )}
             {sizing && !sizing.position && (
-              <p style={{ fontSize: "11px", color: "#fbbf24", marginTop: "12px" }}>{sizing.reason}</p>
+              <p style={{ fontSize: "11px", color: "var(--warn)", marginTop: "12px" }}>{sizing.reason}</p>
             )}
           </div>
         </div>
@@ -418,18 +420,18 @@ export default function Funding({ markets, setToast }: FundingProps) {
 
       <div className="terminal-header" style={{ flexDirection: "column", alignItems: "flex-start" }}>
         <div style={{ fontSize: "10px", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "12px" }}>Откуда цифры</div>
-        <div style={{ display: "flex", flexDirection: "column", gap: "8px", fontSize: "12px", color: "#ccc" }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: "8px", fontSize: "12px", color: "var(--fg-2)" }}>
           <p style={{ margin: 0 }}>
-            <span style={{ color: "#fafafa" }}>Ставки</span> — GET /api/v1/funding-rates: строки {`{market_id, exchange, symbol, rate}`} для binance, bybit, hyperliquid и lighter по одному market_id.
+            <span style={{ color: "var(--fg)" }}>Ставки</span> — GET /api/v1/funding-rates: строки {`{market_id, exchange, symbol, rate}`} для binance, bybit, hyperliquid и lighter по одному market_id.
           </p>
           <p style={{ margin: 0 }}>
-            <span style={{ color: "#fafafa" }}>APR</span> — ставка × 24 × 365. Эпоха funding у Lighter — 1 час, а не 8, как у большей части бирж.
+            <span style={{ color: "var(--fg)" }}>APR</span> — ставка × 24 × 365. Эпоха funding у Lighter — 1 час, а не 8, как у большей части бирж.
           </p>
           <p style={{ margin: 0 }}>
-            <span style={{ color: "#fafafa" }}>Размер ног</span> — минимальные base-суммы и decimals берутся из /orderBooks, capital/2 на ногу, округление вниз.
+            <span style={{ color: "var(--fg)" }}>Размер ног</span> — минимальные base-суммы и decimals берутся из /orderBooks, capital/2 на ногу, округление вниз.
           </p>
           <p style={{ margin: 0 }}>
-            <span style={{ color: "#fafafa" }}>Что это не даёт</span> ни гарантии, что ставка продержится час, ни защиты от depeg спота. Funding меняется — данные обновляются раз в минуту.
+            <span style={{ color: "var(--fg)" }}>Что это не даёт</span> ни гарантии, что ставка продержится час, ни защиты от depeg спота. Funding меняется — данные обновляются раз в минуту.
           </p>
         </div>
       </div>

@@ -38,7 +38,13 @@
 
     --fg: #e6e6e8;
     --fg-2: #a0a0a7;
-    --fg-3: #75757d;
+    /* Подписи, заголовки колонок и служебный текст. #75757d не доходил до 4.5:1
+       ни на одной поверхности панели — 4.31:1 на --bg-0, 4.16 на --bg-1, 3.96 на
+       --bg-2, 3.72 на --bg-3, то есть каждая подпись в таблице была ниже WCAG AA
+       и на мониторе автора выглядела нормально. #8f8f97 даёт 6.13 → 5.30 на тех
+       же четырёх слоях и остаётся темнее --fg-2 (7.57 на --bg-0), так что шкала
+       серого не схлопывается в один шаг. */
+    --fg-3: #8f8f97;
 
     /* Оранжевый — единственная marca: логотип, активная вкладка, выбранная
        строка, первичное действие. Синий из выбора ушёл: два акцента на один
@@ -50,15 +56,30 @@
     --on-accent: #0a0a0a;
     --accent-hi: #ff8c5a;
 
-    /* Направление сделки. Значения совпадают с литералами в компонентах
-       (#10b981 / #ef4444) — токен здесь один, а не два на цвет. */
+    /* Направление сделки. --down служит и текстом, и заливкой, а эти две роли
+       требуют разных красных: #ef4444 как буквы — 5.05:1 на --bg-1, но та же
+       буква на собственной подложке --down-faint (красный 14 % поверх панели)
+       даёт 4.44:1, а на --bg-3 — 3.89. Альфа тут ни при чём: снизить её до
+       «4.5 ровно» значит убрать подложку вовсе, и статус перестанет читаться
+       как пятно. Поэтому текст статуса идёт по --down-hi: 6.88:1 буквами на
+       --bg-1 и 4.99:1 в худшем случае этого же сочетания (подложка на --bg-3),
+       а --down остаётся за заливкой (.btn-down), рейкой объёма и рамкой — там
+       он сам себе фон и контраст считает его уже с тёмными чернилами. */
     --up: #10b981;
     --down: #ef4444;
+    --down-hi: #f87171;
     --green: #10b981;
     --red: #ef4444;
 
-    /* Статус, а не направление: dry_run, ожидания, служебные пометки. */
-    --info: #3b82f6;
+    /* Статус, а не направление: dry_run, ожидания, служебные пометки. Прошлый
+       синий #3b82f6 был непригоден как заливка под белыми буквами (3.68:1 —
+       ровно та ошибка, из-за которой .btn-up/.btn-down печатаются тёмными
+       чернилами) и как текст терялся на светлых слоях темы (4.26:1 на --line,
+       3.57:1 на --line-strong). #60a5fa держит 4.5:1 на всех них (6.16 и 5.16),
+       7.48:1 на --bg-1 как буквы и 7.79:1 тёмными чернилами как подложка.
+       Действия при этом остаются на --accent: синий в проекте — сигнал, а не
+       кнопка. */
+    --info: #60a5fa;
     --warn: #fbbf24;
 
     /* Шкала. 11 — подписи над значениями, 12 — все числа в таблице,
@@ -77,6 +98,17 @@
     --down-soft: rgba(239, 68, 68, 0.5);
     --up-faint: rgba(16, 185, 129, 0.14);
     --down-faint: rgba(239, 68, 68, 0.14);
+
+    /* Статусные подложки и рамки: тот же цвет, что и подпись статуса, только
+       слоями. Без этих токенов панели смешивали свои оттенки «dry_run» и
+       «failed», и один и тот же статус выглядел по-разному в журнале, в
+       агенте и в карточке. */
+    --up-line: rgba(16, 185, 129, 0.35);
+    --down-line: rgba(239, 68, 68, 0.35);
+    --info-faint: rgba(96, 165, 250, 0.12);
+    --info-line: rgba(96, 165, 250, 0.35);
+    --warn-faint: rgba(251, 191, 36, 0.12);
+    --warn-line: rgba(251, 191, 36, 0.35);
 
     --r: 4px;
 
@@ -138,6 +170,21 @@
 
   button, a, [role="button"] {
     touch-action: manipulation;
+  }
+
+  /* Галка 13×13 — это не цель нажатия ни на пальце, ни под мышью; 24 px
+     остаются квадратом разумного размера, а на телефоне зону до --touch
+     дотягивает метка (см. label:has(...) в адаптиве). */
+  input[type="checkbox"],
+  input[type="radio"] {
+    width: 24px;
+    height: 24px;
+    accent-color: var(--accent);
+  }
+
+  /* Ползунок: 16 px полосы — это мышиная лотерея, а не «тонкий контрол». */
+  input[type="range"] {
+    min-height: 24px;
   }
 
   button:focus-visible, a:focus-visible, input:focus-visible,
@@ -215,6 +262,21 @@
     border-radius: 0;
   }
 
+  /* min-width:auto по умолчанию — ребёнок grid/flex растягивается до ширины
+     своего содержимого. Таблица на 700 px делала шире и панель, и ряд, а
+     .terminal-main с overflow:hidden обрезал всё, что не влезло: замер на 390 px
+     — 135 элементов за правым краем при scrollWidth документа 390. Старый тест
+     «на телефоне нет горизонтального переполнения» на этом и был зелёным: числа
+     не переполняли документ, они исчезали. min-width:0 возвращает панель к
+     ширине колонки, а скролл — внутрь .table-scroll, где ему и место. */
+  .terminal-main > *,
+  .terminal-panel,
+  .terminal-header,
+  .terminal-asset-header,
+  .table-scroll {
+    min-width: 0;
+  }
+
   /* Полоса над панелью: заголовок, фильтры, пустое состояние. */
   .terminal-header {
     display: flex;
@@ -268,6 +330,9 @@
     background: none;
     border: none;
     padding: 0;
+    /* Кнопка символа в шапке терминала — цель нажатия, а не подпись: на
+       телефоне --touch, на десктопе 36 px. */
+    min-height: var(--touch);
     cursor: pointer;
     color: inherit;
     text-align: left;
@@ -430,10 +495,14 @@
     white-space: nowrap;
   }
 
-  .chip-up { color: var(--up); border-color: rgba(16, 185, 129, 0.35); background: rgba(16, 185, 129, 0.08); }
-  .chip-down { color: var(--down); border-color: rgba(239, 68, 68, 0.35); background: rgba(239, 68, 68, 0.08); }
-  .chip-info { color: var(--info); border-color: rgba(59, 130, 246, 0.35); background: rgba(59, 130, 246, 0.08); }
-  .chip-warn { color: var(--warn); border-color: rgba(251, 191, 36, 0.35); background: rgba(251, 191, 36, 0.08); }
+  /* Статусные чипы: буквы — вариант токена, читаемый на своей подложке, рамка и
+     подложка — одна шкала прозрачности на все четыре статуса. Панели печатали
+     свои rgba(...,0.08/0.2), и «dry_run» в журнале отличался от «dry_run» в
+     карточке рынка, а красный текстом на красном подложе 4.44:1. */
+  .chip-up { color: var(--up); border-color: var(--up-line); background: var(--up-faint); }
+  .chip-down { color: var(--down-hi); border-color: var(--down-line); background: var(--down-faint); }
+  .chip-info { color: var(--info); border-color: var(--info-line); background: var(--info-faint); }
+  .chip-warn { color: var(--warn); border-color: var(--warn-line); background: var(--warn-faint); }
   /* Единственный случай, где marca используется как метка, а не как действие:
      «этот рынок пришёл по ссылке». */
   .chip-accent { color: var(--accent); border-color: var(--accent); background: var(--accent-dim); }
@@ -456,7 +525,11 @@
     border: none;
     border-radius: 3px;
     padding: 5px 12px;
-    min-height: 28px;
+    /* var(--touch), а не 28px: медиазапрос ниже по файлу перебивает элементный
+       селектор button по специфичности, поэтому 28 px доходили и на телефоне.
+       Токен — единственный способ, чтобы «36 на десктопе, 44 под пальцем»
+       выполнялось для всех контролов разом. */
+    min-height: var(--touch);
     cursor: pointer;
     transition: color 0.12s, background 0.12s;
   }
@@ -480,7 +553,7 @@
     border: 1px solid var(--line);
     border-radius: var(--r);
     padding: 6px 10px;
-    min-height: 30px;
+    min-height: var(--touch);
     cursor: pointer;
     transition: color 0.12s, border-color 0.12s;
   }
@@ -562,15 +635,84 @@
   .data-table th:first-child { text-align: left; }
   .data-table td { padding: 7px 12px; border-bottom: 1px solid var(--line); }
   .data-table td.right, .data-table th.right { text-align: right; }
+  .data-table th.left, .data-table td.left { text-align: left; }
   .data-table tbody tr:hover { background: var(--bg-2); }
+  /* Строка-действие. Курсор и подсветка живут здесь, а не в onMouseEnter:
+     инлайн-обработчик на 50 рядах — это 100 слушателей, состояние, которое
+     не отвечает на фокус с клавиатуры, и цвет, который панели считали числом
+     (rgba(26,26,26,.6) вместо --bg-2). */
+  .data-table tbody tr[data-action] { cursor: pointer; }
+
+  /* Нижняя строка панели: сеть, число рядов, ссылки «показать все». */
+  .panel-foot {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 16px;
+    border-top: 1px solid var(--line);
+    font-size: var(--fs-data);
+    color: var(--fg-3);
+    background: var(--bg-0);
+  }
 
   .table-scroll {
     overflow-x: auto;
     -webkit-overflow-scrolling: touch;
+    /* max-width, а не width: 100% — скроллер обязан влезать в колонку, а таблица
+       внутри него имеет право быть шире (min-width по числу колонок). */
+    max-width: 100%;
+    /* position: relative — не косметика, а часть ремонта. На 320 px таблица
+       Обзора добавляла документу 451 px прокрутки при scrollWidth самого
+       скроллера 294: overflow-x: auto скроллил содержимое внутри, но статичный
+       скролл-контейнер не останавливал растекание области прокрутки до корня
+       (замер: documentElement.scrollWidth 771, window.scrollX доходил до 451;
+       с position: relative — 320 и 0).clip, max-width и min-width:0 по цепочке
+       этого не убирали, и старый тест «документ не переполняется» на этом и
+       ловил ложное: он смотрел на числа, а не на то, что страница едет боком. */
+    position: relative;
+  }
+
+  /* Журнал копи-движка скроллится сам, а не растягивает страницу: 200 строк в
+     mounted-виде давали 10 317 px высоты и 2 348 узлов. Заголовок при этом
+     остаётся на месте — без sticky первая же прокрутка теряла, что за колонка.
+     Высота строки задана числом и завязана на LOG_ROW_PITCH из Portfolio.tsx:
+     окно списка считает позиции арифметикой. */
+  .log-scroll {
+    max-height: 420px;
+    overflow-y: auto;
+  }
+
+  .log-scroll thead th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: var(--bg-1);
+  }
+
+  .log-row td {
+    height: 40px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--line);
   }
 
   .scrollbar-hide { scrollbar-width: none; }
   .scrollbar-hide::-webkit-scrollbar { display: none; }
+
+  /* Подпись, которую слышит ассистивная технология, но не видит глаз: колонка
+     действия в таблице не может остаться без имени, а места под заголовок в ней
+     нет. */
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+    border: 0;
+  }
 
   /* Вкладки: подчёркивание рисуется слева направо, а не включается. Полоска —
      единственное, что отвечает на вопрос «где я», поэтому она одна и без подложки. */
@@ -774,6 +916,17 @@
     border: none;
     cursor: pointer;
     padding: 0;
+    /* 24 px — нижняя граница WCAG 2.5.8 для указателя; под пальцем медиазапрос
+       ниже поднимает её до --touch. Без этой строки «торговать» в карточке
+       Predict был 16 px высоты, и попасть по нему мышью — лотерея. */
+    min-height: 24px;
+  }
+
+  /* Чип-кнопка (переключатель разрешения в агенте) — тот же пол, что у
+     сегментов: .chip на 23 px годится как подпись, но не как цель нажатия. */
+  button.chip {
+    min-height: var(--touch);
+    min-width: var(--touch);
   }
 
   .link-action:hover { color: var(--accent); text-decoration-color: currentColor; }
@@ -794,9 +947,25 @@
 
   .input-mono:focus { border-color: var(--accent); }
 
+  /* Число внутри строки таблицы (капитал в Funding): рамок нет, но моноширинный
+     ряд, цвет и кольцо фокуса общие с остальными полями. */
+  .input-plain {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    font-size: var(--fs-ui);
+    color: var(--fg);
+    background: transparent;
+    border: none;
+    border-bottom: 1px solid var(--line-strong);
+    padding: 6px 2px;
+    transition: border-color 0.12s;
+  }
+
+  .input-plain:focus { border-bottom-color: var(--accent); }
+
   .btn-primary {
     background: var(--accent);
-    color: #0a0a0a;
+    color: var(--on-accent);
     font-weight: 600;
     font-size: var(--fs-ui);
     padding: 8px 14px;
@@ -809,6 +978,13 @@
 
   .btn-primary:hover { filter: brightness(1.1); }
   .btn-primary:disabled { background: var(--bg-2); color: var(--fg-3); cursor: not-allowed; filter: none; }
+
+  /* Направление как действие. Белым по --up/--down читать нельзя (2.54:1 и
+     3.76:1 — это и был провал в гейте контраста), а чернилами marca-кнопки
+     (--on-accent) та же пара даёт 7.80:1 и 5.26:1. База — .btn-primary, цвет
+     переопределяется здесь, поэтому состояние «выключено» живёт в одном месте. */
+  .btn-primary.btn-up { background: var(--up); }
+  .btn-primary.btn-down { background: var(--down); }
 
   .btn-action {
     padding: 10px 12px;
@@ -883,14 +1059,6 @@
     font-size: var(--fs-data);
     line-height: 1.55;
     color: var(--fg-3);
-  }
-
-  .modal-card {
-    background: var(--bg-1);
-    border: 1px solid var(--line-strong);
-    border-radius: 6px;
-    max-height: min(560px, 85dvh);
-    overflow-y: auto;
   }
 
   /* ── Заголовок панели ──────────────────────────────────────────────────── */
@@ -1028,8 +1196,8 @@
      Цвет задаёт направление сделки, как в тикете Терминала: покупка — зелёная
      заливка, продажа — красная. Градиентов и теней нет: на приборной панели
      объём не выглядит важнее числа. */
-  .btn-up { background: var(--up); color: #0a0a0a; }
-  .btn-down { background: var(--down); color: #0a0a0a; }
+  .btn-up { background: var(--up); color: var(--on-accent); }
+  .btn-down { background: var(--down); color: var(--on-accent); }
   .btn-up:hover, .btn-down:hover { filter: brightness(1.1); }
 
   /* Первый шаг продажи — контур: он ничего не списывает, только показывает,
@@ -1052,15 +1220,6 @@
   }
 
   /* ── Оверлеи ────────────────────────────────────────────────────────────── */
-  .overlay-card {
-    width: 100%;
-    max-width: 420px;
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-    padding: 20px;
-  }
-
   .overlay-head {
     display: flex;
     align-items: center;
@@ -1127,8 +1286,13 @@
     box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
   }
 
-  /* Тело модалки. Высота считается с учётом выемок: в мини-аппе окно ордера не
-     должно упираться в жест возврата. */
+  /* Тело модалки — один класс на все оверлеи. До этого карточка жила в трёх
+     написаниях: .modal-card + .overlay-card (тикет Predict, ордер Терминала),
+     .overlay-shell (оболочка) и инлайном в модалке риска. Max-height у них
+     расходился (560 px против 85dvh без выемок), поэтому длинный тикет
+     обрезался раньше, чем список рынков, а отступ внутри задавался кто во что.
+     Высота считается с учётом выемок: в мини-аппе окно ордера не должно
+     упираться в жест возврата. */
   .overlay-shell {
     width: 100%;
     max-width: 420px;
@@ -1181,6 +1345,37 @@
   .row-button:hover { border-color: var(--line-strong); background: var(--bg-2); }
   .row-button[aria-current="true"] { border-color: var(--accent); background: var(--accent-dim); }
 
+  /* Окно списка рынков (App.tsx, useRowWindow). Высота задана числом, а не
+     flex-1: .overlay-shell — flex-колонка с автовысотой, и ребёнок с
+     flex-basis: 0 на 4 px и схлопывался (замер: список из 246 строк рендерился
+     в окне нулевой высоты). Определённая высота нужна и самой виртуализации:
+     окно считает видимые строки по clientHeight.
+     Шаг строки = 46 px (.picker-row) + 4 px зазора, это же число стоит
+     константой PICKER_ROW_PITCH в App.tsx. */
+  .picker-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    height: min(52vh, 420px);
+    flex: 0 0 auto;
+  }
+
+  .picker-row {
+    height: 46px;
+    flex: 0 0 46px;
+  }
+
+  /* Пустой результат в списке рынков — один текст и в picker оболочки, и в
+     picker риска: формулировка «рынки ещё загружаются» означает одно и то же. */
+  .picker-empty {
+    margin: 0;
+    padding: 24px 0;
+    text-align: center;
+    color: var(--fg-2);
+    font-size: var(--fs-ui);
+    font-family: var(--font-mono);
+  }
+
   /* Вторичное действие и действие с денежным последствием. */
   .btn-secondary {
     display: block;
@@ -1212,7 +1407,9 @@
     border-radius: var(--r);
     padding: 9px 12px;
     min-height: var(--touch);
-    color: var(--down);
+    /* --down-hi, а не --down: наведение рисует --down-faint под те же буквы, и
+       красным по красной подложке выходит 4.44:1. */
+    color: var(--down-hi);
     font-size: var(--fs-ui);
     cursor: pointer;
     transition: border-color 0.12s, background 0.12s;
@@ -1328,7 +1525,23 @@
     textarea,
     input:not([type="checkbox"]):not([type="radio"]) {
       min-height: var(--touch);
+      /* Высота не спасает узкие чипы: переключатель разрешения в агенте — 29 px
+         по широкому экрану и 29 px по нему же на телефоне. Палец промахивается по
+         горизонтали так же, как по вертикали. */
+      min-width: var(--touch);
     }
+
+    /* Флажок остаётся маленьким квадратом (иначе выглядит сломанным), но зона
+       нажатия вырастает до --touch за счёт метки: клик по подписи переключает
+       его, и именно метку измеряет проверка цели касания. */
+    label:has(input[type="checkbox"]) {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      min-height: var(--touch);
+    }
+
+    .link-action { min-height: var(--touch); }
 
     input[type="number"], input[type="text"], input[type="email"], input[type="password"] {
       font-size: 16px;

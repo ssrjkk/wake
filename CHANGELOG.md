@@ -10,6 +10,51 @@ from the commit history rather than from a release.
 ## [Unreleased]
 
 ### Added
+- `GET /leaders/hydrated` — the whole Discover card in one response: the leader
+  row, follower count and AUM from one `GROUP BY` over `follows`, and the
+  Lighter account snapshot read server-side in parallel and cached for a minute.
+  Assembling it in the browser cost two round-trips per card (measured: 40
+  leaders = 80 requests for one screen), and every client paid it again.
+  `account: null` means Lighter did not answer for that account — the card shows
+  an em dash instead of inventing a zero.
+- `src/lib/useRowWindow.ts` — windowed list rows. The market picker mounted all
+  200 buttons of the (capped) book and opened in 615 ms; the copy journal drew
+  all 200 log rows and made the Portfolio page 10 317 px tall. Both now render
+  the visible slice plus an overscan, and the hook returns a callback ref on
+  purpose: a plain `RefObject` left the first paint after opening with the
+  window it had computed while the modal was closed — an empty list.
+- `e2e/fixtures.ts` — provider and backend responses whose row counts are
+  measurements, not guesses: Lighter `/orderBooks` 246 rows (226 active) and
+  `/funding-rates` 733, Arcus `/markets` 70, `MAJOR_PERPS` 18, `/mirror-log`
+  ceiling 200, field names and string-typed numbers copied from a live capture.
+- `e2e/design-gate.spec.ts` — clipping, contrast, focus, touch targets and
+  document pan, measured in a browser at 1440/390/320 against the fixture
+  volumes above. Two things this had to learn the hard way: the focus check
+  drives real Tab keys, because after a click `element.focus()` does not match
+  `:focus-visible` and the first version reported every control as having no
+  ring; and contrast is computed on the *composited* background — every
+  translucent layer between the text and the first opaque ancestor, plus
+  translucent ink over that — because "the nearest opaque background" lets a
+  chip's own red underlay hide a 4.44:1 status label.
+- `e2e/render-budget.spec.ts` — node counts, page height, mounted rows and
+  requests per panel, with thresholds set at the measured value: they may go
+  down, and rising is red.
+- `theme.gate.test.ts` grew teeth: contrast computed from the theme's own hex
+  values (text on every panel surface ≥ 4.5:1, dark ink on a filled status chip,
+  focus ring ≥ 3:1), the same arithmetic over each status **tint** — a text
+  token blended onto its own translucent underlay, which is where red-on-red was
+  failing — a ban on `outline: none` and on `rgba()` in panel code, and `TOKENS`
+  derived from a name → value map instead of a bare list of hexes. Checked by
+  mutation: pointing `--down-hi` at `#ef4444` turns the tint test red with the
+  number 4.44, and one `rgba(0, 0, 0, .5)` in `Risk.tsx` turns the palette test
+  red.
+- Pages for `GET /predict/markets` (`limit` ≤ 200, `offset`), and a
+  "показать ещё" on the Predict panel: the list used to be as long as the number
+  of markets a curator had ever created.
+- `lighter_rest.get_account_snapshot()` / `get_account_snapshots()` — capital,
+  realised PnL and open positions for an account index; realised PnL sums all
+  position rows, because a closed one keeps its profit in a row with size zero.
+
 - `lighter_rest.get_account_equity(account_index)` — the account value Lighter
   publishes for a `account_index`, cached 30 seconds. This is the number the copy
   engine caps a mirror order by; before it, `available_margin_usd` was filled with
@@ -306,6 +351,56 @@ from the commit history rather than from a release.
   trust boundaries, the local gates and the deployment contract.
 
 ### Changed
+- The palette of the panels is now only tokens: 37 distinct hex literals (449
+  occurrences) left `src/components/*.tsx` and `App.tsx`, and `rgba(...)` is
+  banned in panel code too — 12 more sites lived there, and the colour check
+  could not see them because it only looked at `#`. One scale of status tints
+  (`--*-faint`, `--*-line`) replaced four hand-written pairs, so `dry_run` in the
+  journal and `dry_run` on a market card are the same colour now.
+- `--fg-3` is `#8f8f97`, was `#75757d`. The old grey was under WCAG AA on every
+  panel surface it is used on — 4.31:1 on `--bg-0`, 4.16 on `--bg-1`, 3.96 on
+  `--bg-2`, 3.72 on `--bg-3` — which is what `theme.gate.test.ts` now computes
+  from the token values instead of trusting a screenshot. The new one is
+  6.13 → 5.30 on the same four and still darker than `--fg-2`.
+- `--info` is `#60a5fa`, was `#3b82f6`. As a button fill under white ink the old
+  blue measured 3.68:1, and as 10–11 px text it fell to 4.26:1 on `--line` and
+  3.57:1 on `--line-strong`. The new value is 7.48:1 as text on `--bg-1`, 5.16:1
+  on `--line-strong`, and 7.79:1 with dark ink as a fill.
+- New `--down-hi` (`#f87171`) for red **text**; `--down` stays the red of fills,
+  rails and borders. One red cannot do both: `#ef4444` letters on the chip's own
+  red underlay are 4.44:1 on `--bg-1` and 3.89:1 on `--bg-3`, and no alpha that
+  still reads as a status patch fixes that — the hue is the problem, not the
+  transparency. `#f87171` on the same underlay is 5.71:1 and 4.99:1.
+- `.btn-primary`, `.btn-up`, `.btn-down` print `var(--on-accent)` instead of
+  inheriting the page foreground or repeating `#0a0a0a`. White ink on the two
+  direction fills was 2.54:1 and 3.76:1; the marca ink is 7.80:1 and 5.26:1.
+- Discover reads `/leaders/hydrated`. The panel used to await the leader list
+  and then fire two requests per card; on the browser's own numbers one screen
+  was 80 requests, and with StrictMode in development 160.
+- The market picker scrolls inside its own list and the copy journal inside its
+  own table. Before, a long journal pushed the Portfolio page to 10 317 px and
+  the page scroll — not the component — did the work, so the sticky header and
+  the row count were both the wrong thing to reason about.
+- Predict requests one page of 50 markets at a time instead of every market the
+  curator table holds.
+- The two Overview tables are drawn by `.data-table`, so is the strip under them
+  (`.panel-foot`) and the venue badges (`.chip`). Their rows were styled by
+  `onMouseEnter`/`onMouseLeave` handlers — 100 listeners for 50 rows, a hover
+  state that keyboard focus never got, and greys typed as
+  `rgba(26, 26, 26, .6)`.
+- One overlay class, `.overlay-shell`. The same card was `.modal-card` +
+  `.overlay-card`, `.overlay-shell`, and inline styles in the Risk picker, and
+  the two max-heights disagreed (`min(560px, 85dvh)` vs `85dvh` minus safe
+  areas), so a long Predict ticket clipped earlier than a market list did.
+- The Risk position picker is a `<dialog>` through the shared `Modal`, not a
+  hand-rolled fixed div: Escape, focus trap, the back arrow of the mini app and
+  the layer stack in `lib/layers.ts` all reach it now, and it no longer paints
+  its own `rgba(0,0,0,.6)` scrim.
+- `useRowWindow` returns `attach` (a callback ref) and no longer measures inside
+  the effect. Numbers come from the two events that actually change them —
+  `scroll` and `ResizeObserver`, the first delivery of which arrives before the
+  paint of the mount — and each measurement is tied to the node it came from, so
+  reopening a list cannot start on the previous scroll position.
 - `/agent/step` is serialised per user by a PostgreSQL session advisory lock
   (`pg_try_advisory_lock(hashtextextended('wake:agent-step:<user>', 0))`). A step
   reads memory and the daily risk state, decides, then writes; two parallel steps
@@ -514,7 +609,48 @@ from the commit history rather than from a release.
   claim of an "optional KMS mode", which the removed file could not deliver.
 
 ### Fixed
-- A challenge record in Redis that does not parse is a server failure and answers
+- Wide tables clipped their own content on every screen. A grid/flex child
+  defaults to `min-width: auto`, so a panel with a 9-column table grew past its
+  column while the shell had `overflow-x: hidden` — the document never
+  overflowed, which is exactly why the old "no horizontal overflow on mobile"
+  test stayed green while the terminal was losing cells: at 390 px there were
+  135 elements whose right edge was off-screen with nothing to scroll to.
+  `min-width: 0` is now set along the chain that needs it.
+- The same table then made the *document* pan. At 320 px the Overview
+  scroller clipped correctly (client 294, its own scrollWidth 770) and
+  `document.body.scrollWidth` stayed 320, while `documentElement.scrollWidth`
+  reached 771 and `window.scrollX` moved to 451: a static-positioned scroll
+  container clips painting but does not stop the root's scrollable overflow.
+  `.table-scroll` is `position: relative` now — measured 320 and 0 — and the
+  check asserts both numbers, because a width alone cannot tell "wide content"
+  from "the page slides sideways".
+- Touch targets below WCAG 2.5.8: segmented controls, ghost buttons, chips, the
+  symbol picker, checkbox and radio boxes, range sliders. Measured at 390 px:
+  3 437 offenders across the nine panels, now 0. Two of them were not what they
+  looked like — a `button { min-height: var(--touch) }` in a media query lost to
+  `.seg > button { min-height: 28px }` on class specificity and Tailwind layer
+  order, and a probe that measured a bare `<input type=checkbox>` ignored the
+  `<label>` wrapping it, which is the part a thumb actually hits.
+- The contrast probe took the first *opaque* ancestor as the background, so a
+  chip's own translucent underlay was invisible to it. It now composites every
+  translucent layer up the tree (and translucent ink over that), which found 22
+  real offenders in the copy journal — red status text over a red underlay at
+  4.44:1 — after the panel had been reported clean.
+- `outline: none` in panel code: three number inputs and one Tailwind class. The
+  theme gate's pattern (`/outline:\s*none/`) could not match the JSX form
+  `outline: "none"` or the utility `outline-none`, so it reported the panels
+  clean while they asked for the keyboard ring to be removed.
+- The Risk picker's search field used `autoFocus` and inline box styles; it is a
+  `.input-mono` inside a `<dialog>` now, with the start of focus chosen by
+  `Modal` rather than by the browser's guess.
+- The action column of both Overview tables had an empty `<th>`, so a screen
+  reader announced an unlabelled column; it carries an `.sr-only` caption now.
+- `useRowWindow` measured a container that did not exist yet. With a plain
+  `RefObject` the effect ran once against `null`, so the first paint after
+  opening the picker showed an empty list until the next scroll.
+- `/predict/markets` page ordering is stable across pages (the page is cut after
+  an `ORDER BY`, not before), so "показать ещё" cannot show a market twice or
+  skip one.
   503 `CHALLENGE_STORE_CORRUPTED` with an ERROR in the log. `wake:wallet:*` is
   written only by `wallet_auth.py`, so a malformed value means the store was
   touched from outside; `json.loads` used to raise out of `verify_signature`, the

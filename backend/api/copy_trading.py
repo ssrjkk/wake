@@ -162,6 +162,41 @@ async def list_leaders():
     return await db.all_leaders()
 
 
+@router.get("/leaders/hydrated")
+async def list_hydrated_leaders():
+    """Витрина лидеров одним ответом: строка лидера + подписчики + счёт Lighter.
+
+    До этого фронт собирал карточку сам: на каждого лидера по запросу
+    /follows/by-leader/{id} и по запросу /account к Lighter (замер
+    e2e/render-budget.spec.ts: 40 лидеров = 80 запросов на один экран). Так
+    список лидеров становился линейным расходованием соединений браузера, и
+    первое открытие Discover зависало на скорости ответа площадки.
+
+    Здесь то же самое считает сервер: AUM — одним GROUP BY по follows, счета —
+    параллельно с кэшем на 60 секунд (lighter_rest.get_account_snapshot), и
+    клиенты делят этот кэш между собой.
+
+    Аккаунт, по которому Lighter не ответил, возвращается как account: null.
+    Карточка обязана уметь показать прочерк: убрать лидера из-за одного
+    недоступного счёта значило бы прятать существующую публикацию."""
+    rows = await db.all_leaders()
+    stats = await db.leader_stats()
+    snapshots = await run_in_threadpool(
+        lighter_rest.get_account_snapshots,
+        [r["lighter_account_index"] for r in rows],
+        LIGHTER_NETWORK,
+    )
+    return [
+        r
+        | {
+            "follower_count": stats.get(r["id"], {}).get("follower_count", 0),
+            "total_aum_usd": stats.get(r["id"], {}).get("total_aum_usd", 0.0),
+            "account": snapshots.get(r["lighter_account_index"]),
+        }
+        for r in rows
+    ]
+
+
 @router.get("/leaders/mine")
 async def own_leader(user_id: str = Depends(require_user)):
     """Свой лидер — вместе с выключенными публикациями.

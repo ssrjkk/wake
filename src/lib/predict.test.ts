@@ -6,6 +6,7 @@ import {
   getPredictMarkets,
   getPredictPositions,
   predictOutcomeWorth,
+  PREDICT_PAGE_SIZE,
   predictTimeLeft,
   tradePredictMarket,
 } from './predict'
@@ -72,13 +73,27 @@ describe('predict', () => {
       ok([])
       await getPredictMarkets('resolved')
       expect(fetchMock).toHaveBeenCalledTimes(1)
-      expect(asked()).toBe(`${BACKEND_URL}/predict/markets?status=resolved`)
+      expect(asked()).toBe(
+        `${BACKEND_URL}/predict/markets?status=resolved&limit=${PREDICT_PAGE_SIZE}&offset=0`,
+      )
     })
 
     it('defaults to open markets', async () => {
       ok([])
       await getPredictMarkets()
-      expect(asked()).toBe(`${BACKEND_URL}/predict/markets?status=open`)
+      expect(asked()).toBe(
+        `${BACKEND_URL}/predict/markets?status=open&limit=${PREDICT_PAGE_SIZE}&offset=0`,
+      )
+    })
+
+    // Витрина страницей, а не «всем, что создал куратор»: потолок ответа
+    // держит бэкенд (le=200), смещение передаёт клиент.
+    it('asks the next page by offset, not by re-reading the first one', async () => {
+      ok([])
+      await getPredictMarkets('open', PREDICT_PAGE_SIZE)
+      expect(asked()).toBe(
+        `${BACKEND_URL}/predict/markets?status=open&limit=${PREDICT_PAGE_SIZE}&offset=${PREDICT_PAGE_SIZE}`,
+      )
     })
 
     // Чей это список и кому платить — решает токен в заголовке, поэтому в адресах

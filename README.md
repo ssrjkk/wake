@@ -224,7 +224,7 @@ Price markets close themselves at the deadline only while this process runs; oth
 # backend — run from backend/; needs a scratch PostgreSQL database
 createdb wake_test
 export WAKE_TEST_DATABASE_URL=postgresql+asyncpg://wake:wake@localhost:5432/wake_test
-python -m unittest discover        # 540 tests, all through discovery
+python -m unittest discover        # 613 tests, all through discovery
 python -m pytest -q                # the same set under pytest (+ Allure in CI)
 
 # frontend
@@ -238,6 +238,8 @@ PW_PORT=5178 npx playwright test
 
 `test_api_smoke.py` walks every API route over HTTP against a real PostgreSQL, including the parts of the security model that are easy to lose silently: no token, forged token, expired token, another user's record, a replayed wallet signature, a curator endpoint without the header. A route that regresses from 403 to 200 fails there, not on the first click.
 
+The interface is checked with numbers too. `theme.gate.test.ts` computes WCAG contrast from the theme's own values — text on every panel surface, dark ink on a filled status chip, and each status label against its own translucent underlay — and fails on a colour literal outside the palette, `rgba()` included. `e2e/design-gate.spec.ts` measures clipping, contrast on composited backgrounds, focus rings under real Tab navigation, touch targets and whether the document pans sideways, in a browser at four widths; `e2e/render-budget.spec.ts` puts a ceiling on nodes, page height, mounted rows and requests per panel. Their fixtures carry the row counts measured from live provider responses — Lighter's book is 246 markets, its funding endpoint 733 rows — because a budget set on invented volumes catches nothing.
+
 ## Architecture
 
 ### Backend (FastAPI)
@@ -248,8 +250,8 @@ PW_PORT=5178 npx playwright test
 - `backend/api/` — HTTP routers by product area:
   - `auth.py` — Telegram Login Widget, Mini App `initData` and wallet sign-in
   - `markets.py` — `/markets/overview`: perp ranking by 24h quote volume
-  - `copy_trading.py` — followers, leaders, follows, mirror log; a follow needs a Lighter account confirmed by wallet sign-in, and the mirror plan is capped by that account's own value at the venue rather than by the allocation the follower typed
-  - `predict.py` — price and event markets, curator-gated resolution
+  - `copy_trading.py` — followers, leaders, follows, mirror log; a follow needs a Lighter account confirmed by wallet sign-in, and the mirror plan is capped by that account's own value at the venue rather than by the allocation the follower typed; `GET /leaders/hydrated` собирает карточку Discover на сервере — один запрос вместо двух на лидера
+  - `predict.py` — price and event markets, curator-gated resolution; the market list is served by pages (`limit` ≤ 200), because the panel that draws it is one person's screen
   - `agent.py` — decisions, memory, subscriptions
   - `portfolio.py` — cross-asset risk and hedge
   - `funding.py` — venue comparison and carry calculations
