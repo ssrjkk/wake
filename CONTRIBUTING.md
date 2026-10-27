@@ -86,7 +86,7 @@ alembic check
 
 ## Tests
 
-**Backend** — one command, 548 tests, against a real PostgreSQL:
+**Backend** — one command, 613 tests (612 passed, 1 skipped), against a real PostgreSQL:
 
 ```bash
 cd backend
@@ -108,7 +108,7 @@ Four rules the suite enforces on itself (the first three come from `backend/test
 npm ci
 npm run lint                      # ESLint over src/, e2e/ and the config files
 npx tsc --noEmit
-npm run test:run                  # vitest: 228 tests in 17 files
+npm run test:run                  # vitest: 229 tests in 17 files
 node scripts/brand-assets.mjs       # re-render public/og.png and apple-touch-icon.png
 npm run build
 PW_PORT=5178 npx playwright test  # first run needs `npx playwright install chromium`
@@ -164,6 +164,23 @@ row — named by symbol rather than as «some row». Those four assertions are w
 caught a collapsed spacer: the picker kept 200 markets in `padBottom` styled at
 9 200 px, `flex-shrink` compressed it to zero, and 180 markets could not be
 reached with the mouse at all.
+
+The gate then asks whether the window is operable without a mouse. From search,
+`ArrowDown` enters the first row; `ArrowUp`/`ArrowDown`, `PageUp`/`PageDown`,
+`Home` and `End` move through all 200 capped rows, scrolling the window before
+focusing a row that is not mounted yet, and `Enter` selects the focused market.
+The same list is measured through `390 → 1440 → 390` resize and after a deep
+scroll is narrowed by a filter: rows must still cover the viewport, the row count
+must come from the whole filtered book, and `scrollTop` must settle at a position
+the shortened list can actually have.
+
+Open dialogs are audited against their own shell, not the panel behind them, and
+the shell itself must not acquire a horizontal scrollbar. Six states are covered
+under stress fixtures at 320 px with a doubled type scale: sign-in, market
+selection, order confirmation, copy confirmation, Predict trade and Risk position.
+The scale test reads the computed value back (`--fs-ui: 26px`) before measuring,
+because the previous version installed it after page load, never applied it, and
+could remain green while the interface stayed at 13 px.
 
 Render cost is budgeted in **frames**, not milliseconds. One build measured
 295, 369, 386, 547 and 1 079 ms for a single picker open with an unchanged DOM —
@@ -378,7 +395,7 @@ python -m pytest . -q
 npm ci
 npm run lint                      # ESLint по src/, e2e/ и конфигам
 npx tsc --noEmit
-npm run test:run                  # vitest: 228 тестов в 17 файлах
+npm run test:run                  # vitest: 229 тестов в 17 файлах
 node scripts/brand-assets.mjs       # перерендерить public/og.png и apple-touch-icon.png
 npm run build
 PW_PORT=5178 npx playwright test  # первый прогон требует `npx playwright install chromium`
@@ -436,6 +453,23 @@ PW_PORT=5178 npx playwright test  # первый прогон требует `np
 была обычным `div` внутри flex-колонки, `flex-shrink` сжал её 9 200 px до нуля,
 `scrollHeight` стал 804 вместо 10 004, и 180 из 200 рынков нельзя было открыть
 мышью — их находил только поиск.
+
+Дальше та же проверка спрашивает, доступен ли список без мыши. `ArrowDown` из
+поиска переходит в первую строку; стрелки, `PageUp`/`PageDown`, `Home` и `End`
+ведут фокус по всем 200 строкам окна, сначала прокручивая его до ещё не
+смонтированной цели, а `Enter` выбирает рынок под фокусом. Список измеряют и при
+ресайзе `390 → 1440 → 390`, и после глубокой прокрутки, за которой фильтр
+сокращает данные: строки обязаны накрывать видимую область, их число берётся из
+всего отфильтрованного списка, а `scrollTop` обязан успокоиться на положении,
+которое укороченный список действительно может иметь.
+
+Открытые диалоги меряются по собственной оболочке, а не по панели за ними, и сама
+оболочка не имеет права получать горизонтальный скролл. Под стресс-данными на
+320 px при удвоенной шкале проверяются шесть состояний: вход, выбор рынка,
+подтверждение ордера, подтверждение копирования, сделка Predict и добавление
+позиции в Risk. Масштаб читается из computed-стиля до замера (`--fs-ui: 26px`):
+прежняя версия ставила его после загрузки страницы, никогда не применяла и могла
+оставаться зелёной, пока интерфейс жил своими же 13 px.
 
 Стоимость рендера бюджется в кадрах, а не в миллисекундах. Одна и та же сборка
 на один клик открытия окна давала 295, 369, 386, 547 и 1 079 мс при неизменном

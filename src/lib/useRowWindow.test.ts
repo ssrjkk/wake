@@ -101,6 +101,28 @@ describe("useRowWindow", () => {
     expect(result.current.padBottom).toBe(0);
   });
 
+  it("после сокращения данных окно остаётся в пределах списка до scroll-события", () => {
+    const { result, rerender } = renderHook(
+      ({ count }) => useRowWindow<HTMLDivElement>(count, 50),
+      { initialProps: { count: 246 } },
+    );
+    const node = scrollable(400);
+    act(() => result.current.attach(node));
+    node.scrollTop = 10_000;
+    act(() => { node.dispatchEvent(new Event("scroll")); });
+
+    for (const count of [30, 8, 1, 0, 246]) {
+      rerender({ count });
+      const { start, end, padTop, padBottom } = result.current;
+      expect(start).toBeGreaterThanOrEqual(0);
+      expect(start).toBeLessThanOrEqual(end);
+      expect(end).toBeLessThanOrEqual(count);
+      expect(padTop + (end - start) * 50 + padBottom).toBe(count * 50);
+      if (count > 0) expect(end - start).toBeGreaterThan(0);
+      if (count <= 8) expect(start).toBe(0);
+    }
+  });
+
   it("список короче окна рендерится целиком", () => {
     const { result } = renderHook(() => useRowWindow<HTMLDivElement>(246, 50));
     act(() => result.current.attach(scrollable(50 * 300)));

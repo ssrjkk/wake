@@ -1,6 +1,6 @@
 // Суровые проверки дизайна: они считаются по computed-стилям живого дерева, а не
 // глазами по скриншоту. Методика — в ./design-audit.ts.
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 import { FULL_FIXTURE } from "./fixtures";
 import {
   TABS,
@@ -108,22 +108,91 @@ test.describe("дизайн-инварианты на живом объёме д
   // и именно её обязаны выдерживать раскладка и nowrap-элементы.
   test("крупный текст: 320 px переживает удвоение шкалы", async ({ page }) => {
     await page.setViewportSize({ width: 320, height: 568 });
-    await page.addInitScript(() => {
-      const style = document.createElement("style");
-      style.textContent =
-        ":root{--fs-label:21px;--fs-data:24px;--fs-ui:26px;--fs-title:30px;--fs-price:clamp(40px,6vw,60px)}";
-      document.documentElement.appendChild(style);
+    await page.addStyleTag({
+      content: ":root{--fs-label:21px;--fs-data:24px;--fs-ui:26px;--fs-title:30px;--fs-price:clamp(52px,5.2vw,72px)}",
     });
+    await expect(page.locator("html")).toHaveCSS("--fs-ui", "26px");
     const offenders: Offender[] = [];
     for (const tab of TABS) {
       await visitTab(page, tab);
       const audit = await auditDesign(page);
       offenders.push(...audit.clipping.map((o) => ({ ...o, where: `${tab} → ${o.where}` })));
-      expect(audit.documentPan, `${tab}: на 320 px при крупном тексте страница не ездит боком`).toBe(0);
+      expect.soft(audit.documentPan, `${tab}: на 320 px при крупном тексте страница не ездит боком`).toBe(0);
     }
     reportOffenders("clipping@200%", offenders, 20);
     expect(offenders, "при удвоенной шкале текст не за правым краем и не обрезан").toEqual([]);
   });
+});
+
+test.describe("открытые оверлеи на узком экране и крупном тексте", () => {
+  const cases: { name: string; tab: string; open: (page: Page) => Promise<void> }[] = [
+    {
+      name: "вход",
+      tab: "Обзор",
+      open: async (page) => {
+        await page.getByRole("button", { name: "T test", exact: true }).click();
+        await page.getByRole("button", { name: "Выйти", exact: true }).click();
+        await page.getByRole("button", { name: "Войти", exact: true }).click();
+      },
+    },
+    {
+      name: "выбор рынка",
+      tab: "Терминал",
+      open: async (page) => page.getByRole("button", { name: "Выбрать рынок", exact: true }).click(),
+    },
+    {
+      name: "подтверждение ордера",
+      tab: "Терминал",
+      open: async (page) => {
+        await page.locator(".desk-row").first().click();
+        await page.getByRole("spinbutton", { name: "Размер, USD" }).fill("100000000");
+        await page.getByRole("button", { name: /^Открыть long/ }).click();
+      },
+    },
+    {
+      name: "копирование лидера",
+      tab: "Discover",
+      open: async (page) => page.getByRole("button", { name: "Copy", exact: true }).first().click(),
+    },
+    {
+      name: "сделка Predict",
+      tab: "Predict",
+      open: async (page) => page.getByRole("button", { name: /^Купить YES/ }).first().click(),
+    },
+    {
+      name: "добавление позиции",
+      tab: "Risk",
+      open: async (page) => page.getByRole("button", { name: "+ Добавить", exact: true }).click(),
+    },
+  ];
+
+  test.beforeEach(async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 568 });
+    await openWithData(page, { ...FULL_FIXTURE, stress: true });
+    await page.addStyleTag({
+      content: ":root{--fs-label:21px;--fs-data:24px;--fs-ui:26px;--fs-title:30px;--fs-price:clamp(52px,5.2vw,72px)}",
+    });
+  });
+
+  for (const item of cases) {
+    test(`${item.name}: обрезка, контраст, цели касания`, async ({ page }) => {
+      await visitTab(page, item.tab);
+      await item.open(page);
+      await expect(page.getByRole("dialog")).toBeVisible();
+      await expect(page.locator("html")).toHaveCSS("--fs-ui", "26px");
+      const shell = page.locator(".wake-modal .overlay-shell");
+      const overflow = await shell.evaluate((el) => el.scrollWidth - el.clientWidth);
+      expect.soft(overflow, "диалог не требует горизонтальной прокрутки").toBeLessThanOrEqual(1);
+      const audit = await auditDesign(page, 44, ".wake-modal .overlay-shell");
+      reportOffenders(`${item.name} clipping@320/200%`, audit.clipping);
+      reportOffenders(`${item.name} contrast@320/200%`, audit.contrast);
+      reportOffenders(`${item.name} touch@320/200%`, audit.touch);
+      expect(audit.clipping).toEqual([]);
+      expect(audit.contrast).toEqual([]);
+      expect(audit.touch).toEqual([]);
+      expect(audit.documentPan).toBe(0);
+    });
+  }
 });
 
 // Второй контур — не «много данных», а «данные с краёв диапазона»: тикер в 24

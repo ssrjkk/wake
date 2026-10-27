@@ -370,6 +370,18 @@ from the commit history rather than from a release.
 - Two more measured states in the browser audit: `::placeholder` (not in the DOM,
   so a tree walk never saw it) and any element whose *ancestor* has opacity —
   the composite is now computed through the whole opacity chain.
+- Keyboard navigation for the windowed market picker: `ArrowDown` from search and
+  `ArrowUp`/`ArrowDown`, `PageUp`/`PageDown`, `Home` and `End` across all 200
+  capped rows, then `Enter` to select. The row is scrolled before it is focused;
+  the browser cannot Tab into a virtual row that is not mounted, and two guessed
+  animation frames proved too few for React to commit the new window.
+- Six open-dialog browser cases under worst-case data at 320 px with the type
+  scale doubled: sign-in, market picker, order confirmation, copy confirmation,
+  Predict trade and Risk position. Each dialog is measured inside its own shell,
+  and the shell must not need a horizontal scrollbar.
+- `e2e/render-budget.spec.ts` checks virtual geometry across viewport resize and
+  a filter applied while the picker is deep-scrolled, instead of measuring only
+  a freshly opened list.
 
 ### Changed
 - The palette of the panels is now only tokens: 37 distinct hex literals (449
@@ -630,6 +642,23 @@ from the commit history rather than from a release.
   claim of an "optional KMS mode", which the removed file could not deliver.
 
 ### Fixed
+- `useRowWindow` could return `start > end` after the data behind a scrolled
+  window shrank: it kept the old `scrollTop` while the list was already shorter,
+  slicing zero rows and still drawing a `padTop` beyond the list. The offset is
+  now clamped to the maximum scroll position of the current count, so the window
+  remains inside the data until the browser's own `scroll` event arrives.
+- The doubled type-scale gate never doubled anything: it installed its CSS after
+  page load and measured the normal 13 px interface. It now applies the scale to
+  the live page, asserts `--fs-ui` resolves to 26 px, and the Terminal ticket,
+  Overview header controls, Predict filters and Agent actions reflow within
+  320 px instead of making the document pan.
+- The copy-confirmation avatar drew white ink on its own dynamic accent at 3.67:1.
+  It uses `--on-accent` like the other direction fills, while the colour assigned
+  from the handle remains unchanged.
+- The node-growth check compared a partially loaded Terminal with its settled
+  state, so candles, trades and ticker rows could legitimately add ~130 nodes and
+  make the gate flaky. It now waits for three consecutive stable measurements
+  before comparing the polling window.
 - The windowed market picker hid 180 of its 200 rows from the mouse. The bottom
   spacer was a plain `div` inside a `display: flex` column, so `flex-shrink: 1`
   collapsed a `height: 9 200 px` to 0: `scrollHeight` was 804 px instead of

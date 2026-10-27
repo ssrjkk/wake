@@ -215,7 +215,7 @@ export default function Agent({ signedIn, subscription, currentMarket, setToast,
                   ))}
                 </div>
               </div>
-              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+              <div className="agent-controls">
                 <label style={{ fontSize: "12px", color: "var(--text-muted)", display: "flex", alignItems: "center" }}>
                   Базовый размер $
                   <input

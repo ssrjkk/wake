@@ -30,7 +30,12 @@ export type DesignAudit = {
   documentPan: number;
 };
 
-function auditInBrowser(minTarget: number): DesignAudit {
+function auditInBrowser(opts: { minTarget: number; root: string | null }): DesignAudit {
+  const { minTarget } = opts;
+  // Открытый диалог проверяется сам: панель за ним инертна, и её размеры — не
+  // то, что человек в этот момент обязан прочитать или нажать.
+  const scope: ParentNode =
+    (opts.root ? document.querySelector(opts.root) : null) ?? document;
   type Rgba = { r: number; g: number; b: number; a: number };
   const parseColor = (v: string | undefined | null): Rgba | null => {
     if (!v) return null;
@@ -157,7 +162,7 @@ function auditInBrowser(minTarget: number): DesignAudit {
   const clipping: Offender[] = [];
   const contrast: Offender[] = [];
 
-  for (const el of [...document.querySelectorAll("*")]) {
+  for (const el of [...scope.querySelectorAll("*")]) {
     if (!hasText(el) || !onScreen(el)) continue;
     const style = getComputedStyle(el);
     const scrollable = ["auto", "scroll"].includes(style.overflowX) || ["auto", "scroll"].includes(style.overflowY);
@@ -190,7 +195,7 @@ function auditInBrowser(minTarget: number): DesignAudit {
     }
   }
 
-  for (const el of [...document.querySelectorAll("input, textarea")] as (HTMLInputElement | HTMLTextAreaElement)[]) {
+  for (const el of [...scope.querySelectorAll("input, textarea")] as (HTMLInputElement | HTMLTextAreaElement)[]) {
     if (!el.placeholder || !onScreen(el)) continue;
     const ph = getComputedStyle(el, "::placeholder");
     const fontSize = parseFloat(ph.fontSize || getComputedStyle(el).fontSize);
@@ -222,7 +227,7 @@ function auditInBrowser(minTarget: number): DesignAudit {
   }
 
   const touch: Offender[] = [];
-  for (const el of [...document.querySelectorAll("button, a[href], input, select, [role='button'], [role='tab']")]) {
+  for (const el of [...scope.querySelectorAll("button, a[href], input, select, [role='button'], [role='tab']")]) {
     if (!onScreen(el)) continue;
     const box = el.getBoundingClientRect();
     // Зона нажатия флагова — метка: клик по подписи переключает его, и
@@ -247,13 +252,17 @@ function auditInBrowser(minTarget: number): DesignAudit {
     contrast,
     placeholders,
     touch,
-    documentOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    documentOverflow:
+      scope === document
+        ? document.documentElement.scrollWidth - document.documentElement.clientWidth
+        : 0,
     documentPan,
   };
 }
 
-/** minTarget — нижняя граница цели касания для текущей ширины экрана. */
-export async function auditDesign(page: Page, minTarget = 24): Promise<DesignAudit> {
+/** minTarget — нижняя граница цели касания для текущей ширины экрана.
+ *  root — селект области (открытый диалог); без него меряется весь документ. */
+export async function auditDesign(page: Page, minTarget = 24, root?: string): Promise<DesignAudit> {
   // Контраст и геометрия — свойства устойчивого состояния. Мигание тика,
   // fade-in строки ленты и переход цвета длятся 160–500 мс, и замер внутри
   // них даёт то «60 нарушений контраста» в Терминале, которых человек никогда
@@ -263,7 +272,7 @@ export async function auditDesign(page: Page, minTarget = 24): Promise<DesignAud
     content: "*, *::before, *::after { animation: none !important; transition: none !important; }",
   });
   try {
-    return await page.evaluate(auditInBrowser, minTarget);
+    return await page.evaluate(auditInBrowser, { minTarget, root: root ?? null });
   } finally {
     await tag.evaluate((el) => el.remove());
   }

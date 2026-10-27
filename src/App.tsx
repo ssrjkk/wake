@@ -3,8 +3,11 @@ import {
   useEffect,
   useEffectEvent,
   useRef,
+  useCallback,
+  useLayoutEffect,
   lazy,
   Suspense,
+  type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import {
   useAccount,
@@ -112,6 +115,24 @@ const MARKETS_TABS: readonly Tab[] = [
 // высота обязана быть одной и той же с обеих сторон — проверяется гейтом
 // e2e/render-budget.spec.ts, который меряет смещение последней видимой строки.
 const PICKER_ROW_PITCH = 50;
+
+function focusMarketRow(
+  list: HTMLDivElement,
+  index: number,
+  pending: { current: number | null },
+) {
+  const mounted = list.querySelector<HTMLButtonElement>(`[data-market-index="${index}"]`);
+  if (mounted) {
+    pending.current = null;
+    mounted.focus();
+    return;
+  }
+  pending.current = index;
+  const top = index * PICKER_ROW_PITCH;
+  const bottom = top + PICKER_ROW_PITCH;
+  if (top < list.scrollTop) list.scrollTop = top;
+  else if (bottom > list.scrollTop + list.clientHeight) list.scrollTop = bottom - list.clientHeight;
+}
 
 export default function App() {
   const { address, isConnected } = useAccount();
@@ -381,6 +402,50 @@ export default function App() {
     filteredMarkets.length,
     PICKER_ROW_PITCH,
   );
+  const pickerElement = useRef<HTMLDivElement | null>(null);
+  const pendingMarketFocus = useRef<number | null>(null);
+  const attachMarketPicker = useCallback((node: HTMLDivElement | null) => {
+    pickerElement.current = node;
+    if (!node) pendingMarketFocus.current = null;
+    attachPicker(node);
+  }, [attachPicker]);
+
+  useLayoutEffect(() => {
+    const index = pendingMarketFocus.current;
+    if (index === null) return;
+    if (index >= filteredMarkets.length) {
+      pendingMarketFocus.current = null;
+      return;
+    }
+    const row = pickerElement.current?.querySelector<HTMLButtonElement>(
+      `[data-market-index="${index}"]`,
+    );
+    if (!row) return;
+    row.focus();
+    pendingMarketFocus.current = null;
+  }, [filteredMarkets.length, pickerWindow.start, pickerWindow.end]);
+
+  function handleMarketKeys(event: ReactKeyboardEvent<HTMLDivElement>) {
+    if (!["ArrowDown", "ArrowUp", "Home", "End", "PageDown", "PageUp"].includes(event.key)) return;
+    event.preventDefault();
+    const list = event.currentTarget;
+    const row = (event.target as HTMLElement).closest<HTMLButtonElement>(".picker-row");
+    const current = row ? Number(row.dataset.marketIndex) : pickerWindow.start - 1;
+    const page = Math.max(1, Math.floor(list.clientHeight / PICKER_ROW_PITCH));
+    const next =
+      event.key === "Home" ? 0 :
+      event.key === "End" ? filteredMarkets.length - 1 :
+      event.key === "ArrowDown" ? current + 1 :
+      event.key === "ArrowUp" ? current - 1 :
+      event.key === "PageDown" ? current + page : current - page;
+    if (filteredMarkets.length > 0) {
+      focusMarketRow(
+        list,
+        Math.max(0, Math.min(filteredMarkets.length - 1, next)),
+        pendingMarketFocus,
+      );
+    }
+  }
 
   useEffect(() => {
     if (!toast) return;
@@ -1454,6 +1519,14 @@ export default function App() {
                 aria-label="Поиск рынка"
                 data-autofocus=""
                 className="input-mono mb-3 w-full"
+                onKeyDown={(event) => {
+                  if (event.key !== "ArrowDown" || filteredMarkets.length === 0) return;
+                  event.preventDefault();
+                  const list = event.currentTarget
+                    .closest(".overlay-shell")
+                    ?.querySelector<HTMLDivElement>(".picker-list");
+                  if (list) focusMarketRow(list, 0, pendingMarketFocus);
+                }}
               />
               <div
                 className="seg mb-3 overflow-x-auto"
@@ -1493,8 +1566,9 @@ export default function App() {
                 Crypto — для отдельной строки это допущение, а не факт.
               </p>
               <div
-                ref={attachPicker}
+                ref={attachMarketPicker}
                 className="overflow-y-auto picker-list"
+                onKeyDown={handleMarketKeys}
               >
                 {filteredMarkets.length === 0 && (
                   <p className="picker-empty">
@@ -1504,9 +1578,10 @@ export default function App() {
                 <div className="window-spacer" style={{ height: pickerWindow.padTop }} />
                 {filteredMarkets
                   .slice(pickerWindow.start, pickerWindow.end)
-                  .map((m) => (
+                  .map((m, offset) => (
                     <button
                       key={m.market_id}
+                      data-market-index={pickerWindow.start + offset}
                       onClick={() => {
                         setAsset(m.symbol);
                         setMarketPickerOpen(false);
@@ -1541,7 +1616,7 @@ export default function App() {
               <div className="flex items-center justify-between mb-4">
                 <div className="flex items-center gap-2">
                   <div
-                    className="w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold text-white"
+                    className="w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold text-[color:var(--on-accent)]"
                     style={{ background: avatarColor(copyModal.handle) }}
                   >
                     {shortHandle(copyModal.handle)}

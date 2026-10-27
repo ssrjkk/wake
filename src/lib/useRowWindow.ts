@@ -53,7 +53,9 @@ const windowFrom = (
   viewport: Viewport | null,
 ): RowWindow => {
   const height = viewport?.height ?? FALLBACK_VIEWPORT_PX;
-  const first = Math.floor((viewport?.scrollTop ?? 0) / rowHeight);
+  const maxScrollTop = Math.max(0, count * rowHeight - height);
+  const scrollTop = Math.max(0, Math.min(viewport?.scrollTop ?? 0, maxScrollTop));
+  const first = Math.floor(scrollTop / rowHeight);
   const visible = Math.ceil(height / rowHeight);
   const start = Math.max(0, first - overscan);
   const end = Math.min(count, first + visible + overscan * 2);

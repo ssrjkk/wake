@@ -570,8 +570,8 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
       </div>
 
       {/* ── Правая колонка: тикет и список рынков ───────────────────────── */}
-      <div style={{ background: "var(--bg-1)", display: "grid", gridTemplateRows: "auto auto minmax(0,1fr)", gap: "1px" }}>
-        <div style={{ padding: "12px", display: "grid", gap: "10px" }}>
+      <div className="terminal-side">
+        <div className="terminal-ticket">
           <div className="seg" role="group" aria-label="Сторона ордера" style={{ display: "flex" }}>
             <button aria-pressed={side === "long"} onClick={() => setSide("long")} style={{ flex: 1 }}>Long</button>
             <button aria-pressed={side === "short"} onClick={() => setSide("short")} style={{ flex: 1 }}>Short</button>
@@ -593,7 +593,7 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
             style={{ width: "100%" }}
           />
 
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div className="terminal-field-row">
             <label htmlFor="terminal-leverage" className="label">Плечо</label>
             <span className="num" style={{ fontSize: "13px", fontWeight: 600 }}>{leverage}x</span>
           </div>
@@ -660,8 +660,8 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
 
           {/* Копи-режим — не украшение тикета, а запись в базе: publish — это
               leaders.active, по которому mirror_engine вообще видит подписки. */}
-          <div style={{ borderTop: "1px solid var(--line)", paddingTop: "10px", display: "grid", gap: "6px" }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px" }}>
+          <div className="terminal-copy-block">
+            <div className="terminal-copy-row">
               <span className="label">Публиковать мои сделки</span>
               <button
                 onClick={toggleCopyable}
@@ -689,7 +689,7 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
         </div>
 
         <div style={{ padding: "0 12px 10px" }}>
-          <div style={{ position: "relative" }}>
+          <div className="terminal-search">
             <Search style={{ position: "absolute", left: "10px", top: "50%", transform: "translateY(-50%)", width: "13px", height: "13px", color: "var(--fg-3)" }} />
             <input
               aria-label="Поиск по рынку"
@@ -723,7 +723,7 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
                 <button
                   key={m.market_id}
                   className="desk-row"
-                  style={{ gridTemplateColumns: "minmax(0,1fr) auto auto" }}
+                  style={{ gridTemplateColumns: "minmax(0, 1fr) minmax(0, auto) minmax(0, auto)" }}
                   aria-current={m.symbol === asset}
                   onClick={() => setAsset(m.symbol)}
                 >

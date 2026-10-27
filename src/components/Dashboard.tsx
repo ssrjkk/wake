@@ -131,8 +131,8 @@ export default function Dashboard({ setTab, setAsset }: DashboardProps) {
     <div className="terminal-layout terminal-stack">
       <div className="terminal-main">
         <div className="terminal-header" style={{ flexDirection: "column", alignItems: "flex-start" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: "12px", width: "100%" }}>
-            <h2 style={{ fontSize: "16px", fontWeight: 600, color: "var(--fg)", margin: 0 }}>Рынки Lighter</h2>
+          <div className="panel-head-row">
+            <h2 className="panel-title" style={{ fontSize: "16px" }}>Рынки Lighter</h2>
             <span className="chip chip-accent">zkLighter</span>
             <button
               onClick={() => setNonce((n) => n + 1)}

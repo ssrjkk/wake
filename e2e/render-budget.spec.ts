@@ -290,6 +290,30 @@ test.describe("бюджеты рендера на живом объёме дан
     expect(g.tailSymbol).toContain(symbolAt(total - 1));
   });
 
+  test("окно рынка: resize и сокращение данных не оставляют дыр", async ({ page }) => {
+    await visitTab(page, "Терминал");
+    await page.getByRole("button", { name: "Выбрать рынок", exact: true }).click();
+    const list = page.locator(".picker-list");
+    await list.evaluate((el) => { el.scrollTop = 100 * 50; });
+
+    for (const viewport of [{ width: 390, height: 844 }, { width: 1440, height: 900 }]) {
+      await page.setViewportSize(viewport);
+      const g = await windowGeometry(page, ".picker-list", ".picker-row");
+      expect(g.coveredWhileScrolling, `${viewport.width}: строки накрывают viewport`).toBe(true);
+      expect(g.tailVisible, `${viewport.width}: последняя строка доступна`).toBe(true);
+      expect(g.pitch.max - g.pitch.min).toBeLessThan(0.5);
+    }
+
+    const expected = Array.from({ length: MEASURED.orderBookRows }, (_, i) => symbolAt(i))
+      .filter((symbol) => symbol.includes("XAUUSD"));
+    await page.getByRole("textbox", { name: "Поиск рынка" }).fill("XAUUSD");
+    await expect(page.locator(".picker-row")).toHaveCount(expected.length);
+    await expect.poll(() => list.evaluate((el) => el.scrollTop)).toBe(0);
+    for (const [index, symbol] of expected.entries()) {
+      await expect(page.locator(".picker-row").nth(index)).toContainText(symbol);
+    }
+  });
+
   test("журнал копи-движка: те же инварианты геометрии", async ({ page }) => {
     await visitTab(page, "Портфель");
     const total = MEASURED.mirrorLogCeiling;
@@ -337,11 +361,29 @@ test.describe("бюджеты рендера на живом объёме дан
     }
   });
 
+  async function waitForStableMetrics(page: Page): Promise<Metrics> {
+    let previous: Metrics | null = null;
+    let stable = 0;
+    for (let attempt = 0; attempt < 40; attempt++) {
+      await page.waitForTimeout(200);
+      const current = await metrics(page);
+      if (previous && current.nodes === previous.nodes && current.svgNodes === previous.svgNodes) {
+        stable++;
+        if (stable >= 3) return current;
+      } else {
+        stable = 0;
+      }
+      previous = current;
+    }
+    throw new Error("Первичная загрузка Терминала не успокоилась: узлы продолжают расти");
+  }
+
   test("опрос не оставляет узлов за собой", async ({ page }) => {
     await visitTab(page, "Терминал");
-    const first = await metrics(page);
-    // Рыночная книга обновляется каждые 15 с; если окно мёртвое, узлы растут от
-    // ответа к ответу, и через час вкладка стоит дороже, чем в первый кадр.
+    // Базой может быть только устойчивое дерево: первые ответы подгружают свечи,
+    // ленту и тикеры, и сравнивать «до загрузки» с «после» — это мерить старт,
+    // а не опрос.
+    const first = await waitForStableMetrics(page);
     await page.waitForTimeout(2000);
     const second = await metrics(page);
     expect(second.nodes).toBeLessThanOrEqual(first.nodes + 50);
