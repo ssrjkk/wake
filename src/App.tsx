@@ -1501,7 +1501,7 @@ export default function App() {
                     Ничего не найдено
                   </p>
                 )}
-                <div style={{ height: pickerWindow.padTop }} />
+                <div className="window-spacer" style={{ height: pickerWindow.padTop }} />
                 {filteredMarkets
                   .slice(pickerWindow.start, pickerWindow.end)
                   .map((m) => (
@@ -1526,7 +1526,7 @@ export default function App() {
                       </span>
                     </button>
                   ))}
-                <div style={{ height: pickerWindow.padBottom }} />
+                <div className="window-spacer" style={{ height: pickerWindow.padBottom }} />
               </div>
             </div>
           </Modal>

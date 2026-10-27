@@ -135,10 +135,15 @@ layer composited (an opaque-ancestor-only probe cannot see a chip's own
 background), the focus ring under real Tab navigation (`element.focus()` does not
 trigger `:focus-visible` after a click, so a probe that calls it finds no
 violation to find), touch target sizes (≥44 px at 390/320, ≥24 px under a
-pointer), and horizontal overflow at four widths — both `scrollWidth` of the
-root and the `scrollX` the page reaches when asked to pan, because a wide table
-inside a static scroll container can leave the body at 320 px while the document
-still slides 451 px sideways. The data behind those panels comes from
+pointer, both now in the standing gate), horizontal overflow at four widths —
+both `scrollWidth` of the root and the `scrollX` the page reaches when asked to
+pan — and `::placeholder`, which is not in the DOM at all, so a tree walk never
+saw it. Two more measured states came out of the last pass: a translucent *ink*
+is composited through the whole ancestor `opacity` chain (a button at
+`opacity: .45` fades its ink and its fill together, and the pair's contrast
+drops with them), and one case re-runs every panel at 320 px with the type scale
+doubled — WCAG 1.4.10 reflow, which is also what catches layouts that only fit
+the fonts on the author's machine. The data behind those panels comes from
 `e2e/fixtures.ts`, whose row counts are measured from live responses (Lighter
 `/orderBooks` 246 rows, `/funding-rates` 733, Arcus `/markets` 70, the backend's
 `MAJOR_PERPS` 18, the `/mirror-log` ceiling 200) — a budget test on invented
@@ -150,6 +155,28 @@ per panel, page height, mounted rows in the market picker (windowed, not all
 a 10 317 px page, and how many requests a leader list costs (one hydrated
 endpoint, not two requests per card). Thresholds are the measured values with
 headroom: they may go down, and the test is written to fail if they go up.
+
+Virtualisation is measured as geometry, not as a row count: the rendered pitch
+of a windowed row (50 px in the picker, 40 px in the journal), the scroll range
+the window promises (`scrollHeight ≥ count × pitch`), that mounted rows cover the
+viewport at mid-scroll, and that scrolling to the end paints the fixture's last
+row — named by symbol rather than as «some row». Those four assertions are what
+caught a collapsed spacer: the picker kept 200 markets in `padBottom` styled at
+9 200 px, `flex-shrink` compressed it to zero, and 180 markets could not be
+reached with the mouse at all.
+
+Render cost is budgeted in **frames**, not milliseconds. One build measured
+295, 369, 386, 547 and 1 079 ms for a single picker open with an unchanged DOM —
+a millisecond threshold on a laptop (or a loaded CI runner) is a coin flip, not a
+gate. Counted in frames the same action is flat: 10 of 10 opens land on frame 2,
+so the published ceiling is 3 frames.
+
+The fixtures also have a worst-case contour (`{ stress: true }`): the same fields
+with values from the edges of the range — a 24-character ticker, `1,234,567.891011`,
+funding of 0.42 per hour, which prints as `367920.0%` annualised. Plausible data
+hides column overflow until a real outlier arrives, and it also hides a broken
+spacer height. The stress tests assert the extreme value reached the screen
+before measuring it, so the contour cannot quietly become empty.
 
 CI runs `npm run test:run -- --coverage` and `npm run test:e2e`. The e2e suite drives the frontend alone against the vite dev server — its route stubs intercept everything outside their own origin, so it neither needs nor tests the backend.
 
@@ -374,18 +401,24 @@ PW_PORT=5178 npx playwright test  # первый прогон требует `np
 который исчезает без контейнера со скроллом и без многоточия; контраст по
 фактически вычисленным `getComputedStyle` цветам, где смешивается каждый
 полупрозрачный слой до первого непрозрачного предка (проверка, которая берёт
-только непрозрачного предка, не видит подложку самого чипа); кольцо фокуса при
-настоящей Tab-навигации (после клика `element.focus()` не включает
-`:focus-visible`, и проверка, которая зовёт его сама, нарушения не нашла бы
-вообще); размеры целей касания (≥44 px на 390/320 и ≥24 px под указателем) и
-горизонтальное переполнение на четырёх ширинах — и по `scrollWidth` корня, и по
-`scrollX`, до которого страница действительно доезжает: широкая таблица внутри
-статичного скролл-контейнера оставляет `body` на 320 px, пока документ едет
-боком на 451. Данные для панелей берёт `e2e/fixtures.ts`, а объёмы в нём —
-замеры живых ответов (Lighter `/orderBooks` — 246 строк, `/funding-rates` — 733,
-Arcus `/markets` — 70, `MAJOR_PERPS` бэкенда — 18, потолок `/mirror-log` — 200):
-бюджет на выдуманном объёме либо не замечает настоящую просадку, либо краснеет
-без причины.
+только непрозрачного предка, не видит подложку самого чипа) и где сквозь всю
+цепочку `opacity` предков гасится и сама буква: кнопка ордера жила с
+`opacity: .45` в состоянии «неактивна», а это уносит вниз контраст и букв, и её
+же подложки; кольцо фокуса при настоящей Tab-навигации (после клика
+`element.focus()` не включает `:focus-visible`, и проверка, которая зовёт его
+сама, нарушения не нашла бы вообще); размеры целей касания (≥44 px на 390/320 и
+≥24 px под указателем — обе границы теперь в постоянном гейте, а не в разовом
+прогоне); `::placeholder`, которого в дереве нет вовсе, — поэтому обход дерева
+его никогда не мерил; и горизонтальное переполнение на четырёх ширинах — и по
+`scrollWidth` корня, и по `scrollX`, до которого страница действительно доезжает:
+широкая таблица внутри статичного скролл-контейнера оставляет `body` на 320 px,
+пока документ едет боком на 451. Отдельный случай прогоняет все панели на 320 px
+при удвоенной шкале типов (рефлю по WCAG 1.4.10) — он же ловит раскладки, которые
+влезали только в шрифты машины автора. Данные для панелей берёт
+`e2e/fixtures.ts`, а объёмы в нём — замеры живых ответов (Lighter `/orderBooks` —
+246 строк, `/funding-rates` — 733, Arcus `/markets` — 70, `MAJOR_PERPS` бэкенда —
+18, потолок `/mirror-log` — 200): бюджет на выдуманном объёме либо не замечает
+настоящую просадку, либо краснеет без причины.
 
 `e2e/render-budget.spec.ts` ставит числа на то, сколько этот объём стоит: узлов
 на панель, высота страницы, сколько строк окна рынка живёт в DOM (окно, а не все
@@ -393,6 +426,31 @@ Arcus `/markets` — 70, `MAJOR_PERPS` бэкенда — 18, потолок `/m
 10 317 px и сколько запросов стоит список лидеров (один гидратированный эндпоинт
 вместо двух на карточку). Пороги — замер с запасом: они могут только уменьшаться,
 и тест написан так, чтобы рост его валил.
+
+Виртуализация меряется геометрией, а не числом строк: отрисованный шаг строки
+окна (50 px в списке рынков, 40 px в журнале), диапазон скролла, который окно
+обещает (`scrollHeight ≥ число строк × шаг`), покрыта ли видимая область
+отрисованными строками на середине прокрутки и доезжает ли прокрутка в конец до
+последней строки фикстуры — по имени тикера, а не до «какой-то строки». Именно
+эти четыре проверки поймали схлопнутую заглушку: у окна рынка нижняя заглушка
+была обычным `div` внутри flex-колонки, `flex-shrink` сжал её 9 200 px до нуля,
+`scrollHeight` стал 804 вместо 10 004, и 180 из 200 рынков нельзя было открыть
+мышью — их находил только поиск.
+
+Стоимость рендера бюджется в кадрах, а не в миллисекундах. Одна и та же сборка
+на один клик открытия окна давала 295, 369, 386, 547 и 1 079 мс при неизменном
+дереве: порог в миллисекундах на ноутбуке — это подбрасывание монеты, а на
+загруженном раннере CI — красный тест без причины. По кадрам то же действие
+плоское: 10 из 10 открытий и 8 из 8 перерисовок на фильтр приходится на второй
+кадр, поэтому опубликованный потолок — 3 кадра.
+
+У фикстур есть и контур худших данных (`{ stress: true }`): те же поля со
+значениями с краёв диапазона — тикер в 24 символа, `1,234,567.891011`, funding
+0.42 в час (в годовых это печатается как `367920.0%`), PnL −999 999 999.
+Правдоподобные числа прячут переполнение колонки до первого реального выброса, а
+заодно прячут и расползание шага строк. Проверка сначала утверждает, что крайнее
+значение дошло до экрана, и только потом мерит его — иначе контур мог бы зелёным
+ничего не мерить.
 
 CI запускает `npm run test:run -- --coverage` и `npm run test:e2e`. E2e-проверка работает только с фронтом против dev-сервера vite: её route-заглушки отсекают весь трафик вне собственного origin, поэтому бэкенд ей не нужен и не проверяется.
 

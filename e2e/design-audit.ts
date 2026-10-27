@@ -21,6 +21,8 @@ export type Offender = { what: string; where: string; value: string };
 export type DesignAudit = {
   clipping: Offender[];
   contrast: Offender[];
+  /** Подсказки полей ввода: их нет в дереве, и обычный обход текста их не видит. */
+  placeholders: Offender[];
   touch: Offender[];
   /** Насколько область прокрутки корня шире вьюпорта (px). */
   documentOverflow: number;
@@ -101,14 +103,34 @@ function auditInBrowser(minTarget: number): DesignAudit {
   };
   // Полупрозрачный текст (disabled, tint) тоже смешивается со своим фоном, а
   // не игнорируется: иначе серый «выключенный» контрол считался бы сплошным.
+  // opacity родителя — не украшение: слой с opacity 0.5 гасит и букву, и её
+  // подложку, поэтому контраст считается после применения всей цепочки.
+  const opacityChain = (el: Element) => {
+    let factor = 1;
+    let node: Element | null = el;
+    while (node && node !== document.documentElement) {
+      factor *= Number(getComputedStyle(node).opacity || "1");
+      node = node.parentElement;
+    }
+    return factor;
+  };
+  // Element с opacity ≈ 0 не нарисован, а значит ничего не обязан читать:
+  // мерить его контраст — это ловить не нарушение, а момент анимации.
+  const NOT_DRAWN = 0.02;
   const inkOn = (el: Element) => {
-    const fg = parseColor(getComputedStyle(el).color);
     const bgRaw = behind(el);
-    if (!fg || fg.a >= 0.999) return { fg: getComputedStyle(el).color, bg: bgRaw };
+    const fg = parseColor(getComputedStyle(el).color);
+    const alpha = fg ? fg.a * opacityChain(el) : 1;
+    if (alpha < NOT_DRAWN) return null;
+    if (!fg || alpha >= 0.999) return { fg: getComputedStyle(el).color, bg: bgRaw };
     const bg = parseColor(bgRaw)!;
-    const m = over(fg, bg);
+    const m = over({ ...fg, a: alpha }, bg);
     return { fg: `rgb(${m.r}, ${m.g}, ${m.b})`, bg: bgRaw };
   };
+  // Подсказка поля — отдельный текст, которого у проверки раньше не было
+  // вовсе: ::placeholder не лежит в дереве, а именно он обязан отличаться от
+  // введённого значения и читаться.
+  const placeholders: Offender[] = [];
   // Строка широкой таблицы «за правым краем» — не дефект, если её контейнер
   // скроллится: проверка обязана отличать обрезанное от досматриваемого.
   // overflow-x: hidden сюда сознательно НЕ входит — он и есть обрезка.
@@ -157,12 +179,44 @@ function auditInBrowser(minTarget: number): DesignAudit {
     // WCAG 1.4.3: крупный текст (≥24 px, либо ≥18.66 px и жирный) — 3:1, остальной — 4.5:1.
     const need = fontSize >= 24 || (fontSize >= 18.66 && bold) ? 3 : 4.5;
     const ink = inkOn(el);
+    if (!ink) continue;
     const value = contrastOf(ink.fg, ink.bg);
     if (value < need) {
       contrast.push({
         what: `контраст ${value.toFixed(2)} < ${need}`,
         where: describe(el),
         value: `${ink.fg} на ${ink.bg} @${fontSize}px`,
+      });
+    }
+  }
+
+  for (const el of [...document.querySelectorAll("input, textarea")] as (HTMLInputElement | HTMLTextAreaElement)[]) {
+    if (!el.placeholder || !onScreen(el)) continue;
+    const ph = getComputedStyle(el, "::placeholder");
+    const fontSize = parseFloat(ph.fontSize || getComputedStyle(el).fontSize);
+    const need = fontSize >= 24 ? 3 : 4.5;
+    const bg = behind(el);
+    const raw = parseColor(ph.color);
+    const alpha = raw ? raw.a * opacityChain(el) * Number(ph.opacity || "1") : 1;
+    if (alpha < NOT_DRAWN) continue;
+    const bgRgb = parseColor(bg)!;
+    const ink = raw ? over({ ...raw, a: alpha }, bgRgb) : null;
+    const value = ink ? contrastOf(`rgb(${ink.r}, ${ink.g}, ${ink.b})`, bg) : 0;
+    if (value < need) {
+      placeholders.push({
+        what: `контраст подсказки ${value.toFixed(2)} < ${need}`,
+        where: describe(el),
+        value: `${ph.color} на ${bg} @${fontSize}px`,
+      });
+    }
+    // Подсказка, совпадающая с цветом значения, — это не подсказка: поле выглядит
+    // заполненным там, где человек ещё ничего не ввёл.
+    const own = getComputedStyle(el).color;
+    if (own === ph.color) {
+      placeholders.push({
+        what: "подсказка печатается цветом значения",
+        where: describe(el),
+        value: `${ph.color} == ${own}`,
       });
     }
   }
@@ -191,6 +245,7 @@ function auditInBrowser(minTarget: number): DesignAudit {
   return {
     clipping,
     contrast,
+    placeholders,
     touch,
     documentOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
     documentPan,
@@ -199,7 +254,19 @@ function auditInBrowser(minTarget: number): DesignAudit {
 
 /** minTarget — нижняя граница цели касания для текущей ширины экрана. */
 export async function auditDesign(page: Page, minTarget = 24): Promise<DesignAudit> {
-  return page.evaluate(auditInBrowser, minTarget);
+  // Контраст и геометрия — свойства устойчивого состояния. Мигание тика,
+  // fade-in строки ленты и переход цвета длятся 160–500 мс, и замер внутри
+  // них даёт то «60 нарушений контраста» в Терминале, которых человек никогда
+  // не видел: строка на полутаине. Анимации выключаются на время промера и
+  // включаются обратно — проверка меряет то, что остаётся на экране.
+  const tag = await page.addStyleTag({
+    content: "*, *::before, *::after { animation: none !important; transition: none !important; }",
+  });
+  try {
+    return await page.evaluate(auditInBrowser, minTarget);
+  } finally {
+    await tag.evaluate((el) => el.remove());
+  }
 }
 
 /** Кольцо фокуса на реальной Tab-навигации. */

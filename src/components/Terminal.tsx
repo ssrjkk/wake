@@ -623,8 +623,7 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
             onClick={requestOrder}
             disabled={orderSending || !currentMarket || price == null}
             aria-busy={orderSending}
-            className="btn-action"
-            style={{ background: side === "long" ? "var(--up)" : "var(--down)", color: "var(--on-accent)", opacity: orderSending || !currentMarket || price == null ? 0.45 : 1 }}
+            className={`btn-primary ${side === "long" ? "btn-up" : "btn-down"}`}
           >
             {orderSending ? "Отправка…" : !currentMarket ? "Рынок не загружен" : price == null ? "Цена недоступна" : `${side === "long" ? "Открыть long" : "Открыть short"} · ${usd(size, 0)}`}
           </button>

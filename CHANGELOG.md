@@ -349,6 +349,27 @@ from the commit history rather than from a release.
   tests, end-to-end and a Docker build.
 - `SECURITY.md` and `CONTRIBUTING.md` (English and Russian), documenting the
   trust boundaries, the local gates and the deployment contract.
+- `e2e/render-budget.spec.ts` measures geometry, not just counts: the rendered
+  pitch of a windowed row (`50 px` in the market picker, `40 px` in the copy
+  journal), the scroll range the window promises (`scrollHeight ≥ count × pitch`),
+  that mounted rows cover the viewport at mid-scroll, and that scrolling to the
+  end actually paints the last row of the fixture — named by symbol, not
+  «some row». These are the invariants virtualisation silently breaks: the list
+  looks right, and only the arithmetic knows it lies.
+- `e2e/render-budget.spec.ts` thresholds render cost in **frames**, not
+  milliseconds. The same build measured 295 / 369 / 386 / 547 / 1 079 ms for one
+  picker open with an unchanged DOM — a threshold in ms on this machine would
+  have been a coin flip, and red on a loaded CI runner. By frames the
+  distribution is flat: 10 of 10 opens and 8 of 8 filtered re-renders land on
+  frame 2, so the published ceiling is 3.
+- `e2e/fixtures.ts` grows `{ stress: true }`: the same fields with values from
+  the edges of the range — a 24-character ticker, `1,234,567.891011`, funding of
+  0.42 per hour (which prints as `367920.0%` annualised), a PnL of −999 999 999.
+  The gate asserts the extreme value reached the screen before measuring it, so
+  the contour cannot go quietly empty.
+- Two more measured states in the browser audit: `::placeholder` (not in the DOM,
+  so a tree walk never saw it) and any element whose *ancestor* has opacity —
+  the composite is now computed through the whole opacity chain.
 
 ### Changed
 - The palette of the panels is now only tokens: 37 distinct hex literals (449
@@ -609,6 +630,23 @@ from the commit history rather than from a release.
   claim of an "optional KMS mode", which the removed file could not deliver.
 
 ### Fixed
+- The windowed market picker hid 180 of its 200 rows from the mouse. The bottom
+  spacer was a plain `div` inside a `display: flex` column, so `flex-shrink: 1`
+  collapsed a `height: 9 200 px` to 0: `scrollHeight` was 804 px instead of
+  10 004, the scroll range stopped after the first window, and a market beyond
+  it could only be reached through the search field. `.window-spacer` pins
+  `flex: 0 0 auto`, and the geometry gate above is what now catches it (checked
+  by mutation: removing the class turns `scrollHeight ≥ count × pitch` red).
+- `::placeholder` inherited the input's own colour (`rgb(230, 230, 232)` =
+  `--fg` on `--bg-0`), so an empty search field looked like a field with a value
+  in it. Placeholders are `--fg-3` now — 6.13:1 on the field's background, still
+  visibly darker than what a person types — and the gate fails if the two
+  colours are ever equal again.
+- The order button expressed «disabled» with `opacity: 0.45`, which fades the
+  ink and its fill together and drags the pair's contrast down with them. It
+  uses `.btn-primary.btn-up` / `.btn-down` now, whose disabled state the theme
+  already defines as `--bg-2` under `--fg-3` (5.63:1) in one place instead of
+  per panel.
 - The Terminal's price line overflowed a 320 px viewport in CI: the price and the
   change chip are both `nowrap`, `.desk-quote` was a non-wrapping flex row, and
   on Linux font metrics the chip `-3.08% / 24ч` reached right=334. It fit on the
