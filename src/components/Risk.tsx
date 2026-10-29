@@ -169,7 +169,7 @@ export default function Risk({ markets, setToast }: RiskProps) {
             <span style={{ fontSize: "var(--fs-label)", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.5px" }}>Позиции для анализа</span>
             <button
               onClick={() => setRiskPickerOpen(true)}
-              style={{ background: "var(--bg-2)", color: "var(--fg)", fontSize: "var(--fs-data)", fontWeight: 500, padding: "8px 12px", borderRadius: "4px", border: "none", cursor: "pointer", minHeight: "var(--touch)", whiteSpace: "normal", overflowWrap: "anywhere" }}
+              style={{ background: "var(--bg-2)", color: "var(--fg)", fontSize: "var(--fs-data)", fontWeight: 500, padding: "8px 12px", borderRadius: "4px", border: "none", cursor: "pointer", minHeight: "var(--touch)", whiteSpace: "normal" }}
             >
               + Добавить
             </button>

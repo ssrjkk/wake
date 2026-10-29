@@ -473,5 +473,18 @@ export async function openWithData(
     );
   });
   await page.goto("/");
+  // Все замеры — после того, как приехали шрифты проекта. Без этого ожидания
+  // гейт мерял метрики системного фолбэка: на машине автора Segoe UI, на
+  // раннере DejaVu Sans, и одна и та же строка была зелёной локально и обрезанной
+  // на 3 px в CI. Шрифты лежат в бандле, поэтому ожидание конечно и офлайново.
+  await page.evaluate(async () => {
+    await Promise.all([
+      document.fonts.load('400 16px "Inter Variable"'),
+      document.fonts.load('600 16px "Inter Variable"'),
+      document.fonts.load('400 16px "JetBrains Mono Variable"'),
+      document.fonts.load('900 40px "Azeret Mono Variable"'),
+    ]);
+    await document.fonts.ready;
+  });
   return requests;
 }

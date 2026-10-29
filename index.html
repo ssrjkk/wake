@@ -16,15 +16,9 @@
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <link rel="canonical" href="https://wake-7k6.pages.dev/" />
-    <!-- Шрифт подключён ссылкой, а не @import внутри стилей: @import находится
-         только после разбора CSS, и вторая поездка к fonts.gstatic вставала на
-         критический путь отрисовки цифр. -->
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link
-      rel="stylesheet"
-      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Azeret+Mono:wght@700;900&display=swap"
-    />
+    <!-- Шрифты лежат в самом проекте и приходят из бандла (см. src/main.tsx):
+         третьего origin в критическом пути нет, и метрики на машине автора и на
+         раннере — одни и те же файлы, а не два разных системных фолбэка. -->
     <!-- Превью ссылки: карточка появляется там, где адрес вставляют — в чате
          Telegram, в ответе бота, в мессенджерах и закладках. -->
     <meta property="og:type" content="website" />

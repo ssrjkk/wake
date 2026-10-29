@@ -43,12 +43,16 @@ from the commit history rather than from a release.
   or `fontFamily` literals in panels, no `onMouseEnter`/`onMouseLeave` handlers, no
   `window.confirm`/`alert`/`prompt`.
 - `WIDE_METRICS` in `e2e/design-gate.spec.ts` — the 320 px large-text pass runs
-  with `.08em` added to every character's width, on top of the doubled scale, so
-  it measures layout under glyphs wider than the machine owns. The number is a
-  calibration, not a knob: the pass reproduces the runner's failure locally at
-  343 px against the runner's 344 px (and 23 px of document pan against 24), and
-  putting `flex-wrap: nowrap` back turns it red on the author's machine, which is
-  the class of bug the runner used to be the only one seeing.
+  with `.14em` added to every character's width, on top of the doubled scale, so
+  it measures layout under glyphs wider than the product's own. The number is a
+  calibration, not a knob: Inter renders the word the pass failed on at 215.5 px,
+  the runner's DejaVu Sans fallback rendered it at 265 px inside a 262 px
+  paragraph, and `.14em` puts Inter at 266. Sensitivity is proven by mutation:
+  without `overflow-wrap: anywhere` the pass goes red on exactly that paragraph.
+- A gate on the font itself: all three families must be loaded and every `.woff2`
+  must come from the project's own origin, so a fallback can no longer
+  masquerade as the product's typography. `openWithData` waits for
+  `document.fonts.ready` before measuring, so no pass reads a mid-swap frame.
 - Unit tests for the order path in `src/lib/lighter.ts`, which had none: the
   network-mismatch refusal, the request body, the unified error text, index
   uniqueness over 2000 draws, and "POST carries no timeout, GET does".
@@ -426,6 +430,13 @@ from the commit history rather than from a release.
   a freshly opened list.
 
 ### Changed
+- Fonts come from the bundle instead of `fonts.googleapis.com`: Inter, JetBrains
+  Mono and Azeret Mono are shipped by `@fontsource-variable`, imported in
+  `src/main.tsx`, and the page makes no third-party font request. The link was
+  not merely slow — the e2e fixtures abort every origin they do not own, so each
+  design measurement ran on a system fallback, Segoe UI on the author's Windows
+  and DejaVu Sans on the runner, and the same paragraph was green locally and
+  clipped in CI.
 - `backend/signing_service.py` answers the same error shape as the backend
   (`{"error":{"code","message"}}`). The terminal used to print FastAPI's
   `{"detail": ...}` JSON into a toast, so an exchange rejection looked like a
@@ -769,6 +780,13 @@ from the commit history rather than from a release.
   `.panel-head-row` wrap now, their children take `min-width: 0`, and
   `overflow-wrap: anywhere` lets a long mono identifier break mid-token instead of
   drawing past the edge of the screen.
+- Prose could not break inside a word, so `Risk`'s empty-state paragraph was cut
+  without ellipsis and without a scroller: at 26 px the single word
+  “диверсификации” is 265 px in a 262 px box on the runner's fallback font, and
+  `scrollWidth` exceeded `clientWidth` by 3 px. `overflow-wrap: anywhere` now
+  sits on `body` and is inherited, which also lowers min-content width so a flex
+  child can shrink instead of pushing its row wider. The same rule replaces the
+  two per-element copies it superseded.
 - The copy-confirmation avatar drew white ink on its own dynamic accent at 3.67:1.
   It uses `--on-accent` like the other direction fills, while the colour assigned
   from the handle remains unchanged.

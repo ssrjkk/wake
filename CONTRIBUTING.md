@@ -158,14 +158,16 @@ saw it. Two more measured states came out of the last pass: a translucent *ink*
 is composited through the whole ancestor `opacity` chain (a button at
 `opacity: .45` fades its ink and its fill together, and the pair's contrast
 drops with them), and one case re-runs every panel at 320 px with the type scale
-doubled *plus* `.08em` of letter-spacing on every element — WCAG 1.4.10 reflow
-under metrics deliberately wider than the machine's own. The inflation is what
-makes that claim checkable: a row that cannot wrap is green at the author's desk
-and red on the runner, because the runner's fonts are about 8 % wider (measured:
-the runner put `GET /api/v1/account?by=index` at 344 px in a 320 px window and
-paned the document by 24 px; the inflated pass reproduces it locally at 343 px
-and 23 px, and putting `flex-wrap: nowrap` back turns it red again). The data
-behind those panels comes from
+doubled *plus* `.14em` of letter-spacing on every element — WCAG 1.4.10 reflow
+under metrics wider than the product's own font. Fonts are shipped in the bundle
+(`@fontsource-variable`, imported by `src/main.tsx`), so author, runner and reader
+render the same files, and a gate fails the build if any `.woff2` comes from
+another origin or a family silently falls back; the inflation then covers the
+remaining case of a substituted font. It is calibrated, not guessed: Inter sets
+the word the pass failed on at 215.5 px, the runner's DejaVu fallback set it at
+265 px inside a 262 px paragraph, and `.14em` brings Inter to 266. The mutation
+is the proof — remove `overflow-wrap: anywhere` and the pass goes red on that
+same paragraph. The data behind those panels comes from
 `e2e/fixtures.ts`, whose row counts are measured from live responses (Lighter
 `/orderBooks` 246 rows, `/funding-rates` 733, Arcus `/markets` 70, the backend's
 `MAJOR_PERPS` 18, the `/mirror-log` ceiling 200) — a budget test on invented
@@ -469,14 +471,16 @@ Telegram Mini App не показывается, и кнопка отписки 
 `scrollWidth` корня, и по `scrollX`, до которого страница действительно доезжает:
 широкая таблица внутри статичного скролл-контейнера оставляет `body` на 320 px,
 пока документ едет боком на 451. Отдельный случай прогоняет все панели на 320 px
-при удвоенной шкале типов и с надбавкой `.08em` к ширине каждого знака — рефлю по
-WCAG 1.4.10 под метриками, заведомо более широкими, чем у локальной машины.
-Надбавка здесь именно ради того, чтобы обещание «ловит чужие шрифты» было
-проверяемым числом: строка, которая не переносится, зелёная на столе автора и
-красная на раннере, потому что шрифты раннера примерно на 8 % шире (замер:
-раннер поставил `GET /api/v1/account?by=index` на 344 px в окне 320 и сдвинул
-документ на 24 px; локально с надбавкой получается 343 px и 23 px, а
-возврат `flex-wrap: nowrap` снова делает прогон красным). Данные для панелей берёт
+при удвоенной шкале типов и с надбавкой `.14em` к ширине каждого знака — рефлю по
+WCAG 1.4.10 под метриками шире собственного шрифта продукта. Шрифты теперь лежат
+в бандле (`@fontsource-variable`, импорт в `src/main.tsx`), поэтому автор, раннер
+и читатель рисуют одни и те же файлы, а гейт падает, если хоть один `.woff2`
+пришёл с чужого origin или семейство молча ушло в фолбэк; надбавка закрывает
+оставшийся случай подменённого шрифта. Она откалибрована, а не подобрана на глаз:
+Inter рисует слово, на котором прогон падал, за 215.5 px, фолбэк раннера DejaVu
+Sans — за 265 px в абзаце шириной 262 px, а `.14em` доводит Inter до 266.
+Доказательство чувствительности — мутация: убери `overflow-wrap: anywhere`, и
+прогон краснеет ровно на этом абзаце. Данные для панелей берёт
 `e2e/fixtures.ts`, а объёмы в нём — замеры живых ответов (Lighter `/orderBooks` —
 246 строк, `/funding-rates` — 733, Arcus `/markets` — 70, `MAJOR_PERPS` бэкенда —
 18, потолок `/mirror-log` — 200): бюджет на выдуманном объёме либо не замечает

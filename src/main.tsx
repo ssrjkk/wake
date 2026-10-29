@@ -1,6 +1,12 @@
 import * as Sentry from "@sentry/react";
 import React from "react";
 import ReactDOM from "react-dom/client";
+// Шрифты — из проекта, а не с fonts.googleapis: один и тот же файл у автора,
+// на раннере и у человека, которому Google Fonts недоступны. Вариативные
+// начертания (одна ось wght) заменяют четыре статических начертания Inter.
+import "@fontsource-variable/inter/wght.css";
+import "@fontsource-variable/jetbrains-mono/wght.css";
+import "@fontsource-variable/azeret-mono/wght.css";
 import "./index.css";
 import { WagmiProvider } from "wagmi";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";

@@ -348,8 +348,8 @@ responses in full; trusted HTTPS hosts reduce exposure but do not remove it.
   police it.
 - **No CSP at the frontend edge.** The security headers above are set by the API.
   The Pages-hosted app is served without `_headers`; adding one means testing
-  against Telegram's widget script, the Google Fonts import and the wallet
-  connectors together.
+  against Telegram's widget script and the wallet connectors together (fonts are
+  already first-party and come from the bundle).
 - **Telegram identity is what Telegram signs.** The widget and Mini App prove a
   Telegram account, not a person. A leader's `handle` is free text.
 - **The API does not terminate TLS.** Railway and Cloudflare do, which is why
@@ -703,7 +703,7 @@ HTTP-путей требуют пересмотра исключений. Пос
   такое отклонит, но Wake не сторожит.
 - **На фронте нет CSP на edge.** Заголовки выше ставит API. Статический сайт на
   Pages отдаётся без `_headers`; добавлять его надо вместе с проверкой, что
-  работают виджет Telegram, импорт Google Fonts и коннекторы кошельков.
+  работают виджет Telegram и коннекторы кошельков (шрифты уже свои, из бандла).
 - **Telegram подтверждает аккаунт, а не человека.** И handle лидера — свободный
   текст.
 - **TLS терминирует не этот процесс** — Railway и Cloudflare. Поэтому
