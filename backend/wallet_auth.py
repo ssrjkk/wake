@@ -33,6 +33,7 @@ logger = logging.getLogger("wake.wallet_auth")
 CHALLENGE_TTL_S = 300
 _NONCE_RE = re.compile(r"^nonce: ([0-9a-f]{32})$", re.MULTILINE)
 _LOG_NONCE_RE = re.compile(r"^[0-9a-f]{32}$")
+_REASONS = frozenset({"не JSON", "не объект JSON", "нет полей", "тип поля"})
 _KEY = "wake:wallet:"
 
 
@@ -41,13 +42,6 @@ def _nonce_for_log(nonce: str) -> str:
 
     Иначе перевод строки в nonce позволял подменить целую запись аудита."""
     return nonce if _LOG_NONCE_RE.fullmatch(nonce) else "<invalid>"
-
-
-def _detail_for_log(detail: str) -> str:
-    """detail собирается из разобранной Redis-записи (имена полей, имя типа),
-    поэтому в лог уходит одна строка фиксированной длины."""
-    one_line = detail.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
-    return one_line[:120]
 
 
 class WalletAuthError(Exception):
@@ -143,18 +137,21 @@ def _nonce_of(message: str) -> str:
     return match.group(1)
 
 
-def _broken_record(nonce: str, detail: str) -> WalletAuthError:
+def _broken_record(nonce: str, reason: str) -> WalletAuthError:
     """Challenge в Redis читается, но не как запись Wake.
 
     Ключ `wake:wallet:*` пишет только этот модуль, поэтому битая форма — это
     повреждение хранилища (ручная правка ключа, чужой дамп на том же инстансе), а
     не вина клиента. Отвечать таким 400 значит отправлять человека переделывать то,
     что он не трогал, и спрятать инцидент: в аудите он выглядел бы как неудачная
-    попытка входа, а не как отказ сервиса."""
+    попытка входа, а не как отказ сервиса.
+
+    reason — одна из меток `_REASONS`: разбор записи даёт строки, производные от
+    клиентских байтов, а в аудит попадает только замкнутый словарь."""
     logger.error(
         "challenge %s: запись Redis повреждена (%s)",
         _nonce_for_log(nonce),
-        _detail_for_log(detail),
+        reason if reason in _REASONS else "unclassified",
     )
     return WalletAuthError(
         "CHALLENGE_STORE_CORRUPTED",
@@ -174,15 +171,13 @@ def _record_of(raw: str, nonce: str) -> dict:
     except (TypeError, ValueError):
         raise _broken_record(nonce, "не JSON") from None
     if not isinstance(record, dict):
-        raise _broken_record(nonce, f"не объект JSON ({type(record).__name__})")
+        raise _broken_record(nonce, "не объект JSON")
     missing = {"address", "message", "exp"} - record.keys()
     if missing:
-        raise _broken_record(nonce, "нет полей: " + ", ".join(sorted(missing)))
+        raise _broken_record(nonce, "нет полей")
     for field, kind in (("address", str), ("message", str), ("exp", (int, float))):
         if not isinstance(record[field], kind):
-            raise _broken_record(
-                nonce, f"{field} — {type(record[field]).__name__}, а не {kind}"
-            )
+            raise _broken_record(nonce, "тип поля")
     return record
 
 
