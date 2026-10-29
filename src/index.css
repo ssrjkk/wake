@@ -1245,6 +1245,14 @@
     width: 100%;
   }
 
+  /* См. .section-head: заголовок панели с моно-подписью справа живёт по тем же
+     правилам переноса. «обновлено 12:38:30» на 200 % шкале и чужих метриках
+     встал на 331 px в окне 320. */
+  .panel-head-row > * {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
   /* Подпись под заголовком: что панель считает и откуда. */
   .panel-lead {
     font-size: var(--fs-data);
@@ -1255,6 +1263,35 @@
   }
 
   .push-right { margin-left: auto; }
+
+  /* Заголовок секции: название слева, подпись-источник справа. Перенос и
+     min-width:0 здесь не косметика: подпись печатается моно и без пробелов,
+     flex-ребёнок с min-width:auto не сжимается ниже самого длинного слова, и
+     на широких метриках строка уезжала за край — «GET /api/v1/account?by=index»
+     дал 344 px при 200 % шкале на CI-раннере (и 343 px локально при
+     letter-spacing .08em, которым этот прогон эмулирует чужие метрики), а
+     документ под ним ехал боком на 24 px. anywhere разрешает рвать токен по
+     любому символу, поэтому ширина строки перестаёт зависеть от того, какой
+     шрифт реально загрузился. */
+  .section-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 4px 12px;
+    margin-bottom: 12px;
+  }
+
+  .section-head > * {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .section-note {
+    font-family: var(--font-mono);
+    font-size: var(--fs-label);
+    color: var(--text-muted);
+  }
 
   /* Вторичная строка под значением: исход, время, «держишь N». */
   .sub-label {

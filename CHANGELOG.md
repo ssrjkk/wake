@@ -42,6 +42,13 @@ from the commit history rather than from a release.
 - `theme.gate.test.ts` — typography and mouse-behaviour section: no `fontSize`
   or `fontFamily` literals in panels, no `onMouseEnter`/`onMouseLeave` handlers, no
   `window.confirm`/`alert`/`prompt`.
+- `WIDE_METRICS` in `e2e/design-gate.spec.ts` — the 320 px large-text pass runs
+  with `.08em` added to every character's width, on top of the doubled scale, so
+  it measures layout under glyphs wider than the machine owns. The number is a
+  calibration, not a knob: the pass reproduces the runner's failure locally at
+  343 px against the runner's 344 px (and 23 px of document pan against 24), and
+  putting `flex-wrap: nowrap` back turns it red on the author's machine, which is
+  the class of bug the runner used to be the only one seeing.
 - Unit tests for the order path in `src/lib/lighter.ts`, which had none: the
   network-mismatch refusal, the request body, the unified error text, index
   uniqueness over 2000 draws, and "POST carries no timeout, GET does".
@@ -751,6 +758,17 @@ from the commit history rather than from a release.
   the live page, asserts `--fs-ui` resolves to 26 px, and the Terminal ticket,
   Overview header controls, Predict filters and Agent actions reflow within
   320 px instead of making the document pan.
+- Two section headers could not wrap, and the pass that is supposed to catch
+  exactly that could not see them on the author's fonts. Portfolio's source note
+  (`GET /api/v1/account?by=index`) and Discover's `обновлено …` stamp lived in
+  flex rows without `flex-wrap`, whose children keep `min-width: auto` — so the
+  row's width was the longest unbreakable token rather than the box. On the
+  runner's metrics the note landed at 344 px inside a 320 px window, the document
+  panned by 24 px, and the unfollow dialog measured that same page behind it, so
+  its pass went red for a defect that was not in the dialog. `.section-head` and
+  `.panel-head-row` wrap now, their children take `min-width: 0`, and
+  `overflow-wrap: anywhere` lets a long mono identifier break mid-token instead of
+  drawing past the edge of the screen.
 - The copy-confirmation avatar drew white ink on its own dynamic accent at 3.67:1.
   It uses `--on-accent` like the other direction fills, while the colour assigned
   from the handle remains unchanged.

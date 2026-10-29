@@ -158,8 +158,14 @@ saw it. Two more measured states came out of the last pass: a translucent *ink*
 is composited through the whole ancestor `opacity` chain (a button at
 `opacity: .45` fades its ink and its fill together, and the pair's contrast
 drops with them), and one case re-runs every panel at 320 px with the type scale
-doubled — WCAG 1.4.10 reflow, which is also what catches layouts that only fit
-the fonts on the author's machine. The data behind those panels comes from
+doubled *plus* `.08em` of letter-spacing on every element — WCAG 1.4.10 reflow
+under metrics deliberately wider than the machine's own. The inflation is what
+makes that claim checkable: a row that cannot wrap is green at the author's desk
+and red on the runner, because the runner's fonts are about 8 % wider (measured:
+the runner put `GET /api/v1/account?by=index` at 344 px in a 320 px window and
+paned the document by 24 px; the inflated pass reproduces it locally at 343 px
+and 23 px, and putting `flex-wrap: nowrap` back turns it red again). The data
+behind those panels comes from
 `e2e/fixtures.ts`, whose row counts are measured from live responses (Lighter
 `/orderBooks` 246 rows, `/funding-rates` 733, Arcus `/markets` 70, the backend's
 `MAJOR_PERPS` 18, the `/mirror-log` ceiling 200) — a budget test on invented
@@ -463,8 +469,14 @@ Telegram Mini App не показывается, и кнопка отписки 
 `scrollWidth` корня, и по `scrollX`, до которого страница действительно доезжает:
 широкая таблица внутри статичного скролл-контейнера оставляет `body` на 320 px,
 пока документ едет боком на 451. Отдельный случай прогоняет все панели на 320 px
-при удвоенной шкале типов (рефлю по WCAG 1.4.10) — он же ловит раскладки, которые
-влезали только в шрифты машины автора. Данные для панелей берёт
+при удвоенной шкале типов и с надбавкой `.08em` к ширине каждого знака — рефлю по
+WCAG 1.4.10 под метриками, заведомо более широкими, чем у локальной машины.
+Надбавка здесь именно ради того, чтобы обещание «ловит чужие шрифты» было
+проверяемым числом: строка, которая не переносится, зелёная на столе автора и
+красная на раннере, потому что шрифты раннера примерно на 8 % шире (замер:
+раннер поставил `GET /api/v1/account?by=index` на 344 px в окне 320 и сдвинул
+документ на 24 px; локально с надбавкой получается 343 px и 23 px, а
+возврат `flex-wrap: nowrap` снова делает прогон красным). Данные для панелей берёт
 `e2e/fixtures.ts`, а объёмы в нём — замеры живых ответов (Lighter `/orderBooks` —
 246 строк, `/funding-rates` — 733, Arcus `/markets` — 70, `MAJOR_PERPS` бэкенда —
 18, потолок `/mirror-log` — 200): бюджет на выдуманном объёме либо не замечает

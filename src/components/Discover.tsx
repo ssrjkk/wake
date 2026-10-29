@@ -47,11 +47,11 @@ export default function Discover({ setCopyModal }: DiscoverProps) {
     <div className="terminal-layout terminal-stack">
       <div className="terminal-main">
         <div className="terminal-header" style={{ flexDirection: "column", alignItems: "flex-start" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: "12px", width: "100%" }}>
+          <div className="panel-head-row">
             <h2 style={{ fontSize: "var(--fs-heading)", fontWeight: 600, color: "var(--fg)", margin: 0 }}>Кого копируют</h2>
             {lastUpdated && (
               <span
-                style={{ marginLeft: "auto", fontSize: "var(--fs-label)", color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}
+                className="push-right section-note"
                 title="Список лидеров и ответ Lighter обновляются раз в 20 секунд"
               >
                 обновлено {lastUpdated.toLocaleTimeString("ru-RU", { hour12: false })}

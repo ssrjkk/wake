@@ -133,9 +133,9 @@ export default function Portfolio({ following, followsError, setTab, togglePause
   return (
     <div className="terminal-layout terminal-stack" style={{ gap: "16px" }}>
       <section>
-        <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: "12px" }}>
+        <div className="section-head">
           <h2 style={{ fontSize: "var(--fs-heading)", fontWeight: 600, color: "var(--fg)", margin: 0 }}>Мои подписки</h2>
-          <span style={{ fontSize: "var(--fs-label)", color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>таблица follows</span>
+          <span className="section-note">таблица follows</span>
         </div>
         {followsError && (
           <div className="notice notice-error">
@@ -210,9 +210,9 @@ export default function Portfolio({ following, followsError, setTab, togglePause
       </section>
 
       <section>
-        <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: "12px" }}>
+        <div className="section-head">
           <h2 style={{ fontSize: "var(--fs-heading)", fontWeight: 600, color: "var(--fg)", margin: 0 }}>Счёт на Lighter</h2>
-          <span style={{ fontSize: "var(--fs-label)", color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>GET /api/v1/account?by=index</span>
+          <span className="section-note">GET /api/v1/account?by=index</span>
         </div>
         {!hasWallet ? (
           <div className="empty-state">
@@ -306,9 +306,9 @@ export default function Portfolio({ following, followsError, setTab, togglePause
 
       {signedIn && (
         <section>
-          <div style={{ display: "flex", alignItems: "baseline", justifyContent: "space-between", marginBottom: "12px" }}>
+          <div className="section-head">
             <h2 style={{ fontSize: "var(--fs-heading)", fontWeight: 600, color: "var(--fg)", margin: 0 }}>Журнал копи-движка</h2>
-            <span style={{ fontSize: "var(--fs-label)", color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>таблица mirror_log</span>
+            <span className="section-note">таблица mirror_log</span>
           </div>
           <div style={{ background: "var(--bg-1)", border: "1px solid var(--line)", borderRadius: "6px", padding: "16px" }}>
             {mirrorLog === null ? (
