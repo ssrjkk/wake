@@ -46,6 +46,7 @@ import {
 import { LIGHTER_NETWORK, TELEGRAM_BOT_NAME } from "./lib/config";
 import { readEntryFromSearch } from "./lib/deeplink";
 import { useRowWindow } from "./lib/useRowWindow";
+import { setIntervalWhenVisible } from "./lib/visibleInterval";
 import { TABS } from "./lib/tabs";
 import { setNetwork as setArcusNetwork } from "./lib/arcus";
 import {
@@ -326,13 +327,12 @@ export default function App() {
         });
     }
     load();
-    const id = setInterval(() => {
-      if (document.hidden || !needsMarkets) return;
-      load();
+    const stop = setIntervalWhenVisible(() => {
+      if (needsMarkets) load();
     }, 15000);
     return () => {
       live = false;
-      clearInterval(id);
+      stop();
     };
   }, [network, needsMarkets]);
 

@@ -23,11 +23,22 @@ from the commit history rather than from a release.
   documented feature that rendered an empty page. The old smoke assertion
   `assertEqual(status_code, 200)` proved only that the route existed. Docs, ReDoc
   and `/openapi.json` now exist only when the flag is on.
+- `src/lib/preload.ts` — recovery from a chunk that a deploy has erased. A tab
+  left open across a deploy keeps the old hashed names, and the lazy panel behind
+  a tab click answered with `index.html` (the `_redirects` catch-all answers 200
+  `text/html`, so no 404 is ever seen) instead of a module; the whole screen turned
+  into the ErrorBoundary, and the only way out was the manual reload button.
+  `vite:preloadError` now reloads the page once, and a one-minute cooldown keeps a
+  broken deploy from reload-looping. Verified on the built bundle: with the
+  Terminal chunk renamed away, the first tab click reloaded the page and the
+  second stayed on the error screen; after restoring the file the panel rendered.
 - `src/lib/visibleInterval.ts` — `setIntervalWhenVisible`. Panels polled their
   providers on their own timers regardless of the tab being hidden (the trade feed
   every 4 s), and a Telegram Mini App webview stays alive in the background, so the
   requests went to numbers nobody was reading. The app shell already had this rule;
-  it is now one primitive with tests, used by all seven polling panels.
+  it is now one primitive with tests, used by all seven polling panels. "Hidden"
+  is two signals: `document.hidden` for the tab and `isActive` (Bot API 8.0+) for a
+  minimized Mini App; `activated` refreshes immediately, like `visibilitychange`.
 - `src/lib/series.ts` — return series aligned by candle hour instead of array
   index. `portfolio_risk._aligned_tails` truncates by common tail, which assumes
   index *i* means the same hour in every row; a market that dropped one pair, or a
@@ -727,6 +738,13 @@ from the commit history rather than from a release.
   claim of an "optional KMS mode", which the removed file could not deliver.
 
 ### Fixed
+- Panels kept polling while the Telegram Mini App was minimized:
+  `document.hidden` stays false in the webview, so `setIntervalWhenVisible` only
+  ever saw a tab switch, and the trade feed asked Lighter for fresh trades every
+  4 s into a screen nobody had open. `isActive` (Bot API 8.0+) is now the second
+  signal, `activated` refreshes a panel immediately on return, and the app shell's
+  own 15 s market poll goes through the same helper instead of its private
+  `document.hidden` check.
 - Two concurrent `/place-order` requests with the same `client_order_index` both
   submitted. The idempotency cache was checked, then awaited `create_order`, then
   written — so the cache whose only job is "do not send twice" never saw the second
