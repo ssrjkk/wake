@@ -381,10 +381,7 @@ async def handle_leader_event(
             tx_hash,
         )
         delta = order.base_amount if not order.reduce_only else -order.base_amount
-        await db.update_mirrored_size(
-            follow_row["follow_id"],
-            max(0.0, follow_row["current_mirrored_size"] + delta),
-        )
+        await db.add_mirrored_size(follow_row["follow_id"], delta)
 
 
 def build_constraints(books: list) -> dict:

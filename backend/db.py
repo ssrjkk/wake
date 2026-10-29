@@ -150,12 +150,24 @@ async def set_paused(follow_id: str, paused: bool) -> None:
         await session.commit()
 
 
-async def update_mirrored_size(follow_id: str, new_size: float) -> None:
+async def add_mirrored_size(follow_id: str, delta: float) -> None:
+    """Прибавить дельту к зеркальному размеру — атомарно, в самой базе.
+
+    Прежняя форма принимала ИТОГОВОЕ число, которое вызывающий вычитал из
+    строки, прочитанной до исполнения ордера: два события лидера рядом
+    давали два «итога» из одного и того же прочитанного значения, и второй
+    перезаписывал первый. Проигранный учёт здесь — это не округление: follows
+    отвечает движьку, сколько уже зеркальено, и расхождение с реальностью
+    остаётся навсегда, потому что читать ему больше не откуда."""
     async with async_session_factory() as session:
         await session.execute(
             update(Follow)
             .where(Follow.id == follow_id)
-            .values(current_mirrored_size=new_size)
+            .values(
+                current_mirrored_size=func.greatest(
+                    Follow.current_mirrored_size + delta, 0.0
+                )
+            )
         )
         await session.commit()
 

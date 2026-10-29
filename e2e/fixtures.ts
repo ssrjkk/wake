@@ -4,7 +4,7 @@
 // построенная на выдуманном объёме, либо не ловит реальную просадку, либо
 // краснеет без причины. Замеры снимались 2026-10-26:
 //
-//   curl https://mainnet.zklighter.elliot.ai/api/v1/orderBooks?filter=all  → 246 rows (52,7 KB? нет: 187 KB), 32 поля
+//   curl https://mainnet.zklighter.elliot.ai/api/v1/orderBooks?filter=all  → 246 rows, 187 KB, 32 поля
 //   curl https://mainnet.zklighter.elliot.ai/api/v1/funding-rates          → 733 rows, 52,7 KB
 //   backend: len(MAJOR_PERPS)                                              → 18
 //   src/lib/arcus.ts (замер 2026-10-24, подтверждён тем же curl-путём)     → 70 рынков
@@ -404,6 +404,8 @@ export async function installFixtures(page: Page, options: FixtureOptions = {}):
   const LIGHTER = "https://mainnet.zklighter.elliot.ai/api/v1";
   const ARCUS = "https://api.arcus.xyz/v1";
   const BACKEND = "https://wake-backend-production-3483.up.railway.app";
+  // VITE_SIGNING_SERVICE_URL из .env: отдельный процесс на петле, а не бэкенд.
+  const SIGNER = "http://localhost:8787";
 
   // Ловушка порядка, из-за которой первая же версия прогона меряла не то: Playwright
   // перебирает зарегистрированные маршруты в обратном порядке, поэтому общий
@@ -507,6 +509,27 @@ export async function installFixtures(page: Page, options: FixtureOptions = {}):
     backend("/health", "wake/health", { status: "ok", network: "mainnet", dry_run: true }),
     backend("/ready", "wake/ready", { status: "ready", checks: { database: "ok", redis: "ok" } }),
   ]);
+
+  // Сервис подписи — отдельный процесс на петле (VITE_SIGNING_SERVICE_URL), а не
+  // бэкенд. /health обязан ответить той же сетью, что и книга рынков: Терминал
+  // сравнивает их перед отправкой и не открывает подтверждение ордера при
+  // расхождении, потому что market_id и decimals из чужой сети уходят боевым
+  // ордером в другой Lighter. dry_run: true — значение WAKE_DRY_RUN по умолчанию.
+  await page.route(`${SIGNER}/health`, async (route) => {
+    count("signer/health");
+    await route.fulfill({
+      json: {
+        status: "ok",
+        network: "mainnet",
+        base_url: "https://mainnet.zklighter.elliot.ai",
+        dry_run: true,
+      },
+    });
+  });
+  await page.route(`${SIGNER}/place-order`, async (route) => {
+    count("signer/place-order");
+    await route.fulfill({ json: { tx_hash: null, dry_run: true } });
+  });
 
   return {
     byPath: () => Object.fromEntries(log),

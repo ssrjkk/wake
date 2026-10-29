@@ -8,8 +8,13 @@
 """
 
 import logging
+import re
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import field_validator, model_validator
+
+# Форма разрешённого хоста сервиса подписи: имя, IPv4 или IPv6-литерал в
+# скобках — и больше ничего (порт и схема сравниваются в самом сервисе).
+_SIGNING_HOST = re.compile(r"^[a-z0-9._-]+$|^\[[0-9a-f:]+\]$")
 
 
 class Settings(BaseSettings):
@@ -71,6 +76,13 @@ class Settings(BaseSettings):
     # стоял другой адрес.
     wake_signing_service_url: str = "http://localhost:8787"
 
+    # Хосты, которым разрешено пользоваться сервисом подписи. По умолчанию —
+    # только петля и имя сервиса из docker-compose: у /place-order нет
+    # аутентификации, и единственное, что ограничивает доступ к нему, — адрес,
+    # под который он опубликован. Список расширяется явно, когда оператор
+    # осознанно выпускает сервис за петлю.
+    wake_signing_allowed_hosts: str = "localhost,127.0.0.1,::1,signing"
+
     # Тик отдельного процесса-резолвера (predict_resolver.py), секунды.
     wake_predict_resolver_tick: int = 300
 
@@ -85,6 +97,13 @@ class Settings(BaseSettings):
 
     # Logging
     wake_log_level: str = "INFO"
+
+    # Swagger на /docs. По умолчанию выключен: CSP приложения — `default-src
+    # 'self'`, а swagger-ui тянет скрипт с CDN и пишет инлайновый тег, поэтому
+    # «открой /docs» из докстринга было обещанием, которое браузер не
+    # исполнял: страница выходила пустой. Включается явно, локально, там где
+    # человек сам решает, что ему смотреть документацию процесса.
+    wake_enable_docs: bool = False
 
     # Telegram
     telegram_bot_token: str = ""
@@ -198,6 +217,45 @@ class Settings(BaseSettings):
                 )
         return v
 
+    @field_validator("wake_signing_allowed_hosts")
+    @classmethod
+    def validate_signing_hosts(cls, v: str) -> str:
+        """Имена хостов без схемы, порта и wildcard.
+
+        Wildcard здесь значил бы «публиковать можно», то есть ровно то, от чего
+        этот список и защищает: публичный эндпоинт, который двигает деньги по
+        ключу владельца. Порт в значении — тоже ошибка: сравнение идёт по хосту
+        из заголовка Host, а порт у каждого свой (8787 в доке, $PORT у Railway).
+        Единственное исключение по форме — ::1,loopback-адрес IPv6."""
+        hosts = [h.strip().lower() for h in v.split(",") if h.strip()]
+        if not hosts:
+            raise ValueError(
+                "WAKE_SIGNING_ALLOWED_HOSTS пустой — сервис не пропустил бы никого, "
+                "даже петлю"
+            )
+        for host in hosts:
+            if host == "::1":
+                continue
+            if not _SIGNING_HOST.fullmatch(host):
+                raise ValueError(
+                    f"WAKE_SIGNING_ALLOWED_HOSTS: {host!r} — только имя хоста или "
+                    "адрес (localhost, 127.0.0.1, signing), без схемы, порта и `*`"
+                )
+        return v
+
+    @property
+    def signing_allowed_host_list(self) -> list[str]:
+        """Список хостов в той форме, в какой их видит сверка: без скобок IPv6 и
+        без порта. urlsplit отдаёт hostname уже разобранным, поэтому «[::1]» в env
+        должен совпасть с «::1» из заголовка, а не молча не пропустить петлю."""
+        hosts = []
+        for raw in self.wake_signing_allowed_hosts.split(","):
+            host = raw.strip().lower()
+            if not host:
+                continue
+            hosts.append(host.removeprefix("[").removesuffix("]"))
+        return hosts
+
     @model_validator(mode="after")
     def validate_live_trading(self) -> "Settings":
         """Реальные ордера на mainnet — по двум независимым переменным.
@@ -264,6 +322,7 @@ SESSION_TTL_S = settings.wake_session_ttl_days * 86400
 CURATOR_TOKEN = settings.wake_curator_token
 TRUSTED_PROXY_IPS = settings.trusted_proxy_ip_list
 SIGNING_SERVICE_URL = settings.wake_signing_service_url
+SIGNING_ALLOWED_HOSTS = settings.signing_allowed_host_list
 PREDICT_RESOLVER_TICK = settings.wake_predict_resolver_tick
 MINIAPP_URL = settings.wake_miniapp_url
 BACKEND_URL = settings.wake_backend_url

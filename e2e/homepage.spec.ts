@@ -107,6 +107,11 @@ test.describe("Оболочка приложения", () => {
     await page.route("**/api/v1/candles?*", (route) => route.fulfill({ json: { c: candles } }));
     await page.route("**/api/v1/recentTrades?*", (route) => route.fulfill({ json: { trades: [] } }));
     await page.route("**/api/v1/funding-rates", (route) => route.fulfill({ json: { funding_rates: [] } }));
+    // Ответ /health обязан нести network: Терминал сверяет сеть книги с сетью
+    // сервиса подписи перед тем как открыть подтверждение (см. тест ниже).
+    await page.route("http://localhost:8787/health", (route) =>
+      route.fulfill({ json: { status: "ok", network: "mainnet", base_url: "https://mainnet.zklighter.elliot.ai", dry_run: true } })
+    );
     let release: (() => void) | undefined;
     const pending = new Promise<void>((resolve) => { release = resolve; });
     await page.route("**/place-order", async (route) => {
@@ -200,7 +205,10 @@ test.describe("Оболочка приложения", () => {
     let healthChecks = 0;
     await page.route("http://localhost:8787/health", (route) => {
       healthChecks++;
-      return route.fulfill({ status: 200, json: { status: "ok" } });
+      return route.fulfill({
+        status: 200,
+        json: { status: "ok", network: "mainnet", base_url: "https://mainnet.zklighter.elliot.ai", dry_run: true },
+      });
     });
     await page.goto("/");
     await nav(page).getByRole("button", { name: "Терминал" }).click();
@@ -210,8 +218,46 @@ test.describe("Оболочка приложения", () => {
     expect(healthChecks).toBe(0);
 
     await chip.click();
-    await expect(chip).toHaveText("подписание: отвечает");
+    // Чип обязан назвать и сеть, и режим: «отвечает» молчит о том, уйдёт ли
+    // ордер в Lighter или сервис остановит его на себе.
+    await expect(chip).toHaveText("подписание: mainnet, сухой ход");
     expect(healthChecks).toBe(1);
+  });
+
+  test("ордер не уходит, если сервис подписи в другой сети", async ({ page }) => {
+    // Данные книги и параметры рынка браузер берёт из сети переключателя, а
+    // подписывает сервис из своего WAKE_LIGHTER_NETWORK. Без сверки клик по
+    // testnet-рынку №0 с testnet-децималами ушёл бы боевым ордером в mainnet —
+    // и подпись «Соло-режим: mainnet» под кнопкой ничего бы не выдавала,
+    // потому что печаталась из состояния страницы, а не из ответа сервиса.
+    await page.route("**/api/v1/orderBooks?*", (route) => route.fulfill({ json: { order_books: [{
+      symbol: "BTC", market_id: 0, market_type: "perp", status: "active", taker_fee: "0", maker_fee: "0",
+      min_base_amount: "0.00001", min_quote_amount: "10", supported_price_decimals: 2,
+      supported_size_decimals: 5, open_interest: "370.84",
+    }] } }));
+    await page.route("**/api/v1/candles?*", (route) => route.fulfill({ json: { c: Array.from({ length: 48 }, (_, i) => ({
+      t: Date.now() - (47 - i) * 3600000, o: 88000, h: 88050, l: 87950, c: 88000, v: 1, V: 88000,
+    })) } }));
+    await page.route("**/api/v1/recentTrades?*", (route) => route.fulfill({ json: { trades: [] } }));
+    await page.route("**/api/v1/funding-rates", (route) => route.fulfill({ json: { funding_rates: [] } }));
+    await page.route("http://localhost:8787/health", (route) =>
+      route.fulfill({ json: { status: "ok", network: "testnet", base_url: "https://testnet.zklighter.elliot.ai", dry_run: false } })
+    );
+    let submitted = 0;
+    await page.route("**/place-order", async (route) => {
+      submitted++;
+      await route.fulfill({ json: { dry_run: false, tx_hash: "0x" + "ab".repeat(32) } });
+    });
+
+    await page.goto("/");
+    await nav(page).getByRole("button", { name: "Терминал" }).click();
+    await expect(page.locator("svg.recharts-surface")).toBeVisible();
+
+    await page.getByRole("button", { name: /^Открыть long/ }).click();
+    await expect(page.getByRole("dialog", { name: "Подтверждение ордера" })).toHaveCount(0);
+    await expect(page.getByRole("status")).toContainText(/Несовпадение сети/);
+    await expect(page.getByRole("button", { name: /подписание: сеть testnet/ })).toBeVisible();
+    expect(submitted).toBe(0);
   });
 
   test("рельс рынков не перетасовывается и держит выбранный рынок в поле зрения", async ({ page }) => {

@@ -85,11 +85,24 @@
     /* Шкала. 11 — подписи над значениями, 12 — все числа в таблице,
        13 — интерфейс, 15 — заголовок панели. Цена рынка — fluid: на 1440 это
        44px приборной цифры, на телефоне — 28px, которые влезут в строку вместе
-       с чипом изменения. */
+       с чипом изменения.
+
+       Панели не имеют права печатать размер буквы числом: проверка «крупного
+       текста» (e2e/design-gate.spec.ts) удваивает именно эти значения, и любой
+       `fontSize: "13px"` внутри панели остаётся 13px — то есть тест был бы
+       зелёным при половине интерфейса, не чувствительной к масштабу. */
     --fs-label: 10.5px;
     --fs-data: 12px;
     --fs-ui: 13px;
+    --fs-body: 14px;
     --fs-title: 15px;
+    --fs-heading: 16px;
+    --fs-metric: 18px;
+    --fs-figure: 24px;
+    /* Логотип стоит на 17px, а не на 16: у него своя ширина буквы в полосе
+       шапки. Токен, а не литера, потому что иначе проверка шкалы считает его
+       «размером вне темы» — ровно тем она и занимается. */
+    --fs-wordmark: 17px;
     --fs-price: clamp(26px, 2.6vw, 36px);
 
     /* Направление в ленте тиков и в баре оборота: та же пара цветов, но слоями,
@@ -198,6 +211,11 @@
     font-family: var(--font-mono);
     font-variant-numeric: tabular-nums;
   }
+
+  /* Идентификатор вроде backend/agent_runner.py — одно слово, и на крупном
+     тексте оно длиннее колонки. Перенос внутри слова — та цена, которую платит
+     вставной код за то, чтобы страница не уезжала боком (1.4.10). */
+  code { overflow-wrap: anywhere; }
 
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after {
@@ -436,7 +454,7 @@
   /* Вордмарк и крупная цена — одна дисплейная грань на весь прибор. */
   .wordmark {
     font-family: var(--font-display);
-    font-size: 17px;
+    font-size: var(--fs-wordmark);
     font-weight: 900;
     letter-spacing: -0.05em;
     text-transform: uppercase;
@@ -735,6 +753,20 @@
      (rgba(26,26,26,.6) вместо --bg-2). */
   .data-table tbody tr[data-action] { cursor: pointer; }
 
+  /* Таблица ставок funding — своя, не .data-table (другой набор колонок и
+     padding), но подсветка строки обязана вести себя так же: правилом CSS, а не
+     обработчиком на каждой строке. */
+  .venue-row {
+    border-bottom: 1px solid var(--bg-2);
+    transition: background 0.1s;
+  }
+
+  .venue-row:hover { background: var(--bg-2); }
+
+  /* Буква в аватаре — самый мелкий текст интерфейса, и он тоже обязан быть на
+     шкале: 10px классом Tailwind не переживает удвоение темы. */
+  .avatar-ink { font-size: var(--fs-label); }
+
   /* Нижняя строка панели: сеть, число рядов, ссылки «показать все». */
   .panel-foot {
     display: flex;
@@ -963,6 +995,25 @@
   }
 
   .chart-tip span { font-size: var(--fs-label); color: var(--fg-3); }
+
+  /* Подписи осей recharts: библиотека кладёт font-size презентационным
+     атрибутом числом, и панель не может передать в SVG токен. Правило CSS
+     перебивает презентационный атрибут — так метки графика начинают жить
+     шкалой, а не «10» в конфиге чарта. */
+  .desk-chart .recharts-cartesian-axis-tick text { font-size: var(--fs-label); }
+
+  /* Невидимый эталон размера подписи: по нему Терминал меряет шкалу и
+     пересчитывает ширину оси. Обязан иметь собственный бокс, поэтому смещён за
+     край, а не display:none (у такого элемента нет размеров, и ResizeObserver
+     на смену шрифта не отреагирует). */
+  .axis-probe {
+    position: absolute;
+    left: -9999px;
+    top: 0;
+    font-size: var(--fs-label);
+    white-space: pre;
+    pointer-events: none;
+  }
 
   .list-head {
     display: grid;
@@ -1234,6 +1285,63 @@
     border: 1px solid var(--line);
     border-radius: var(--r);
     padding: 14px;
+    transition: border-color 0.12s;
+  }
+
+  /* Обводка при наведении — работа CSS, а не инлайнового обработчика.
+     onMouseEnter, пишущий style.borderColor, это слушатель на каждую строку
+     списка, цвет, который панель держит числом, и состояние, которое не
+     отвечает на фокус с клавиатуры: наведение мышью и Tab давали разный вид.
+     :focus-within нужен, чтобы карточка подсвечивалась и когда внутри неё
+     стоит кнопка (Discover), а не только когда наведён курсор. */
+  .market-card:hover,
+  .market-card:focus-within,
+  .leader-card:hover,
+  .leader-card:focus-within,
+  .nav-card:hover,
+  .nav-card:focus-visible {
+    border-color: var(--line-strong);
+  }
+
+  /* Кнопка «открыть» в конце строки таблицы. data-action оставляет на строке
+     подсветку и курсор для мыши, но с клавиатуры рынок открывается только по
+     настоящему контролу — этому классу. */
+  .row-open {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: var(--touch);
+    min-height: var(--touch);
+    padding: 0;
+    background: none;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    color: var(--fg-3);
+    cursor: pointer;
+  }
+
+  .row-open:hover { color: var(--accent); border-color: var(--line-strong); }
+
+  /* Переход в другой раздел обзора: та же карточка, что .market-card, но с
+     иконкой и подписью. */
+  .nav-card {
+    display: block;
+    background: var(--bg-1);
+    border: 1px solid var(--line);
+    border-radius: var(--r);
+    padding: 12px;
+    text-align: left;
+    cursor: pointer;
+    transition: border-color 0.12s;
+  }
+
+  /* Карточка лидера в Discover. */
+  .leader-card {
+    background: var(--bg-1);
+    border: 1px solid var(--line);
+    border-radius: var(--r);
+    padding: 16px;
+    transition: border-color 0.12s;
   }
 
   /* Рынок, на который пришла ссылка из бота, помечен marca: без этого список из
@@ -1611,7 +1719,7 @@
     .desk-stats { gap: 14px 18px; }
     .btn-primary { padding: 12px 18px; min-height: 44px; }
     .btn-action { padding: 14px; }
-    .input-mono { padding: 12px 14px; font-size: 15px; }
+    .input-mono { padding: 12px 14px; font-size: var(--fs-title); }
 
     /* Девять вкладок под пальцем, а не над контентом: в верхней полосе они
        уезжали при первом же скролле, а в мини-аппе Telegram ещё и сама шапка
@@ -1674,8 +1782,10 @@
 
     .link-action { min-height: var(--touch); }
 
+    /* 16px — порог, ниже которого iOS Safari приближает страницу при фокусе на
+        поле. Держим его токеном шкалы, а не литералом. */
     input[type="number"], input[type="text"], input[type="email"], input[type="password"] {
-      font-size: 16px;
+      font-size: var(--fs-heading);
     }
   }
 }

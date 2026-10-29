@@ -11,6 +11,7 @@ from funding_arb import (
     pairable_carry_markets,
     size_delta_neutral_position,
     snapshot_from_signed_rate,
+    venue_rate_rows,
     HOURS_PER_YEAR,
 )
 
@@ -293,6 +294,43 @@ class TestFundingRateRows(unittest.TestCase):
         )
 
 
+class TestVenueRateRows(unittest.TestCase):
+    """GET /funding/venues и бот читают одну и ту же форму ответа.
+
+    Повод: разбор остальных полей строки сделан через .get(), а ставка читалась
+    `float(r["rate"])` без проверки — строка без "rate" или с пустым значением
+    роняла и роут, и `/spread` в боте целиком."""
+
+    ROWS = [
+        {"exchange": "lighter", "market_id": 1, "rate": "0.0001", "symbol": "BTC"},
+        {"exchange": "binance", "market_id": 1, "rate": 0.0003, "symbol": "BTCUSDT"},
+        {"exchange": "bybit", "market_id": 1, "rate": -0.0002, "symbol": "BTC"},
+        {"exchange": "hyperliquid", "market_id": 1, "rate": 0.0, "symbol": "btc"},
+    ]
+
+    def test_all_four_venues_ranked_by_signed_rate(self):
+        rows = venue_rate_rows(self.ROWS, "BTC")
+        self.assertEqual(
+            [r["venue"] for r in rows], ["binance", "lighter", "hyperliquid", "bybit"]
+        )
+        self.assertEqual(
+            [r["signed_rate"] for r in rows], [0.0003, 0.0001, 0.0, -0.0002]
+        )
+
+    def test_row_without_a_rate_is_skipped_not_fatal(self):
+        broken = self.ROWS + [
+            {"exchange": "binance", "market_id": 2, "symbol": "BTC"},  # нет rate
+            {"exchange": "binance", "market_id": 3, "rate": "", "symbol": "BTC"},
+            {"exchange": "binance", "market_id": 4, "rate": None, "symbol": "BTC"},
+        ]
+        rows = venue_rate_rows(broken, "BTC")
+        self.assertEqual(len(rows), 4, "битые строки пропускаются, живые остаются")
+        self.assertNotIn(2, {r["market_id"] for r in rows})
+
+    def test_other_assets_do_not_match(self):
+        self.assertEqual(venue_rate_rows(self.ROWS, "ETH"), [])
+
+
 class TestBaseAsset(unittest.TestCase):
     """Нормализация ВВОДА, не склейка площадок: замерено на живом /funding-rates,
     что все четыре площадки и так отдают голое имя базового актива. base_asset
@@ -444,6 +482,34 @@ class TestPairableCarryMarkets(unittest.TestCase):
 
     def test_empty_book_yields_no_pairs(self):
         self.assertEqual(pairable_carry_markets([]), [])
+
+    def test_leg_with_broken_numbers_is_dropped_not_fatal(self):
+        """Одна строка книги без min_base_amount обязана убрать ПАРУ, а не ответ.
+
+        int()/float() здесь стояли без проверки: Lighter отдаёт эти поля строками
+        и в принципе может не отдать поле нового рынка, а 500 на
+        /funding/carry-markets означал бы «страница funding не работает» для всех
+        рынков сразу."""
+        broken_spot = {
+            "market_id": 2060,
+            "symbol": "TSLA/USDC",
+            "market_type": "spot",
+            "status": "active",
+            "supported_size_decimals": 2,
+            # нет min_base_amount
+        }
+        broken_perp = {
+            "market_id": 60,
+            "symbol": "TSLA",
+            "market_type": "perp",
+            "status": "active",
+            "min_base_amount": "0.1",
+            "supported_size_decimals": "не число",
+        }
+        legs = pairable_carry_markets(self.BOOKS + [broken_perp, broken_spot])
+        # BOOKS содержит ровно одну живую пару (ETH), и битая пара TSLA не должна
+        # стоить её.
+        self.assertEqual([leg.symbol for leg in legs], ["ETH"])
 
 
 if __name__ == "__main__":

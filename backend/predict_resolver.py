@@ -37,6 +37,7 @@ import time
 
 import predict_db as pdb
 import audit_log as al
+from starlette.concurrency import run_in_threadpool
 from predict_resolution import resolve_price_market, Comparator
 from config import LIGHTER_NETWORK, PREDICT_RESOLVER_TICK
 
@@ -78,7 +79,13 @@ async def resolve_due_markets(
         if m["kind"] != "price" or m["resolve_at"] > now:
             continue
         try:
-            observed = price_fn(m["lighter_market_id"], m["resolve_at"], network)
+            # Оракул — блокирующий urllib с повторами и снами до нескольких
+            # секунд; в ивент-лупе он останавливал бы весь процесс, пока
+            # резолвер ждёт ответ Lighter. Threadpool — тот же приём, что в
+            # роутерах, которые зовут lighter_rest.
+            observed = await run_in_threadpool(
+                price_fn, m["lighter_market_id"], m["resolve_at"], network
+            )
             resolution = resolve_price_market(
                 observed, m["threshold"], Comparator(m["comparator"])
             )

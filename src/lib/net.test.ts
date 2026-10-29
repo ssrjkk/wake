@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { PUBLIC_TIMEOUT_MS, BACKEND_TIMEOUT_MS, isTimeoutError, timeoutText, timedFetch } from './net'
+import { PUBLIC_TIMEOUT_MS, BACKEND_TIMEOUT_MS, isTimeoutError, isAbortError, timeoutText, timedFetch } from './net'
 
 // Таймаут нужен не для скорости, а чтобы висящее соединение не оставляло панель
 // в состоянии «загружаю…» до конца открытия вкладки: интервалы опроса добавляют
@@ -14,14 +14,23 @@ function timeoutError(): Error {
 }
 
 describe('isTimeoutError', () => {
-  it('различает таймаут и обрыв по имени, а не по тексту', () => {
+  it('таймаут определяется по имени, а не по тексту', () => {
     expect(isTimeoutError(timeoutError())).toBe(true)
-    const aborted = new Error('The operation was canceled')
-    aborted.name = 'AbortError'
-    expect(isTimeoutError(aborted)).toBe(true)
     expect(isTimeoutError(new TypeError('Failed to fetch'))).toBe(false)
     expect(isTimeoutError('TimeoutError')).toBe(false)
     expect(isTimeoutError(null)).toBe(false)
+  })
+
+  it('отменённый вызывающим запрос не выдаётся за «нет ответа за N с»', () => {
+    // Прежняя версия считала AbortError таймаутом, и панель печатала «бэкенд
+    // не отвечает за 15 с» там, где запрос оборвал сам код страницы: человек
+    // искал бы причину на стороне сервера.
+    const aborted = new Error('The operation was canceled')
+    aborted.name = 'AbortError'
+    expect(isTimeoutError(aborted)).toBe(false)
+    expect(isAbortError(aborted)).toBe(true)
+    expect(isAbortError(timeoutError())).toBe(false)
+    expect(isAbortError(null)).toBe(false)
   })
 })
 

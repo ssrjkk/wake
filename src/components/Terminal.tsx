@@ -1,10 +1,24 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Search } from "lucide-react";
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, ResponsiveContainer } from "recharts";
-import { getCandles, getRecentTrades, getFundingRates, getApiHost, placeOrderViaSigningService, type LighterNetwork, type OrderBook, type Candle, type Trade } from "../lib/lighter";
+import {
+  getCandles,
+  getRecentTrades,
+  getFundingRates,
+  getApiHost,
+  getSignerHealth,
+  placeOrderViaSigningService,
+  SignerNetworkMismatch,
+  type LighterNetwork,
+  type OrderBook,
+  type Candle,
+  type SignerHealth,
+  type Trade,
+} from "../lib/lighter";
 import { SIGNING_SERVICE_URL } from "../lib/config";
 import { errorText } from "../lib/backend";
-import { fmt, usd } from "./utils";
+import { setIntervalWhenVisible } from "../lib/visibleInterval";
+import { axisDecimals, fmt, fmtAxisPrice, usd } from "./utils";
 import { Modal, Skeleton } from "./ui";
 
 interface TerminalProps {
@@ -27,6 +41,17 @@ interface TerminalProps {
    бэкенде, который считает оборот по 24 часовым свечам. */
 const TICKER_ROWS = 12;
 const TICKER_TTL_MS = 60_000;
+
+/* Ось цен. Ширина подписи = знаков × ширина цифры, поэтому box оси
+   считается из измеренного размера подписи, а не зашит в 72 px: на базовой
+   шкале 72 хватало, на удвоенной та же строка выползла за правый край
+   экрана. 0.62em — табличная моногрань темы; запас 12 px — место под
+   десятичную точку и разряды. */
+const AXIS_CHAR_EM = 0.62;
+const AXIS_PAD_PX = 12;
+const AXIS_MIN_PX = 56;
+const AXIS_MAX_PX = 128;
+const AXIS_FALLBACK_FONT_PX = 10.5;
 
 type Ticker = { price: number; changePct: number | null; volume24h: number };
 
@@ -64,12 +89,15 @@ async function getTicker(marketId: number): Promise<Ticker | null> {
 // каждой загрузке вкладки даёт красную строку в консоли там, где человек ничего
 // не просил, а из публичного источника такой запрос к localhost дополнительно
 // режет ещё и браузер (Private Network Access).
-async function probeSigner(): Promise<boolean> {
+//
+// Ответ нужен не для «жив/мёртв», а для двух чисел: network и dry_run. Первое
+// сравнивается с сетью книги перед отправкой, второе показывает, уйдёт ли ордер
+// в Lighter на самом деле.
+async function probeSigner(): Promise<SignerHealth | null> {
   try {
-    const res = await fetch(`${SIGNING_SERVICE_URL}/health`, { signal: AbortSignal.timeout(2000) });
-    return res.ok;
+    return await getSignerHealth();
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -98,8 +126,9 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
      страницы, а не на смене числа. */
   const [tick, setTick] = useState<{ dir: "up" | "down" | null; serial: number }>({ dir: null, serial: 0 });
   const lastTick = useRef<{ id: number; price: number } | null>(null);
-  // null — «ещё не проверяли»: чип не врет «недоступно» до первого вопроса.
-  const [signerUp, setSignerUp] = useState<boolean | null>(null);
+  // null — «ещё не спрашивали»: чип не врёт «недоступно» до первого вопроса.
+  const [signer, setSigner] = useState<SignerHealth | null>(null);
+  const [signerChecked, setSignerChecked] = useState(false);
   const [signerBusy, setSignerBusy] = useState(false);
 
   const currentMarket = markets.find((m) => m.symbol === asset);
@@ -161,8 +190,8 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
         .finally(() => { if (live) setCandlesPending(false); });
     }
     load();
-    const timer = setInterval(load, 20000);
-    return () => { live = false; clearInterval(timer); };
+    const stopTimer = setIntervalWhenVisible(load, 20000);
+    return () => { live = false; stopTimer(); };
   }, [marketId]);
 
   useEffect(() => {
@@ -180,8 +209,8 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
         .finally(() => { if (live) setTradesPending(false); });
     }
     load();
-    const id = setInterval(load, 4000);
-    return () => { live = false; clearInterval(id); };
+    const stopTrades = setIntervalWhenVisible(load, 4000);
+    return () => { live = false; stopTrades(); };
   }, [marketId]);
 
   useEffect(() => {
@@ -212,18 +241,21 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
   // Сервис подписи спрашивает человек (кнопка-чип) или путь ордера при
   // подтверждении: локальный процесс могут поднять через минуту после того, как
   // страница всё показала, и к этому моменту ответ должен быть свежим.
-  async function checkSigner() {
+  async function checkSigner(): Promise<SignerHealth | null> {
     setSignerBusy(true);
     try {
-      setSignerUp(await probeSigner());
+      const health = await probeSigner();
+      setSigner(health);
+      setSignerChecked(true);
+      return health;
     } finally {
       setSignerBusy(false);
     }
   }
 
   useEffect(() => {
-    const id = setInterval(() => setNonce((n) => n + 1), TICKER_TTL_MS);
-    return () => clearInterval(id);
+    const stopTicker = setIntervalWhenVisible(() => setNonce((n) => n + 1), TICKER_TTL_MS);
+    return () => stopTicker();
   }, []);
 
   const lastCandle = candles[candles.length - 1];
@@ -325,7 +357,38 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
 
   const decimals = currentMarket?.supported_price_decimals ?? 2;
 
-  function requestOrder() {
+  /* Размер подписи оси задаёт токен темы, а не число в конфиге чарта, поэтому и
+     box оси считается от фактического значения токена. Значение читается в
+     колбэке подписки на невидимый эталон (span с `0` на --fs-label): шкала
+     меняется не только при загрузке страницы — человек может читать интерфейс
+     крупнее, и ось обязана пересчитаться вместе с ней. */
+  const [axisFontPx, setAxisFontPx] = useState(AXIS_FALLBACK_FONT_PX);
+  const measureAxisProbe = useCallback((node: HTMLSpanElement | null) => {
+    if (!node) return;
+    const observer = new ResizeObserver(() => {
+      const px = parseFloat(getComputedStyle(node).fontSize);
+      if (Number.isFinite(px) && px > 0) setAxisFontPx(px);
+    });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+
+  // Сколько знаков влезет в box, который мы вообще готовы отдать оси, и width
+  // из фактической подписи: ось обязан рисоваться внутри своей колонки, а не
+  // поверх правого края вьюпорта.
+  const axisCharBudget = Math.max(
+    4,
+    Math.floor((AXIS_MAX_PX - AXIS_PAD_PX) / (axisFontPx * AXIS_CHAR_EM))
+  );
+  const axisDec = axisDecimals(priceDomain, decimals, axisCharBudget);
+  const axisLabel = (v: number) => fmtAxisPrice(v, axisDec);
+  const axisChars = Math.max(...priceDomain.map((v) => axisLabel(v).length));
+  const axisWidth = Math.min(
+    AXIS_MAX_PX,
+    Math.max(AXIS_MIN_PX, Math.ceil(axisChars * axisFontPx * AXIS_CHAR_EM) + AXIS_PAD_PX)
+  );
+
+  async function requestOrder() {
     if (!currentMarket || price == null) {
       setToast("Рынок ещё не загружен");
       return;
@@ -341,7 +404,7 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
     const margin = size / Math.max(leverage, 1);
     if (accountEquityUsd !== undefined && margin > accountEquityUsd) {
       setToast(
-        `Маржа $${margin.toFixed(0)} не влезает в баланс счёта $${accountEquityUsd.toFixed(0)} — уменьши размер или плечо`
+        `Маржа ${usd(margin, 0)} не влезает в баланс счёта ${usd(accountEquityUsd, 0)} — уменьши размер или плечо`
       );
       return;
     }
@@ -350,44 +413,60 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
       setToast(`Минимальный ордер по этому рынку — ${minQuote} USDC`);
       return;
     }
-    // Перед подтверждением переспрашиваем сервис подписи: если человек поднял
-    // его уже после загрузки страницы, прошлый «недоступно» не должен его
-    // блокировать, а «доступно» прошлой проверки не гарантирует, что процесс не
-    // умер минуту назад.
-    void checkSigner();
+    // Перед подтверждением сервис переспрашивается заново и по его ответу
+    // сверяется сеть. Человек мог поднять процесс минуту назад, а мог и
+    // переключить сеть в шапке, не перезапуская сервис: book рынка при этом
+    // testnet-ная, а ордер подписывается mainnet-ключом.
+    const health = await checkSigner();
+    if (!health) {
+      setShowOrderConfirm(false);
+      setToast(
+        "Ордер не готов: сервис подписи не отвечает. Адрес и причину показывает чип «подписание»."
+      );
+      return;
+    }
+    if (health.network !== network) {
+      setToast(
+        `Несовпадение сети: данные берутся из ${network}, а сервис подписи работает в ${health.network}. ` +
+          "Ордер не будет отправлен — market_id и decimals относятся к другой книге."
+      );
+      return;
+    }
     setShowOrderConfirm(true);
   }
 
-  async function placeOrder() {
+  async function placeOrder(signerHealth: SignerHealth) {
     if (!currentMarket || price == null) {
       setToast("Рынок ещё не загружен");
       return;
     }
     setShowOrderConfirm(false);
     setOrderSending(true);
-    // Адрес сервиса в тосте не печатаем: на продакшен-сайте это выглядит как
-    // отладочная строчка, а человек, который его настраивал, видит адрес в
-    // подсказке чипа «подписание».
     setToast("Отправляю на сервис подписи…");
     try {
-      const result = await placeOrderViaSigningService(currentMarket, side, size, price);
-      setSignerUp(true);
+      const result = await placeOrderViaSigningService(currentMarket, side, size, price, signerHealth);
+      setSigner(signerHealth);
+      setSignerChecked(true);
       if (result.dry_run) {
         setToast("Сервис подписи работает в сухом режиме: ордер в Lighter не ушёл");
         return;
       }
       setToast(`Ордер отправлен: ${result.tx_hash}`);
     } catch (e) {
-      // TypeError — это «запрос не дошёл»: сервис не запущен, источник не в его
-      // CORS-списке, или сети нет. Ошибка с HTTP-кодом означает обратное —
-      // сервис жив и сам объяснил отказ, и вешать на него «недоступен» значило
-      // бы отправить человека искать причину не там.
+      // Несовпадение сети — отказ до отправки, ордер точно не существует.
+      // Ошибка с HTTP-кодом означает обратное: сервис жив и объяснил отказ.
+      // Всё остальное (TypeError) — запрос не дошёл.
+      if (e instanceof SignerNetworkMismatch) {
+        setSigner({ ...signerHealth, network: e.signerNetwork });
+        setToast(errorText(e, 220));
+        return;
+      }
       const unreachable = e instanceof TypeError;
-      setSignerUp(!unreachable);
+      if (unreachable) setSigner(null);
       setToast(
         unreachable
-          ? `Ордер не отправлен: сервис подписи не отвечает. Адрес и причину показывает чип «подписание».`
-          : `Ордер не отправлен: ${errorText(e)}`
+          ? "Ордер не отправлен: сервис подписи не отвечает. Адрес и причину показывает чип «подписание»."
+          : `Ордер не отправлен: ${errorText(e, 200)}`
       );
     } finally {
       setOrderSending(false);
@@ -458,6 +537,8 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
 
         {/* ── График ───────────────────────────────────────────────────── */}
         <div style={{ background: "var(--bg-1)", position: "relative", minHeight: "260px" }}>
+          {/* Эталон размера подписи: по нему считается box оси (см. axisFontPx). */}
+          <span ref={measureAxisProbe} className="axis-probe" aria-hidden="true">0</span>
           <div className="panel-caption">
             <span className="label">Свечи 1ч · 48 шт · Lighter</span>
             <span className="num muted">обновлено {stamp(lastCandlesUpdate)}</span>
@@ -467,8 +548,8 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
             <div className="desk-chart" style={{ padding: "16px 14px" }}><Skeleton height="100%" /></div>
           ) : chartError ? (
             <div className="empty-state desk-chart" style={{ border: "none", justifyContent: "center" }}>
-              <p style={{ color: "var(--down)", fontSize: "13px", margin: 0 }}>Lighter API не отвечает</p>
-              <p style={{ color: "var(--fg-3)", fontSize: "12px", margin: 0 }}>{getApiHost()} — {chartError}</p>
+              <p style={{ color: "var(--down)", fontSize: "var(--fs-ui)", margin: 0 }}>Lighter API не отвечает</p>
+              <p style={{ color: "var(--fg-3)", fontSize: "var(--fs-data)", margin: 0 }}>{getApiHost()} — {chartError}</p>
             </div>
           ) : (
             <div className="desk-chart chart-wipe" key={`chart-${asset}`}>
@@ -489,7 +570,7 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
                   ticks={timeTicks}
                   tickFormatter={tickTime}
                   stroke="var(--line)"
-                  tick={{ fill: "var(--fg-3)", fontSize: 10, fontFamily: "var(--font-mono)" }}
+                  tick={{ fill: "var(--fg-3)", fontFamily: "var(--font-mono)" }}
                   tickLine={false}
                   axisLine={{ stroke: "var(--line)" }}
                   interval={0}
@@ -497,11 +578,11 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
                 />
                 <YAxis
                   orientation="right"
-                  width={72}
+                  width={axisWidth}
                   domain={priceDomain}
-                  tickFormatter={(v: number) => fmt(v, decimals)}
+                  tickFormatter={axisLabel}
                   stroke="var(--line)"
-                  tick={{ fill: "var(--fg-3)", fontSize: 10, fontFamily: "var(--font-mono)" }}
+                  tick={{ fill: "var(--fg-3)", fontFamily: "var(--font-mono)" }}
                   tickLine={false}
                 />
                 {price != null && (
@@ -536,9 +617,9 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
 
           <div className="table-scroll" style={{ maxHeight: "220px", overflowY: "auto", background: "var(--bg-1)" }}>
             {tradesError && trades.length === 0 ? (
-              <p style={{ padding: "16px 14px", margin: 0, fontSize: "12px", color: "var(--down)" }}>{tradesError}</p>
+              <p style={{ padding: "16px 14px", margin: 0, fontSize: "var(--fs-data)", color: "var(--down)" }}>{tradesError}</p>
             ) : trades.length === 0 ? (
-              <p style={{ padding: "16px 14px", margin: 0, fontSize: "12px", color: "var(--fg-3)" }}>
+              <p style={{ padding: "16px 14px", margin: 0, fontSize: "var(--fs-data)", color: "var(--fg-3)" }}>
                 {tradesLoading ? "загрузка…" : chartError ? "Сделок нет: Lighter не ответил." : "Сделок в окне выборки нет."}
               </p>
             ) : (
@@ -595,7 +676,7 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
 
           <div className="terminal-field-row">
             <label htmlFor="terminal-leverage" className="label">Плечо</label>
-            <span className="num" style={{ fontSize: "13px", fontWeight: 600 }}>{leverage}x</span>
+            <span className="num" style={{ fontSize: "var(--fs-ui)", fontWeight: 600 }}>{leverage}x</span>
           </div>
           <input
             id="terminal-leverage"
@@ -613,14 +694,16 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
             <b className="num">{usd(size / Math.max(leverage, 1), 0)}</b>
             {!isSpot && (
               <>
-                <span className="label">Ликвидация</span>
+                {/* Lighter не отдаёт maintenance margin в книге рынков, поэтому
+                  цифра — оценка «1/плечо минус 10%», а не цена биржи. */}
+              <span className="label">Ликвидация, оценка</span>
                 <b className="num">{liqPrice == null ? "—" : `$${fmt(liqPrice, decimals)}`}</b>
               </>
             )}
           </div>
 
           <button
-            onClick={requestOrder}
+            onClick={() => void requestOrder()}
             disabled={orderSending || !currentMarket || price == null}
             aria-busy={orderSending}
             className={`btn-primary ${side === "long" ? "btn-up" : "btn-down"}`}
@@ -629,9 +712,15 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
           </button>
 
           <p className="fineprint">
-            Ордер уходит в <code>signing_service.py</code> по цене последней свечи. Соло-режим:{" "}
-            {network === "mainnet" ? "mainnet" : "testnet"}
-            {accountEquityUsd != null ? `, баланс счёта ${usd(accountEquityUsd, 0)}` : ", баланс счёта не подключён"}.
+            Ордер уходит в <code>signing_service.py</code> по цене последней свечи.{" "}
+            {signer
+              ? signer.network === network
+                ? `Сеть сервиса: ${signer.network}, ход ${signer.dry_run ? "сухой" : "боевой"}.`
+                : `Внимание: сервис подписи в сети ${signer.network}, а данные из ${network} — ордер не отправится.`
+              : signerChecked
+                ? "Сервис подписи не отвечает."
+                : "Сервис подписи ещё не спрашивался."}
+            {accountEquityUsd != null ? ` Баланс счёта ${usd(accountEquityUsd, 0)}.` : " Баланс счёта не подключён."}
           </p>
 
           <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
@@ -639,22 +728,27 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
               type="button"
               onClick={() => void checkSigner()}
               disabled={signerBusy}
-              className={`chip ${signerBusy ? "chip-info" : signerUp === null ? "chip-info" : signerUp ? "chip-up" : "chip-warn"}`}
+              className={`chip ${signerBusy ? "chip-info" : !signerChecked ? "chip-info" : signer ? (signer.network === network ? (signer.dry_run ? "chip-info" : "chip-warn") : "chip-warn") : "chip-warn"}`}
               style={{ cursor: signerBusy ? "default" : "pointer" }}
               title={
                 `Сервис подписи: ${SIGNING_SERVICE_URL}. Он не опубликован вместе с сайтом — это локальный процесс, ` +
                 "который держит твой API-ключ Lighter и спрашивает WAKE_DRY_RUN. Спрашиваем его по клику, а не при " +
                 "загрузке страницы: запрос с публичного адреса на localhost браузеры дополнительно режут. " +
-                "Красный чип — сервис не запущен, или этот источник не добавлен в его WAKE_CORS_ORIGINS."
+                "Красный чип — сервис не запущен, этот источник не добавлен в его WAKE_CORS_ORIGINS, или его сеть " +
+                "не совпадает с сетью книги рынков."
               }
             >
               {signerBusy
                 ? "подписание: проверяю…"
-                : signerUp === null
-                ? "подписание: не проверялось"
-                : signerUp
-                ? "подписание: отвечает"
-                : "подписание: недоступно"}
+                : !signerChecked
+                  ? "подписание: не проверялось"
+                  : !signer
+                    ? "подписание: недоступно"
+                    : signer.network !== network
+                      ? `подписание: сеть ${signer.network} ≠ ${network}`
+                      : signer.dry_run
+                        ? `подписание: ${signer.network}, сухой ход`
+                        : `подписание: ${signer.network}, живой ход`}
             </button>
           </div>
 
@@ -709,9 +803,9 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
             <span style={{ textAlign: "right" }}>24ч</span>
           </div>
           {dataError && markets.length === 0 ? (
-            <p style={{ padding: "14px 12px", margin: 0, fontSize: "12px", color: "var(--down)" }}>{dataError}</p>
+            <p style={{ padding: "14px 12px", margin: 0, fontSize: "var(--fs-data)", color: "var(--down)" }}>{dataError}</p>
           ) : filteredMarkets.length === 0 ? (
-            <p style={{ padding: "14px 12px", margin: 0, fontSize: "12px", color: "var(--fg-3)" }}>
+            <p style={{ padding: "14px 12px", margin: 0, fontSize: "var(--fs-data)", color: "var(--fg-3)" }}>
               Ничего не найдено по «{searchQuery}».
             </p>
           ) : (
@@ -736,7 +830,7 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
                   )}
                   <span style={{ display: "flex", alignItems: "center", gap: "6px", minWidth: 0 }}>
                     <b className="num" style={{ color: "var(--fg)", fontWeight: 600 }}>{m.symbol}</b>
-                    <span style={{ fontSize: "10px", color: "var(--fg-3)", textTransform: "uppercase" }}>{m.market_type}</span>
+                    <span style={{ fontSize: "var(--fs-label)", color: "var(--fg-3)", textTransform: "uppercase" }}>{m.market_type}</span>
                   </span>
                   <span className="num" style={{ color: "var(--fg-2)" }}>{t ? fmt(t.price, m.supported_price_decimals) : "—"}</span>
                   <span className="num right" style={{ color: t ? (rowUp ? "var(--up)" : "var(--down)") : "var(--fg-3)" }}>{pct(t?.changePct ?? null)}</span>
@@ -752,7 +846,7 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
         </div>
       </div>
 
-      {showOrderConfirm && currentMarket && price != null && (
+      {showOrderConfirm && currentMarket && price != null && signer && (
         <Modal label="Подтверждение ордера" onClose={() => setShowOrderConfirm(false)}>
           <div className="overlay-shell">
             <h3 className="panel-title" style={{ margin: "0 0 14px" }}>Подтверждение ордера</h3>
@@ -765,14 +859,22 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
               <span className="label">Маржа</span><b className="num">{usd(size / Math.max(leverage, 1), 0)}</b>
             </div>
             <p className="fineprint" style={{ marginBottom: "14px" }}>
-              IOC-ордер по рынку. В сухом режиме сервис считает план и не отправляет его в Lighter.
+              {/* Сеть и режим берутся из ответа самого сервиса, а не из
+                  переключателя страницы: человек подтверждает именно то, куда
+                  уйдёт ордер. */}
+              IOC-ордер по рынку · {signer.network} ·{" "}
+              {signer.dry_run ? "сервис считает план и не отправляет его в Lighter" : "ордер уйдёт в Lighter"}
+              {/* POST ордера без таймаута — сознательно: оборвать по таймеру
+                  запрос, который уже мог дойти, значит получить второй ордер с
+                  новым индексом. Честнее сказать это здесь, чем молчать. */}
+              {!signer.dry_run && " · запрос не отменяется: если сервис не ответит, ордер всё равно мог исполниться — ищи его в open orders Lighter"}
             </p>
             <div style={{ display: "flex", gap: "8px" }}>
               <button onClick={() => setShowOrderConfirm(false)} className="btn-ghost" style={{ flex: 1, justifyContent: "center" }}>
                 Отмена
               </button>
               <button
-                onClick={() => void placeOrder()}
+                onClick={() => void placeOrder(signer)}
                 className="btn-action"
                 style={{ flex: 1, background: side === "long" ? "var(--up)" : "var(--down)", color: "var(--on-accent)" }}
               >

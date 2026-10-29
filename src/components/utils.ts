@@ -52,8 +52,10 @@ export function usd(n: number, d = 0): string {
 export function fmtUsdCompact(value: number): string {
   const v = finite(value);
   if (v === null) return NOT_A_NUMBER;
-  if (v >= 1_000_000_000) return `$${(v / 1_000_000_000).toFixed(2)}B`;
-  if (v >= 1_000_000) return `$${(v / 1_000_000).toFixed(1)}M`;
+  // «.0» срезается во всех трёх полосах: $2.0M и $3.00B читаются как точность,
+  // которой нет, а $2K — как круглое число, которым оно и является.
+  if (v >= 1_000_000_000) return `$${(v / 1_000_000_000).toFixed(2)}B`.replace(".00B", "B");
+  if (v >= 1_000_000) return `$${(v / 1_000_000).toFixed(1)}M`.replace(".0M", "M");
   if (v >= 1_000) return `$${(v / 1_000).toFixed(1)}K`.replace(".0K", "K");
   return `$${fmt(v, 2)}`;
 }
@@ -108,4 +110,34 @@ export function toastVariant(message: string): ToastVariant {
   if (FAILURE.test(message)) return "error";
   if (SUCCESS.test(message)) return "success";
   return "info";
+}
+
+// ── Подписи оси цен ─────────────────────────────────────────────────────────
+//
+// Ось — шкала, а не отсчёт: точное значение человек видит крупным числом в
+// шапке и в подсказке графика. Полное «78 901.400138» в оси — это не точность,
+// а шум разряда, который к тому же не влезает в box оси: на крупном тексте
+// подпись выползала за правый край экрана (ловит e2e/design-gate.spec.ts).
+
+/** Компактная цена для оси: тысячи и миллионы читаются суффиксом, а не шестью
+ *  знаками после запятой. */
+export function fmtAxisPrice(value: number, decimals: number): string {
+  const abs = Math.abs(value);
+  if (abs >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(1)}B`;
+  if (abs >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+  if (abs >= 10_000) return `${(value / 1_000).toFixed(1)}K`;
+  return fmt(value, decimals);
+}
+
+/** Сколько знаков после запятой может позволить себе ось.
+ *
+ *  `maxChars` считается от измеренной ширины подписи, поэтому ответ зависит и
+ *  от шрифта рынка (decimals), и от того, насколько крупно человек читает. */
+export function axisDecimals(values: number[], marketDecimals: number, maxChars: number): number {
+  const digits = Math.max(0, Math.floor(marketDecimals));
+  for (let d = digits; d > 0; d--) {
+    const widest = Math.max(0, ...values.map((v) => fmt(v, d).length));
+    if (widest <= maxChars) return d;
+  }
+  return 0;
 }

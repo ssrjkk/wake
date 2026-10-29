@@ -141,6 +141,18 @@ checks first). While dry-run is on, the signing service returns the order it
 would have sent and nothing leaves; `/health` on both services reports the mode,
 so a browser or an operator can see it rather than assume it.
 
+The signing service has no authentication, and cannot have any — a secret in a
+public browser bundle is not a secret — so its only boundary is the address it is
+published on. That boundary is enforced, not documented: every request is compared
+against its `Host` header and anything outside `WAKE_SIGNING_ALLOWED_HOSTS`
+(default `localhost,127.0.0.1,::1,signing`) answers `403 SIGNING_HOST_NOT_ALLOWED`
+before the key is read. CORS is not this control: it decides whether a foreign page
+may *read* the response, while `curl` from anywhere reaches the endpoint. The
+terminal additionally compares the network the order book was read from with the
+network `/health` reports, because `market_id`, `min_quote_amount` and the size
+decimals come from the browser's chosen network while the signature is made on the
+service's own.
+
 Two independent switches guard live trading on mainnet (`backend/config.py`,
 validated at import): `WAKE_DRY_RUN=false` on mainnet additionally requires
 `WAKE_MAINNET_LIVE=true`, otherwise the process refuses to start. A typo in a
@@ -304,9 +316,9 @@ of market data use the standard library (`backend/lighter_rest.py`), not urllib3
 Nothing here configures urllib3 proxy TLS, calls its low-level cross-origin proxy
 API, or streams a response through it.
 
-These are bounded exceptions, not fixes: do not expose the signing service, add
-untrusted SDK hosts, or introduce those HTTP paths without revisiting the
-exceptions. Remove the exceptions when the SDK permits an update.
+These are bounded exceptions, not fixes: do not expose the signing service (the
+Host gate refuses it by default), add untrusted SDK hosts, or introduce those
+HTTP paths without revisiting the exceptions. Remove the exceptions when the SDK permits an update.
 
 | Advisory | Affected path |
 | --- | --- |
@@ -329,9 +341,9 @@ responses in full; trusted HTTPS hosts reduce exposure but do not remove it.
 - **Not custody-grade.** No HSM, no KMS, no signing inside a hardware boundary.
   Decrypting a follower key puts it in process memory.
 - **No token revocation.** A stolen bearer token works until it expires.
-- **Client-side sizing on the solo path.** The signing service validates types
-  and positivity; per-account equity and exposure limits are checked in the
-  browser. A caller who is not the browser can ask for more than their balance
+- **Client-side sizing on the solo path.** The signing service validates types,
+  positivity and the int32/float64 bounds of the scaled numbers; per-account
+  equity and exposure limits are checked in the browser. A caller who is not the browser can ask for more than their balance
   shows — Lighter rejects what the account cannot carry, but Wake does not
   police it.
 - **No CSP at the frontend edge.** The security headers above are set by the API.
@@ -359,7 +371,10 @@ Before any instance trades at all:
 4. Pin `WAKE_CORS_ORIGINS` to the deployed frontend origin — the default is
    `http://localhost:5173`.
 5. Put `WAKE_MASTER_KEY` in a secret manager, not in a file in the repository.
-6. Publish the signing service on loopback or an internal network only.
+6. Keep the signing service on loopback or an internal network. The service now
+   refuses any other `Host` unless you list it in `WAKE_SIGNING_ALLOWED_HOSTS`,
+   and a published hostname plus `WAKE_DRY_RUN=false` is an unauthenticated
+   money-moving endpoint.
 7. Only after a testnet run is verified end to end: `WAKE_DRY_RUN=false` plus
    `WAKE_MAINNET_LIVE=true`, deliberately, by a person who accepts the loss.
 
@@ -484,6 +499,17 @@ Lighter, и из него нет ни одного пути к `/place-order`: �
 который дополнительно прогоняет `risk_limits`). Пока dry-run включён, сервис
 подписи возвращает тот ордер, который отправил бы, и наружу ничего не уходит;
 `/health` обоих сервисов показывает режим — его видно, а не предполагают.
+
+У сервиса подписи нет аутентификации, и она невозможна: секрет в публичном
+бандле — не секрет. Единственная граница — адрес, под которым он опубликован, и
+эта граница проверяется кодом, а не обещанием в доке: каждый запрос сверяется с
+заголовком `Host`, и всё, что вне `WAKE_SIGNING_ALLOWED_HOSTS` (по умолчанию
+`localhost,127.0.0.1,::1,signing`), получает `403 SIGNING_HOST_NOT_ALLOWED` до
+чтения ключа. CORS этой границей не является: он решает, прочитает ли чужая
+страница ответ, а `curl` доходит до эндпоинта откуда угодно. Терминал
+дополнительно сверяет сеть, из которой прочитана книга рынков, с сетью из
+`/health` сервиса: `market_id`, `min_quote_amount` и decimals приходят от
+переключателя браузера, а подпись ставится в сети сервиса.
 
 Живой трейдинг на mainnet открывают два независимых переключателя
 (`backend/config.py`, проверка на импорте): `WAKE_DRY_RUN=false` на mainnet
@@ -644,9 +670,9 @@ urllib3. `npm audit` проверяет фронтенд вместе с dev-з�
 настраивает, низкоуровневый междоменный прокси-API не вызывает, потоковые ответы
 через него не читаются.
 
-Это ограниченные исключения, а не исправления: публикация сервиса подписи,
-недоверенные хосты SDK или добавление этих HTTP-путей требуют пересмотра
-исключений. После снятия ограничения SDK исключения надо удалить.
+Это ограниченные исключения, а не исправления: публикация сервиса подписи (её
+теперь не пропускает гейт по `Host`), недоверенные хосты SDK или добавление этих
+HTTP-путей требуют пересмотра исключений. После снятия ограничения SDK исключения надо удалить.
 
 | Уязвимость | Затронутый путь |
 | --- | --- |
@@ -670,7 +696,9 @@ urllib3. `npm audit` проверяет фронтенд вместе с dev-з�
   расшифрованный ключ подписчика попадает в память процесса.
 - **Токен нельзя отозвать.** Украденный bearer работает до истечения срока.
 - **Размер ордера в соло-пути проверяется в браузере.** Сервис подписи проверяет
-  типы и положительность; баланс счёта и экспозиция — клиентская проверка.
+  типы, положительность и границы масштабированных чисел (int32 у индекса,
+  точный диапазон float64 у цены и размера); баланс счёта и экспозиция —
+  клиентская проверка.
   Тот, кто не браузер, может попросить больше, чем позволяет баланс: Lighter
   такое отклонит, но Wake не сторожит.
 - **На фронте нет CSP на edge.** Заголовки выше ставит API. Статический сайт на
@@ -697,6 +725,9 @@ urllib3. `npm audit` проверяет фронтенд вместе с dev-з�
 4. Задать `WAKE_CORS_ORIGINS` на домен задеплоенного фронтенда — дефолт это
    `http://localhost:5173`.
 5. Положить `WAKE_MASTER_KEY` в секрет-менеджер, а не в файл в репозитории.
-6. Оставить сервис подписи на loopback или во внутренней сети.
+6. Оставить сервис подписи на loopback или во внутренней сети. Сервис теперь сам
+   отклоняет любой другой `Host`, пока ты не внесёшь его в
+   `WAKE_SIGNING_ALLOWED_HOSTS`; опубликованное имя вместе с `WAKE_DRY_RUN=false`
+   — это неаутентифицированный эндпоинт, двигающий деньги.
 7. Только после проверенного тестнет-прогона: `WAKE_DRY_RUN=false` плюс
    `WAKE_MAINNET_LIVE=true` — руками и осознанно.

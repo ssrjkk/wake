@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
 import { ArrowRight, BarChart3, Percent, RefreshCw, ShieldAlert, TriangleAlert, Users } from "lucide-react";
-import { getMarketOverview, type MarketOverview, type MarketOverviewRow } from "../lib/lighter";
+import { getMarketOverview, type MarketOverview, type MarketOverviewRow, type OrderBook } from "../lib/lighter";
 import { getMarkets as getArcusMarkets, getMidPrices, isArcusOnline, isArcusPerp, type ArcusMarket } from "../lib/arcus";
 import { errorText } from "../lib/backend";
 import { getPredictMarkets, predictTimeLeft, type PredictMarket } from "../lib/predict";
+import { setIntervalWhenVisible } from "../lib/visibleInterval";
 import { fmtPrice, fmtPct, fmtUsdCompact } from "./utils";
 import { Skeleton } from "./ui";
 import type { Tab } from "./types";
@@ -16,9 +17,11 @@ const SHOWN_BY_DEFAULT = 10;
 interface DashboardProps {
   setTab: (tab: Tab) => void;
   setAsset: (asset: string) => void;
+  // Книга Lighter: по ней видно, откроется ли аркусный тикер в Терминале.
+  markets: OrderBook[];
 }
 
-export default function Dashboard({ setTab, setAsset }: DashboardProps) {
+export default function Dashboard({ setTab, setAsset, markets }: DashboardProps) {
   const [overview, setOverview] = useState<MarketOverview | null>(null);
   const [marketsError, setMarketsError] = useState<string | null>(null);
   const [arcusMarkets, setArcusMarkets] = useState<ArcusMarket[]>([]);
@@ -53,10 +56,10 @@ export default function Dashboard({ setTab, setAsset }: DashboardProps) {
       .catch((e) => {
         if (alive) setMarketsError(errorText(e));
       });
-    const id = setInterval(() => setNonce((n) => n + 1), REFRESH_MS);
+    const stopRefresh = setIntervalWhenVisible(() => setNonce((n) => n + 1), REFRESH_MS);
     return () => {
       alive = false;
-      clearInterval(id);
+      stopRefresh();
     };
   }, [nonce]);
 
@@ -91,7 +94,7 @@ export default function Dashboard({ setTab, setAsset }: DashboardProps) {
       .catch((e) => {
         if (alive) setArcusError(errorText(e));
       });
-    const id = setInterval(() => {
+    function pollMids() {
       getMidPrices()
         .then((data) => {
           if (!alive) return;
@@ -101,12 +104,22 @@ export default function Dashboard({ setTab, setAsset }: DashboardProps) {
         .catch((error) => {
           if (alive) setArcusError(errorText(error));
         });
-    }, 30000);
+    }
+    const stopMids = setIntervalWhenVisible(pollMids, 30000);
     return () => {
       alive = false;
-      clearInterval(id);
+      stopMids();
     };
   }, []);
+
+  /* Тикеры Lighter по базовому активу: аркусная строка ведёт в Терминал, а тот
+      ищет рынок по символу книги. Без проверки клик по «TSLA», которого на
+      Lighter нет, открывал бы терминал с надписью «Рынок не загружен» —
+      выглядит как поломка Терминала, а не как отсутствие инструмента. */
+  const lighterSymbols = useMemo(
+    () => new Set(markets.map((m) => m.symbol.toUpperCase())),
+    [markets]
+  );
 
   function openMarket(row: MarketOverviewRow) {
     // symbol — ровно то, что лежит в книге Lighter: Terminal ищет рынок по этому
@@ -132,7 +145,7 @@ export default function Dashboard({ setTab, setAsset }: DashboardProps) {
       <div className="terminal-main">
         <div className="terminal-header" style={{ flexDirection: "column", alignItems: "flex-start" }}>
           <div className="panel-head-row">
-            <h2 className="panel-title" style={{ fontSize: "16px" }}>Рынки Lighter</h2>
+            <h2 className="panel-title" style={{ fontSize: "var(--fs-heading)" }}>Рынки Lighter</h2>
             <span className="chip chip-accent">zkLighter</span>
             <button
               onClick={() => setNonce((n) => n + 1)}
@@ -143,20 +156,20 @@ export default function Dashboard({ setTab, setAsset }: DashboardProps) {
               <RefreshCw style={{ width: "12px", height: "12px" }} /> обновить
             </button>
             {lastUpdated && (
-              <span style={{ fontSize: "10px", color: "var(--text-muted)", fontFamily: "'JetBrains Mono', monospace" }}>
+              <span style={{ fontSize: "var(--fs-label)", color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
                 {lastUpdated.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
               </span>
             )}
           </div>
-          <p style={{ fontSize: "12px", color: "var(--text-muted)", margin: "8px 0 0 0", maxWidth: "800px" }}>
+          <p style={{ fontSize: "var(--fs-data)", color: "var(--text-muted)", margin: "8px 0 0 0", maxWidth: "800px" }}>
             Перпы на zkLighter, отсортированные по фактическому $-обороту за 24 часа: оборот — сумма 24 часовых свечей по каждому
             рынку, а не поле из книги (его в /orderBooks нет). Те же строки и тот же метод, что печатает{" "}
-            <code style={{ color: "var(--fg-2)", fontSize: "11px" }}>/markets</code> в Telegram-боте.
+            <code style={{ color: "var(--fg-2)", fontSize: "var(--fs-label)" }}>/markets</code> в Telegram-боте.
           </p>
         </div>
 
       {marketsError && (
-        <div className="terminal-header" style={{ color: "var(--accent)", fontSize: "12px", alignItems: "flex-start" }}>
+        <div className="terminal-header" style={{ color: "var(--accent)", fontSize: "var(--fs-data)", alignItems: "flex-start" }}>
           <TriangleAlert style={{ width: "14px", height: "14px", marginTop: "2px", flexShrink: 0 }} />
           <span>
             Обзор рынка временно недоступен. Функция требует подключённый бэкенд Wake.
@@ -175,8 +188,8 @@ export default function Dashboard({ setTab, setAsset }: DashboardProps) {
       ) : rows.length === 0 ? (
         <div className="terminal-header" style={{ justifyContent: "center", padding: "40px 16px" }}>
           <div>
-            <p style={{ color: "var(--fg-2)", fontSize: "13px", margin: 0 }}>Ни один рынок не собрался из живых данных</p>
-            <p style={{ color: "var(--text-muted)", fontSize: "11px", margin: "4px 0 0 0" }}>
+            <p style={{ color: "var(--fg-2)", fontSize: "var(--fs-ui)", margin: 0 }}>Ни один рынок не собрался из живых данных</p>
+            <p style={{ color: "var(--text-muted)", fontSize: "var(--fs-label)", margin: "4px 0 0 0" }}>
               Бэкенд вернул ответ без рядов — детали в no_market / no_data ниже.
             </p>
           </div>
@@ -238,7 +251,18 @@ export default function Dashboard({ setTab, setAsset }: DashboardProps) {
                     {r.min_base_amount > 0 ? r.min_base_amount.toLocaleString("en-US", { maximumFractionDigits: 6 }) : "—"}
                   </td>
                   <td className="right">
-                    <ArrowRight style={{ width: "12px", height: "12px", color: "var(--fg-3)" }} />
+                    {/* Ряд открывается и мышью, и клавиатурой: `data-action` даёт
+                        строке курсор, но с клавиатуры рынок иначе не открыть. */}
+                    <button
+                      className="row-open"
+                      aria-label={`Открыть ${r.symbol} в Терминале`}
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        openMarket(r);
+                      }}
+                    >
+                      <ArrowRight style={{ width: "12px", height: "12px" }} />
+                    </button>
                   </td>
                 </tr>
               ))}
@@ -264,19 +288,19 @@ export default function Dashboard({ setTab, setAsset }: DashboardProps) {
       )}
 
       <div className="terminal-header" style={{ flexDirection: "column", alignItems: "flex-start" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: "12px", width: "100%" }}>
-          <h2 style={{ fontSize: "16px", fontWeight: 600, color: "var(--fg)", margin: 0 }}>Рынки Arcus</h2>
+        <div style={{ display: "flex", alignItems: "center", gap: "12px", width: "100%", flexWrap: "wrap" }}>
+          <h2 style={{ fontSize: "var(--fs-heading)", fontWeight: 600, color: "var(--fg)", margin: 0 }}>Рынки Arcus</h2>
           <span className="chip chip-up">Robinhood Chain</span>
           {arcusError && (
-            <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: "6px", fontSize: "11px", color: "var(--accent)" }}>
+            <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: "6px", fontSize: "var(--fs-label)", color: "var(--accent)" }}>
               <TriangleAlert style={{ width: "12px", height: "12px" }} />
               <span>{Object.keys(arcusPrices).length ? "Arcus не отвечает — показаны последние котировки" : "Arcus не отвечает"}</span>
             </div>
           )}
         </div>
-        <p style={{ fontSize: "12px", color: "var(--text-muted)", margin: "8px 0 0 0", maxWidth: "800px" }}>
+        <p style={{ fontSize: "var(--fs-data)", color: "var(--text-muted)", margin: "8px 0 0 0", maxWidth: "800px" }}>
           Рынки из публичного API Arcus: тип PERP или SPOT указан в каждой строке. Mid-цены с{" "}
-          <code style={{ color: "var(--fg-2)", fontSize: "11px" }}>api.arcus.xyz/v1/mids</code> каждые 30 секунд; это середина котировок, не цена исполнения.
+          <code style={{ color: "var(--fg-2)", fontSize: "var(--fs-label)" }}>api.arcus.xyz/v1/mids</code> каждые 30 секунд; это середина котировок, не цена исполнения.
         </p>
       </div>
 
@@ -289,8 +313,8 @@ export default function Dashboard({ setTab, setAsset }: DashboardProps) {
       ) : arcusMarkets.length === 0 ? (
         <div className="terminal-header" style={{ justifyContent: "center", padding: "40px 16px" }}>
           <div>
-            <p style={{ color: "var(--fg-2)", fontSize: "13px", margin: 0 }}>Arcus не вернул рынков</p>
-            <p style={{ color: "var(--text-muted)", fontSize: "11px", margin: "4px 0 0 0" }}>
+            <p style={{ color: "var(--fg-2)", fontSize: "var(--fs-ui)", margin: 0 }}>Arcus не вернул рынков</p>
+            <p style={{ color: "var(--text-muted)", fontSize: "var(--fs-label)", margin: "4px 0 0 0" }}>
               API доступен, но список markets пуст.
             </p>
           </div>
@@ -308,20 +332,26 @@ export default function Dashboard({ setTab, setAsset }: DashboardProps) {
                 <th scope="col" className="right">Tick size</th>
                 <th scope="col" className="right">Step size</th>
                 <th scope="col" className="left">Статус</th>
+                <th scope="col" className="right"><span className="sr-only">Открыть</span></th>
               </tr>
             </thead>
             <tbody>
               {arcusRows.slice(0, 15).map((m, i) => {
                 const price = arcusPrices[m.marketDisplayName];
                 const online = isArcusOnline(m);
+                const onLighter = lighterSymbols.has(m.baseAsset.toUpperCase());
                 return (
                   <tr
                     key={m.marketId}
-                    data-action
-                    onClick={() => {
-                      setAsset(m.baseAsset);
-                      setTab("terminal");
-                    }}
+                    data-action={onLighter ? "" : undefined}
+                    onClick={
+                      onLighter
+                        ? () => {
+                            setAsset(m.baseAsset);
+                            setTab("terminal");
+                          }
+                        : undefined
+                    }
                   >
                     <td className="muted num">{i + 1}</td>
                     <td className="left">
@@ -332,7 +362,7 @@ export default function Dashboard({ setTab, setAsset }: DashboardProps) {
                       <span className="chip">{isArcusPerp(m) ? "PERP" : "SPOT"}</span>
                     </td>
                     <td className="right num" style={{ color: "var(--fg)", fontWeight: 500 }}>
-                      {price ? `$${Number(price).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : "—"}
+                      {price ? fmtPrice(Number(price)) : "—"}
                     </td>
                     <td className="right num" style={{ color: "var(--fg-2)" }}>{m.tickSize}</td>
                     <td className="right num" style={{ color: "var(--fg-2)" }}>{m.stepSize}</td>
@@ -340,6 +370,25 @@ export default function Dashboard({ setTab, setAsset }: DashboardProps) {
                       <span className={online ? "text-positive" : "muted"} style={{ fontWeight: online ? 500 : 400 }}>
                         {online ? "торгуется" : "выключен"}
                       </span>
+                    </td>
+                    <td className="right">
+                      {/* Терминал читает Lighter: строку Arcus он открывает только
+                          по тикеру, который есть в его книге. */}
+                      {onLighter ? (
+                        <button
+                          className="row-open"
+                          aria-label={`Открыть ${m.baseAsset} в Терминале`}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            setAsset(m.baseAsset);
+                            setTab("terminal");
+                          }}
+                        >
+                          <ArrowRight style={{ width: "12px", height: "12px" }} />
+                        </button>
+                      ) : (
+                        <span className="muted">нет на Lighter</span>
+                      )}
                     </td>
                   </tr>
                 );
@@ -358,14 +407,14 @@ export default function Dashboard({ setTab, setAsset }: DashboardProps) {
       <div className="terminal-header" style={{ flexDirection: "column", alignItems: "flex-start" }}>
         <div style={{ display: "flex", alignItems: "center", gap: "8px", width: "100%" }}>
           <BarChart3 style={{ width: "14px", height: "14px", color: "var(--info)" }} />
-          <h3 style={{ fontSize: "13px", fontWeight: 600, color: "var(--fg)", margin: 0 }}>Predict — открытые рынки</h3>
-          <button onClick={() => setTab("predict")} className="link-action" style={{ marginLeft: "auto", fontSize: "11px", gap: "4px" }}>
+          <h3 style={{ fontSize: "var(--fs-ui)", fontWeight: 600, color: "var(--fg)", margin: 0 }}>Predict — открытые рынки</h3>
+          <button onClick={() => setTab("predict")} className="link-action" style={{ marginLeft: "auto", fontSize: "var(--fs-label)", gap: "4px" }}>
             торговать <ArrowRight style={{ width: "12px", height: "12px" }} />
           </button>
         </div>
       </div>
         {predictError ? (
-          <div style={{ background: "var(--bg-2)", border: "1px solid var(--warn-line)", borderRadius: "6px", padding: "12px 16px", fontSize: "12px", color: "var(--warn)" }}>
+          <div style={{ background: "var(--bg-2)", border: "1px solid var(--warn-line)", borderRadius: "6px", padding: "12px 16px", fontSize: "var(--fs-data)", color: "var(--warn)" }}>
             Открытые рынки Predict временно недоступны. Функция требует подключённый бэкенд Wake.
           </div>
         ) : predict === null ? (
@@ -379,33 +428,27 @@ export default function Dashboard({ setTab, setAsset }: DashboardProps) {
             ))}
           </div>
         ) : predict.length === 0 ? (
-          <div style={{ background: "var(--bg-1)", border: "1px solid var(--line)", borderRadius: "6px", padding: "16px", fontSize: "12px", color: "var(--text-muted)" }}>
+          <div style={{ background: "var(--bg-1)", border: "1px solid var(--line)", borderRadius: "6px", padding: "16px", fontSize: "var(--fs-data)", color: "var(--text-muted)" }}>
             Открытых рынков нет. Резолвленные с исходами — во вкладке Predict; создать рынок может только куратор
             (POST /predict/markets/price или /predict/markets/event с X-Curator-Token).
           </div>
         ) : (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: "8px" }}>
             {predict.slice(0, 4).map((m) => (
-              <button
-                key={m.id}
-                onClick={() => setTab("predict")}
-                style={{ background: "var(--bg-1)", border: "1px solid var(--line)", borderRadius: "6px", padding: "16px", textAlign: "left", cursor: "pointer", transition: "border-color 0.15s" }}
-                onMouseEnter={(e) => e.currentTarget.style.borderColor = "var(--line-strong)"}
-                onMouseLeave={(e) => e.currentTarget.style.borderColor = "var(--line)"}
-              >
+              <button key={m.id} className="nav-card" onClick={() => setTab("predict")}>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px" }}>
-                  <span style={{ fontSize: "10px", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                  <span style={{ fontSize: "var(--fs-label)", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
                     {m.kind === "price" ? "цена на Lighter" : "событие"}
                   </span>
-                  <span style={{ fontSize: "10px", color: "var(--text-muted)" }}>{predictTimeLeft(m.resolve_at)}</span>
+                  <span style={{ fontSize: "var(--fs-label)", color: "var(--text-muted)" }}>{predictTimeLeft(m.resolve_at)}</span>
                 </div>
-                <div style={{ color: "var(--fg)", fontSize: "13px", marginBottom: "12px" }}>{m.question}</div>
+                <div style={{ color: "var(--fg)", fontSize: "var(--fs-ui)", marginBottom: "12px" }}>{m.question}</div>
                 <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
                   <div style={{ flex: 1, height: "6px", background: "var(--bg-2)", borderRadius: "3px", overflow: "hidden" }}>
                     <div style={{ height: "100%", background: "var(--up)", width: `${m.price_yes * 100}%` }} />
                   </div>
-                  <span style={{ fontSize: "10px", fontFamily: "'JetBrains Mono', monospace", color: "var(--fg-2)" }}>{(m.price_yes * 100).toFixed(0)}% YES</span>
-                  <span style={{ fontSize: "10px", fontFamily: "'JetBrains Mono', monospace", color: "var(--text-muted)" }}>
+                  <span style={{ fontSize: "var(--fs-label)", fontFamily: "var(--font-mono)", color: "var(--fg-2)" }}>{(m.price_yes * 100).toFixed(0)}% YES</span>
+                  <span style={{ fontSize: "var(--fs-label)", fontFamily: "var(--font-mono)", color: "var(--text-muted)" }}>
                     {fmtUsdCompact(m.volume_usd)} · {m.trade_count} сдел.
                   </span>
                 </div>
@@ -415,34 +458,25 @@ export default function Dashboard({ setTab, setAsset }: DashboardProps) {
         )}
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(250px, 1fr))", gap: "8px" }}>
-        <button onClick={() => setTab("discover")} style={{ background: "var(--bg-1)", border: "1px solid var(--line)", borderRadius: "6px", padding: "12px", textAlign: "left", cursor: "pointer", transition: "border-color 0.15s" }}
-          onMouseEnter={(e) => e.currentTarget.style.borderColor = "var(--line-strong)"}
-          onMouseLeave={(e) => e.currentTarget.style.borderColor = "var(--line)"}
-        >
+        <button className="nav-card" onClick={() => setTab("discover")}>
           <Users style={{ width: "14px", height: "14px", color: "var(--info)", marginBottom: "8px" }} />
-          <div style={{ color: "var(--fg)", fontWeight: 500, fontSize: "13px", marginBottom: "4px" }}>Копирование сделок</div>
-          <div style={{ color: "var(--text-muted)", fontSize: "11px", lineHeight: 1.5 }}>
+          <div style={{ color: "var(--fg)", fontWeight: 500, fontSize: "var(--fs-ui)", marginBottom: "4px" }}>Копирование сделок</div>
+          <div style={{ color: "var(--text-muted)", fontSize: "var(--fs-label)", lineHeight: 1.5 }}>
             Лидер торгует своим депозитом; его сделка повторяется пропорционально аллокации. Комиссия — б.п. от скопированной сделки,
             в базе она объявлена и пока не списывается.
           </div>
         </button>
-        <button onClick={() => setTab("risk")} style={{ background: "var(--bg-1)", border: "1px solid var(--line)", borderRadius: "6px", padding: "12px", textAlign: "left", cursor: "pointer", transition: "border-color 0.15s" }}
-          onMouseEnter={(e) => e.currentTarget.style.borderColor = "var(--line-strong)"}
-          onMouseLeave={(e) => e.currentTarget.style.borderColor = "var(--line)"}
-        >
+        <button className="nav-card" onClick={() => setTab("risk")}>
           <ShieldAlert style={{ width: "14px", height: "14px", color: "var(--accent)", marginBottom: "8px" }} />
-          <div style={{ color: "var(--fg)", fontWeight: 500, fontSize: "13px", marginBottom: "4px" }}>Риск корзины</div>
-          <div style={{ color: "var(--text-muted)", fontSize: "11px", lineHeight: 1.5 }}>
+          <div style={{ color: "var(--fg)", fontWeight: 500, fontSize: "var(--fs-ui)", marginBottom: "4px" }}>Риск корзины</div>
+          <div style={{ color: "var(--text-muted)", fontSize: "var(--fs-label)", lineHeight: 1.5 }}>
             30 часовых закрытий, волатильность корзины и подбор хеджа из реальных рынков.
           </div>
         </button>
-        <button onClick={() => setTab("funding")} style={{ background: "var(--bg-1)", border: "1px solid var(--line)", borderRadius: "6px", padding: "12px", textAlign: "left", cursor: "pointer", transition: "border-color 0.15s" }}
-          onMouseEnter={(e) => e.currentTarget.style.borderColor = "var(--line-strong)"}
-          onMouseLeave={(e) => e.currentTarget.style.borderColor = "var(--line)"}
-        >
+        <button className="nav-card" onClick={() => setTab("funding")}>
           <Percent style={{ width: "14px", height: "14px", color: "var(--up)", marginBottom: "8px" }} />
-          <div style={{ color: "var(--fg)", fontWeight: 500, fontSize: "13px", marginBottom: "4px" }}>Funding и carry</div>
-          <div style={{ color: "var(--text-muted)", fontSize: "11px", lineHeight: 1.5 }}>
+          <div style={{ color: "var(--fg)", fontWeight: 500, fontSize: "var(--fs-ui)", marginBottom: "4px" }}>Funding и carry</div>
+          <div style={{ color: "var(--text-muted)", fontSize: "var(--fs-label)", lineHeight: 1.5 }}>
             Ставки Lighter рядом с Binance, Bybit и Hyperliquid. Дельта-нейтральная связка с округлением под минимальный лот.
           </div>
         </button>

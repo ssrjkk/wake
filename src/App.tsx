@@ -888,7 +888,7 @@ export default function App() {
                     className="btn-ghost !py-1.5 !pl-1.5 font-mono"
                   >
                     <span
-                      className={`w-5 h-5 rounded-full flex items-center justify-center text-[color:var(--on-accent)] text-[10px] font-bold ${
+                      className={`avatar-ink w-5 h-5 rounded-full flex items-center justify-center text-[color:var(--on-accent)] font-bold ${
                         session?.via === "telegram"
                           ? "bg-[var(--accent)]"
                           : "bg-[var(--up)]"
@@ -1299,6 +1299,7 @@ export default function App() {
                     key={network}
                     setTab={setTab}
                     setAsset={setAsset}
+                    markets={markets}
                   />
                 </ErrorBoundary>
               )}
@@ -1555,7 +1556,7 @@ export default function App() {
               </div>
               <p
                 style={{
-                  fontSize: "10px",
+                  fontSize: "var(--fs-label)",
                   color: "var(--text-muted)",
                   margin: 0,
                   lineHeight: 1.5,

@@ -12,12 +12,12 @@ Token bucket, не fixed-window: fixed-window позволяет burst в 2x л�
 всего сервиса, и на одном общем bucket один активный клиент закрыл бы вход
 остальным.
 
-Что лимитер НЕ гарантирует: он не отстояет точную квоту под конкурентным гоном.
-Чтение и списание — два шага, поэтому пачка запросов, пришедших в одну
-миллисекунду, пропустит чуть больше лимита. Это оставлено намеренно: цель
-лимитера — сбить скрипт-поллинг и защитить базу от случайного шторма. Жёсткая
-квота требовала бы EVAL-скрипта, которого fakeredis (на нём живут тесты) не
-поддерживает.
+Квота держится и под конкурентным гоном: «прочитать ведро → решить → записать»
+обёрнуто в WATCH/MULTI/EXEC, то есть в оптимистичную блокировку. Раньше это было
+два отдельных шага, и оговорка в этом докстринге называла причиной EVAL-скрипт,
+«которого fakeredis не поддерживает». Lua здесь не нужен: WATCH откатывает
+транзакцию, чьё чтение ведра устарело, и цикл повторяет её на свежих числах.
+Проверено на том же fakeredis, на котором живут тесты.
 """
 
 import logging
@@ -48,23 +48,24 @@ class RedisRateLimiter:
             socket_connect_timeout=1.0,
         )
 
-    async def _read(self, key: str) -> tuple[float, float]:
+    async def _read(self, source, redis_key: str) -> tuple[float, float]:
         """(tokens, last_refill) с уже применённым восполнением; bucket инициализируется capacity.
+
+        `source` — сам клиент ИЛИ pipeline под WATCH. Чтение обязано идти по тому
+        же соединению, которое потом фиксирует запись: блокировка, которая
+        смотрит в другие руки, ничего не блокирует.
 
         Битое содержимое ведра чинится здесь же, а не отдаётся наверх как «Redis
         лёг». Значение может прилететь не от нас: этот же инстанс Redis делят с
         другими процессами (общий db в доке и в docker-compose), ключи живут в
         открытом всем `ratelimit:*`, и поле, из которого `float()` не делает число
         — это испорченные ДАННЫЕ, а не отказ ТРАНСПОРТА. Прежний широкий `except
-        Exception` в allow() сваливал и то и другое в одну строку «Redis недоступен,
+        Exception` в allow() сваливал и то и другое в одну строчку «Redis недоступен,
         пропускаю без лимита»: ведро с `tokens="abc"` молча оставалось
         неограниченным до самого TTL, потому что исключение случалось ДО записи, и
         в логе был ровно один диагноз — неверный.
         """
-        redis_key = f"ratelimit:{key}"
-        tokens_str, last_str = await self.redis.hmget(
-            redis_key, "tokens", "last_refill"
-        )
+        tokens_str, last_str = await source.hmget(redis_key, "tokens", "last_refill")
         now = time.time()
         if tokens_str is None or last_str is None:
             return self.capacity, now
@@ -72,37 +73,55 @@ class RedisRateLimiter:
             tokens = float(tokens_str)
             last_refill = float(last_str)
         except (TypeError, ValueError) as e:
-            await self._reset(redis_key, e)
+            await self._reset(source, redis_key, e)
             return self.capacity, now
         if not math.isfinite(tokens) or not math.isfinite(last_refill) or tokens < 0:
             # NaN и inf парсятся float'ом без ошибки, а min(capacity, nan) в Python
             # отдаёт capacity: ведро выглядело полным на каждом запросе.
             await self._reset(
-                redis_key, f"tokens={tokens_str!r} last_refill={last_str!r}"
+                source, redis_key, f"tokens={tokens_str!r} last_refill={last_str!r}"
             )
             return self.capacity, now
         elapsed = max(0.0, now - last_refill)
         return min(self.capacity, tokens + elapsed * self.refill_rate), now
 
-    async def _reset(self, redis_key: str, reason: object) -> None:
+    async def _reset(self, source, redis_key: str, reason: object) -> None:
         """Сброшенное ведро — это событие уровня «разберись», а не «Redis лёг»:
         диагностику обязан описывать текст в логе, а не тип исключения."""
-        await self.redis.delete(redis_key)
+        await source.delete(redis_key)
         logger.warning(
             "rate limiter: битые данные в %s (%s), ведро сброшено",
             redis_key,
             reason,
         )
 
-    async def _write(self, key: str, tokens: float, last_refill: float) -> None:
-        pipe = self.redis.pipeline()
-        pipe.hset(
-            f"ratelimit:{key}", mapping={"tokens": tokens, "last_refill": last_refill}
-        )
+    @property
+    def _ttl(self) -> int:
         # Простоявший bucket забывается и обнуляется: хранить его вечно смысла
         # нет, а заново созданный bucket отдаёт ровно capacity — то же самое.
-        pipe.expire(f"ratelimit:{key}", int(self.capacity / self.refill_rate) + 60)
-        await pipe.execute()
+        return int(self.capacity / self.refill_rate) + 60
+
+    async def _spend(self, key: str, cost: float) -> bool:
+        """Атомарный шаг: WATCH → чтение → MULTI/EXEC с записью.
+
+        False — списывать нечего, и ведро трогать не нужно. Откат по WatchError
+        (ведро тронули, пока мы решали) обрабатывает сам redis.transaction():
+        он повторяет чтение на свежих числах, поэтому исход запроса определяется
+        реальным остатком, а не тем, чья запись легла последней."""
+        redis_key = f"ratelimit:{key}"
+
+        async def _txn(pipe) -> bool:
+            tokens, now = await self._read(pipe, redis_key)
+            if tokens < cost:
+                return False
+            pipe.multi()
+            pipe.hset(redis_key, mapping={"tokens": tokens - cost, "last_refill": now})
+            pipe.expire(redis_key, self._ttl)
+            return True
+
+        # value_from_callable: transaction() по умолчанию отдаёт список ответов
+        # EXEC, а наружу обязан уйти bool — решение по ведре.
+        return await self.redis.transaction(_txn, redis_key, value_from_callable=True)
 
     async def allow(self, key: str, cost: float = 1.0) -> bool:
         """Списать cost токенов. True — пропустили.
@@ -113,13 +132,10 @@ class RedisRateLimiter:
 
         Ловится ровно RedisError, а не всё подряд: собственный баг в этом модуле
         не имеет права превращаться в «лимитов нет» с одной строчкой в логе.
-        Остальное идёт наружу и становится честной 500 в едином формате."""
+        Остальное идёт наружу и становится честной 500 в едином формате.
+        WatchError здесь не перехватывается: его обрабатывает transaction()."""
         try:
-            tokens, now = await self._read(key)
-            if tokens < cost:
-                return False
-            await self._write(key, tokens - cost, now)
-            return True
+            return await self._spend(key, cost)
         except redis.RedisError:
             logger.warning(
                 "rate limiter: Redis недоступен, пропускаю без лимита", exc_info=True
@@ -133,7 +149,7 @@ class RedisRateLimiter:
         попытки заглянуть в ведро нельзя. Другой тип ошибки здесь делать
         нечего: _read своё покрытие битых данных уже имеет."""
         try:
-            tokens, _ = await self._read(key)
+            tokens, _ = await self._read(self.redis, f"ratelimit:{key}")
         except redis.RedisError:
             return 0.0
         if tokens >= cost:

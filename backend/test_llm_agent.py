@@ -13,6 +13,7 @@ import json
 import unittest
 from unittest.mock import patch, MagicMock
 
+import llm_agent
 from llm_agent import llm_decision, _bounded_float
 from agent_memory import AgentMemoryStore
 from agent_decision import rule_based_decision
@@ -20,6 +21,11 @@ from agent_decision import rule_based_decision
 
 class TestLLMAgent(unittest.TestCase):
     def setUp(self):
+        # Выключатель — состояние модуля, и тесты этого класса роняют LLM-вызов
+        # намеренно. Без сброса следующий тест получил бы «LLM на паузе» вместо
+        # проверяемого отказа и зелёным стал бы за прошлую ошибку.
+        llm_agent.reset_circuit()
+        self.addCleanup(llm_agent.reset_circuit)
         self.memory = AgentMemoryStore()
         self.market_id = 1
         self.recent_prices = [50000.0, 50100.0, 50200.0, 50150.0, 50300.0]
@@ -165,6 +171,60 @@ class TestLLMAgent(unittest.TestCase):
         self.assertEqual(decision.confidence, 0.6)
         self.assertEqual(decision.size_usd, 0.0)
         self.assertIn("[LLM]", decision.reasoning)
+
+
+class TestCircuitBreaker(unittest.TestCase):
+    """Отказ модели не должен стоить каждому следующему шагу полного ожидания.
+
+    Без выключателя агент с неверным ключом платил 15 с на каждом вызове:
+    api.anthropic.com отвечает 401 instantly, но urllib держит запрос, а решение
+    всё равно принимает правило. Проверка идёт на числе обращений к urlopen, а не
+    на тексте: суть выключателя в том, вопроса не было."""
+
+    def setUp(self):
+        llm_agent.reset_circuit()
+        self.addCleanup(llm_agent.reset_circuit)
+        self.memory = AgentMemoryStore()
+
+    def _http_error(self, code: int):
+        from urllib.error import HTTPError
+
+        return HTTPError("https://api.anthropic.com", code, "nope", None, None)
+
+    def _step(self, urlopen):
+        with (
+            patch("llm_agent.ANTHROPIC_API_KEY", "test-key"),
+            patch("urllib.request.urlopen", side_effect=urlopen),
+        ):
+            return llm_agent.llm_decision(self.memory, 1, [50000.0, 50100.0], 100.0)
+
+    def test_rejected_key_pauses_and_stops_asking(self):
+        first = self._step(self._http_error(401))
+        self.assertIn("LLM-вызов не удался", first.reasoning)
+
+        calls = []
+        second = self._step(lambda *a, **k: calls.append(1))
+        self.assertIn("LLM на паузе", second.reasoning)
+        self.assertEqual(calls, [], "во время паузы спрашивать модель нельзя")
+        self.assertGreater(llm_agent._paused_remaining(), 600)
+
+    def test_transient_failure_pauses_shortly(self):
+        self._step(TimeoutError("нет ответа"))
+        remaining = llm_agent._paused_remaining()
+        self.assertGreater(remaining, 30)
+        self.assertLessEqual(remaining, llm_agent._PAUSE_TRANSIENT_S)
+
+    def test_reset_clears_the_pause(self):
+        self._step(self._http_error(403))
+        llm_agent.reset_circuit()
+        self.assertEqual(llm_agent._paused_remaining(), 0.0)
+
+    def test_decision_is_the_rule_based_one_during_the_pause(self):
+        self._step(self._http_error(401))
+        decision = self._step(lambda *a, **k: None)
+        expected = rule_based_decision(self.memory, 1, [50000.0, 50100.0], 100.0)
+        self.assertEqual(decision.action, expected.action)
+        self.assertEqual(decision.size_usd, expected.size_usd)
 
 
 class TestBoundedNumbers(unittest.TestCase):

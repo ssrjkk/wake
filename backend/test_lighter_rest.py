@@ -751,6 +751,36 @@ class TestMarketOverviewDegradation(unittest.TestCase):
         self.assertEqual(got["no_data"], ["ETH"])
         self.assertEqual(got["no_market"], [])
 
+    def test_book_row_without_a_usable_market_id_does_not_break_the_overview(self):
+        """Рынок книги без разобранного market_id выпадает из отбора, а не обрывает
+        /markets/overview: `int(book["market_id"])` стоял без проверки, и строка
+        без поля (или с "abc") давала 500 на весь обзор и на /markets в боте."""
+        book = [
+            {
+                "market_id": "1",
+                "symbol": "BTC",
+                "market_type": "perp",
+                "status": "active",
+                "min_base_amount": "0.00007",
+                "supported_size_decimals": "5",
+            },
+            {"symbol": "ETH", "market_type": "perp", "status": "active"},
+            {
+                "market_id": "не число",
+                "symbol": "SOL",
+                "market_type": "perp",
+                "status": "active",
+            },
+        ]
+        stats = {1: {"price": 1.0, "change_24h": 0.0, "quote_volume_24h": 1.0}}
+        got = self._run(("BTC", "ETH", "SOL"), stats, book)
+        self.assertEqual([r["symbol"] for r in got["rows"]], ["BTC"])
+        self.assertEqual(
+            got["no_market"],
+            ["ETH", "SOL"],
+            "рынок без идентификатора неотличим от рынка, которого нет",
+        )
+
 
 class TestCachePreservesIdentity(unittest.TestCase):
     def test_wrapped_functions_keep_their_names_and_docstrings(self):

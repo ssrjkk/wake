@@ -10,6 +10,41 @@ from the commit history rather than from a release.
 ## [Unreleased]
 
 ### Added
+- `WAKE_SIGNING_ALLOWED_HOSTS` and the Host gate in `backend/signing_service.py`.
+  `/place-order` has no authentication and cannot have any (a secret in a public
+  browser bundle is not a secret), so the only boundary is the address it is
+  published on — and until now that boundary was a paragraph in a docstring while
+  `docs/RAILWAY_DEPLOY.md` recommended the opposite: a second Railway service with
+  `--host 0.0.0.0`, i.e. a public URL whose POST moves money on the key owner's
+  account from `curl`. Any `Host` outside the list now answers
+  `403 SIGNING_HOST_NOT_ALLOWED` before the key is read, `/health` included.
+- `WAKE_ENABLE_DOCS`. The app answers with `Content-Security-Policy: default-src
+  'self'`, and Swagger UI needs a CDN script plus an inline tag, so `/docs` was a
+  documented feature that rendered an empty page. The old smoke assertion
+  `assertEqual(status_code, 200)` proved only that the route existed. Docs, ReDoc
+  and `/openapi.json` now exist only when the flag is on.
+- `src/lib/visibleInterval.ts` — `setIntervalWhenVisible`. Panels polled their
+  providers on their own timers regardless of the tab being hidden (the trade feed
+  every 4 s), and a Telegram Mini App webview stays alive in the background, so the
+  requests went to numbers nobody was reading. The app shell already had this rule;
+  it is now one primitive with tests, used by all seven polling panels.
+- `src/lib/series.ts` — return series aligned by candle hour instead of array
+  index. `portfolio_risk._aligned_tails` truncates by common tail, which assumes
+  index *i* means the same hour in every row; a market that dropped one pair, or a
+  parallel fetch that crossed the hour boundary, paired different hours and printed
+  a correlation that was not one. Seven unit tests, including the shift case.
+- `e2e/design-audit.ts` — three measurements the design gate did not have:
+  `auditTypeScale` (every text node's computed size must equal a token of the
+  scale, read live from the theme), accessible names for `input`/`select`, and
+  "a `[data-action]` row must contain a focusable control". The last two failed on
+  the first run: two table rows opened markets by mouse only, and three numeric
+  fields had no name at all.
+- `theme.gate.test.ts` — typography and mouse-behaviour section: no `fontSize`
+  or `fontFamily` literals in panels, no `onMouseEnter`/`onMouseLeave` handlers, no
+  `window.confirm`/`alert`/`prompt`.
+- Unit tests for the order path in `src/lib/lighter.ts`, which had none: the
+  network-mismatch refusal, the request body, the unified error text, index
+  uniqueness over 2000 draws, and "POST carries no timeout, GET does".
 - `GET /leaders/hydrated` — the whole Discover card in one response: the leader
   row, follower count and AUM from one `GROUP BY` over `follows`, and the
   Lighter account snapshot read server-side in parallel and cached for a minute.
@@ -384,6 +419,38 @@ from the commit history rather than from a release.
   a freshly opened list.
 
 ### Changed
+- `backend/signing_service.py` answers the same error shape as the backend
+  (`{"error":{"code","message"}}`). The terminal used to print FastAPI's
+  `{"detail": ...}` JSON into a toast, so an exchange rejection looked like a
+  broken client.
+- The terminal refuses an order before sending it when the signing service runs on
+  a different Lighter network than the book it read (`market_id`,
+  `min_quote_amount` and size decimals all come from the browser's chosen network).
+  The signing chip now names the service's network and mode — "mainnet, сухой ход" —
+  instead of "отвечает", and the confirmation dialog repeats both.
+- `follows.current_mirrored_size` is incremented in SQL
+  (`GREATEST(col + delta, 0)`) instead of being written back as a number the caller
+  computed from a row it read before execution.
+- Panels print type through the scale: 219 inline `fontSize: "Npx"` and 52 literal
+  `fontFamily` strings replaced by `--fs-*`/`--font-mono`, and the scale gained
+  `--fs-body`, `--fs-heading`, `--fs-metric`, `--fs-figure`, `--fs-wordmark`. The
+  200%-text gate doubles these tokens, so every literal it did not reach made that
+  gate green while half the interface ignored the scale.
+- Discover keeps the last good leader list when a 20 s refresh fails and says the
+  data are stale, instead of replacing the showcase with an empty screen.
+- The rate limiter's read-decide-write is one optimistic-lock step
+  (`WATCH`/`MULTI`/`EXEC`), replacing the docstring's claim that a hard quota
+  would need Lua, which fakeredis cannot run. Measured both ways: 20 concurrent
+  requests against a capacity of 5 used to all pass; now exactly 5 do.
+- The curator identity written into `audit_log.actor` and
+  `predict_markets.resolved_by` is a SHA-256 prefix, not `CURATOR_TOKEN[:8]`. The
+  comment called the prefix "not leaking the secret"; the first eight characters of
+  a key in a table that the bot, `/ops` and any dump all read are material of that
+  key.
+- Unfollowing asks through the app's own dialog. `window.confirm` is not shown in
+  the Telegram Mini App, so that button did nothing there.
+- The Earn fee slider keeps an unsaved draft when the 15 s poll returns the stored
+  value; previously the poll moved the slider back under the pointer.
 - The palette of the panels is now only tokens: 37 distinct hex literals (449
   occurrences) left `src/components/*.tsx` and `App.tsx`, and `rgba(...)` is
   banned in panel code too — 12 more sites lived there, and the colour check
@@ -642,6 +709,38 @@ from the commit history rather than from a release.
   claim of an "optional KMS mode", which the removed file could not deliver.
 
 ### Fixed
+- Two concurrent `/place-order` requests with the same `client_order_index` both
+  submitted. The idempotency cache was checked, then awaited `create_order`, then
+  written — so the cache whose only job is "do not send twice" never saw the second
+  request. A race test with a delayed fake signer fails without the lock.
+- Lost updates of `follows.current_mirrored_size`: two leader events in one window
+  wrote two totals derived from the same stale read, and the mirror engine then
+  believed it had sent something it had not.
+- `/funding/venues`, `/funding/carry-markets` and `/markets/overview` returned 500
+  on a single malformed provider row (`float(r["rate"])`,
+  `int(book["market_id"])` without a guard); one row now drops one venue or one
+  pair.
+- `backend/cache.py` had no bound: expired entries left only when their own key was
+  read again, while the key space is open (market id, account index, network).
+- Arcus mid-prices printed `$0.00` for four of 69 live markets (KBONK 0.00307545,
+  PUMP, KPEPE, PENGU) because the column was formatted to two digits; they now go
+  through the same price formatter as the bot.
+- `align` of the Risk basket's candle fetches onto the hour boundary;
+  `$84782`-style numbers printed in Risk without separators; index keys in the
+  basket list.
+- `Math.max(0, Number(e.target.value))` in two number fields produced NaN, which
+  the same codebase had already fixed in four other places.
+- Predict "show more" re-served rows already on screen when a market resolved
+  between the two page requests.
+- The LLM agent retried a rejected API key on every step, paying the full 15 s
+  each time; it now pauses the model (900 s on an auth rejection, 60 s otherwise)
+  and says so in `reasoning`.
+- `predict_resolver` called the blocking oracle inside the event loop; the call now
+  runs in a threadpool.
+- A user-initiated `AbortError` was reported as a backend timeout, and Sentry's
+  `environment` fell back to `testnet` while the app falls back to `mainnet`.
+- `fmtUsdCompact` trimmed the `.0` only in the K band, so `$2.0M` and `$3.00B`
+  claimed precision the number does not have.
 - `useRowWindow` could return `start > end` after the data behind a scrolled
   window shrank: it kept the old `scrollTop` while the list was already shorter,
   slicing zero rows and still drawing a `padTop` beyond the list. The offset is

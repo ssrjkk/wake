@@ -62,6 +62,27 @@ class TestRedisRateLimiter(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_concurrent_requests_do_not_exceed_the_quota(self):
+        """Пачка одновременных запросов обязана упереться в квоту, а не в лимит
+        «прочитали ведро до записи».
+
+        Пока `allow` был двумя шагами (hmget → hset), N запросов в один момент
+        времени читали одно и то же число токенов и каждый списывал по одному из
+        него: при capacity=5 двадцатка проходила целиком. Сейчас шаги обёрнуты в
+        WATCH/MULTI, и пропустившим оказывается ровно тот, кто успел зафиксировать
+        остаток."""
+        rl = make_limiter(capacity=5, refill_rate=1)
+
+        async def run():
+            results = await asyncio.gather(*[rl.allow("user_race") for _ in range(20)])
+            self.assertEqual(
+                sum(1 for r in results if r),
+                5,
+                "пропустить должно ровно capacity запросов, а не «кто где успел»",
+            )
+
+        asyncio.run(run())
+
     def test_refills_over_time(self):
         rl = make_limiter(capacity=5, refill_rate=1)
 
@@ -209,12 +230,19 @@ class TestCorruptBucketIsNotRedisOutage(unittest.TestCase):
 
 
 class _FailingRedis:
-    """Замена клиента Redis, которая всегда бросает переданный исключение."""
+    """Замена клиента Redis, которая всегда бросает переданный исключение.
+
+    `transaction` здесь обязан быть: списание токенов идёт через него
+    (WATCH/MULTI/EXEC), и двойка без этого метода ловила бы AttributeError
+    вместо проверяемого отказа транспорта."""
 
     def __init__(self, error: Exception):
         self._error = error
 
     async def hmget(self, *args, **kwargs):
+        raise self._error
+
+    async def transaction(self, *args, **kwargs):
         raise self._error
 
 

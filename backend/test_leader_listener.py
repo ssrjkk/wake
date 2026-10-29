@@ -67,7 +67,7 @@ class ListenerDbCase(testsupport.PgCase):
             max_leverage=5,
         )
         if current_mirrored_size:
-            await db.update_mirrored_size(follow_id, current_mirrored_size)
+            await db.add_mirrored_size(follow_id, current_mirrored_size)
         self.follow_ids[follower_id] = follow_id
         return follower_id
 

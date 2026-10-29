@@ -154,7 +154,15 @@ export default function Predict({
     setLoadingMore(true);
     try {
       const rows = await getPredictMarkets(status, markets?.length ?? 0);
-      setMarkets((prev) => [...(prev ?? []), ...rows]);
+      setMarkets((prev) => {
+        const seen = new Set((prev ?? []).map((m) => m.id));
+        // Offset-пагинация по живому списку: рынок, закрытый между двумя
+        // запросами, сдвигает окно, и следующая страница приходит с id, которые
+        // уже показаны. Дубликат в grid — это два одинаковых вопроса с разными
+        // кнопками, а не «ещё немного данных».
+        const fresh = rows.filter((m) => !seen.has(m.id));
+        return [...(prev ?? []), ...fresh];
+      });
       setMoreMarkets(rows.length === PREDICT_PAGE_SIZE);
     } catch (e) {
       setMarketsError(errorText(e, 160));

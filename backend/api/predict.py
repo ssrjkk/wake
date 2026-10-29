@@ -14,6 +14,7 @@ create->trade->resolve->claim, test_predict_resolver.py — закрытие pri
 Перенесено из app.py при рефакторинге — см. api/copy_trading.py.
 """
 
+import hashlib
 import math
 import time as _time
 import uuid
@@ -420,12 +421,21 @@ async def resolve_price(
 
 
 def _curator_identity() -> str:
-    """Кто именно дёрнул ручной триггер. Имени у машинного токена нет, поэтому в
-    аудит идёт его префикс — этого хватает, чтобы отличить ручную резолюцию от
-    автоматической и не светить секрет в таблице."""
+    """Кто именно дёрнул ручной триггер — отпечаток токена, а не его часть.
+
+    Имени у машинного токена нет, поэтому в аудит шёл `CURATOR_TOKEN[:8]` и
+    названо этого достаточным. Первые восемь символов секрета — это материал
+    секрета: строка оседает в audit_log.actor и predict_markets.resolved_by,
+    то есть в таблицах, которые читаются не только этим роутом (бот, /ops,
+    любой дамп базы), и каждый такой читатель получает кусок ключа куратора.
+    Хеш даёт ровно то же различие «ручную vs автоматически» и ровно ноль
+    секрета."""
     from config import CURATOR_TOKEN
 
-    return (CURATOR_TOKEN or "")[:8] or "curator"
+    if not CURATOR_TOKEN:
+        return "curator"
+    digest = hashlib.sha256(CURATOR_TOKEN.encode()).hexdigest()
+    return f"token-{digest[:12]}"
 
 
 @router.post("/predict/markets/{market_id}/claim")

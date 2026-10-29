@@ -6,11 +6,20 @@ import {
   TABS,
   auditDesign,
   auditTabFocus,
+  auditTypeScale,
   openWithData,
   reportOffenders,
   visitTab,
   type Offender,
 } from "./design-audit";
+
+/** Шкала, умноженная на два. Совпадает с :root в index.css позиция в позицию:
+ *  токен, добавленный в тему и не названный здесь, не удвоится, и проверка
+ *  «крупного текста» поймает это как «размер не вырос», а не промолчит. */
+const DOUBLED_SCALE =
+  ":root{--fs-label:21px;--fs-data:24px;--fs-ui:26px;--fs-body:28px;--fs-title:30px;" +
+  "--fs-heading:32px;--fs-metric:36px;--fs-figure:48px;--fs-wordmark:34px;" +
+  "--fs-price:clamp(52px,5.2vw,72px)}";
 
 test.describe("дизайн-инварианты на живом объёме данных", () => {
   test.beforeEach(async ({ page }) => {
@@ -26,9 +35,22 @@ test.describe("дизайн-инварианты на живом объёме д
       reportOffenders(`${tab} clipping`, audit.clipping);
       reportOffenders(`${tab} contrast`, audit.contrast);
       reportOffenders(`${tab} placeholder`, audit.placeholders);
+      reportOffenders(`${tab} name`, audit.names);
+      reportOffenders(`${tab} keyboard`, audit.keyboard);
+      const offScale = await auditTypeScale(page);
+      reportOffenders(`${tab} type scale`, offScale);
       expect(audit.clipping, "текст не должен исчезать без скролла и без многоточия").toEqual([]);
       expect(audit.contrast, "4.5:1 для обычного текста, 3:1 для крупного").toEqual([]);
       expect(audit.placeholders, "подсказка поля читается и отличается от введённого значения").toEqual([]);
+      // Имя у поля обязано быть: placeholder исчезает при вводе, и диктор
+      // читает «редактирование» вместо «Капитал на обе ноги, USD».
+      expect(audit.names, "у каждого input/select есть доступное имя").toEqual([]);
+      // data-action даёт строке курсор и onClick, но <tr> с обработчиком не
+      // фокусируется: без контрола внутри действие существует только для мыши.
+      expect(audit.keyboard, "у каждой кликабельной строки есть контрол для Tab").toEqual([]);
+      // Размер каждой надписи сверяется со шкалой прямо на базовом прогоне:
+      // литерал «13px» в панели — это ещё и отказ масштабироваться.
+      expect(offScale, `${tab}: текст обязан идти по токенам шкалы`).toEqual([]);
       expect(audit.documentOverflow, "документ не переполняется по горизонтали").toBeLessThanOrEqual(0);
       expect(audit.documentPan, "страница не ездит боком").toBe(0);
     });
@@ -108,19 +130,29 @@ test.describe("дизайн-инварианты на живом объёме д
   // и именно её обязаны выдерживать раскладка и nowrap-элементы.
   test("крупный текст: 320 px переживает удвоение шкалы", async ({ page }) => {
     await page.setViewportSize({ width: 320, height: 568 });
-    await page.addStyleTag({
-      content: ":root{--fs-label:21px;--fs-data:24px;--fs-ui:26px;--fs-title:30px;--fs-price:clamp(52px,5.2vw,72px)}",
-    });
+    await page.addStyleTag({ content: DOUBLED_SCALE });
+    // Шкала обязана быть подменена реально, а не «по добавленному тегу»:
+    // прошлая версия теста печатала addInitScript после goto, ничего не
+    // применяла и проверяла раскладку при 100 %, оставаясь зелёной.
     await expect(page.locator("html")).toHaveCSS("--fs-ui", "26px");
     const offenders: Offender[] = [];
+    const offScale: Offender[] = [];
     for (const tab of TABS) {
       await visitTab(page, tab);
       const audit = await auditDesign(page);
       offenders.push(...audit.clipping.map((o) => ({ ...o, where: `${tab} → ${o.where}` })));
+      offScale.push(
+        ...(await auditTypeScale(page)).map((o) => ({ ...o, where: `${tab} → ${o.where}` }))
+      );
       expect.soft(audit.documentPan, `${tab}: на 320 px при крупном тексте страница не ездит боком`).toBe(0);
     }
     reportOffenders("clipping@200%", offenders, 20);
     expect(offenders, "при удвоенной шкале текст не за правым краем и не обрезан").toEqual([]);
+    // Второй контур — чувствительность самой проверки: если панель печатает
+    // размер числом, удвоение `--fs-*` до неё не доходит, и на этом прогоне
+    // её текст стоит на значении базовой шкалы.
+    reportOffenders("type scale@200%", offScale, 20);
+    expect(offScale, "каждый текст панели обязан идти по шкале темы").toEqual([]);
   });
 });
 
@@ -160,6 +192,14 @@ test.describe("открытые оверлеи на узком экране и �
       open: async (page) => page.getByRole("button", { name: /^Купить YES/ }).first().click(),
     },
     {
+      name: "отписка от лидера",
+      tab: "Портфель",
+      // Раньше здесь был window.confirm — в мини-аппе он не показывается, и
+      // кнопка «удалить подписку» не делала ничего.
+      open: async (page) =>
+        page.getByRole("button", { name: /^Удалить подписку на / }).first().click(),
+    },
+    {
       name: "добавление позиции",
       tab: "Risk",
       open: async (page) => page.getByRole("button", { name: "+ Добавить", exact: true }).click(),
@@ -170,7 +210,7 @@ test.describe("открытые оверлеи на узком экране и �
     await page.setViewportSize({ width: 320, height: 568 });
     await openWithData(page, { ...FULL_FIXTURE, stress: true });
     await page.addStyleTag({
-      content: ":root{--fs-label:21px;--fs-data:24px;--fs-ui:26px;--fs-title:30px;--fs-price:clamp(52px,5.2vw,72px)}",
+      content: DOUBLED_SCALE,
     });
   });
 
@@ -190,6 +230,7 @@ test.describe("открытые оверлеи на узком экране и �
       expect(audit.clipping).toEqual([]);
       expect(audit.contrast).toEqual([]);
       expect(audit.touch).toEqual([]);
+      expect(audit.names, "поле внутри диалога обязано иметь имя").toEqual([]);
       expect(audit.documentPan).toBe(0);
     });
   }

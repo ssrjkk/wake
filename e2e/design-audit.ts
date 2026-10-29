@@ -24,6 +24,10 @@ export type DesignAudit = {
   /** Подсказки полей ввода: их нет в дереве, и обычный обход текста их не видит. */
   placeholders: Offender[];
   touch: Offender[];
+  /** Поле без имени: с клавиатуры и с диктором оно неотличимо от соседнего. */
+  names: Offender[];
+  /** Кликабельная строка/карточка, до которой нельзя дотянуться Tab. */
+  keyboard: Offender[];
   /** Насколько область прокрутки корня шире вьюпорта (px). */
   documentOverflow: number;
   /** До какого scrollX реально доезжает страница после попытки прокрутить (px). */
@@ -247,11 +251,60 @@ function auditInBrowser(opts: { minTarget: number; root: string | null }): Desig
     }
   }
 
+  // Имя контрола. Плейсхолдер именем не считается: он исчезает, как только
+  // человек начал вводить, и диктор читает «редактирование» вместо «Капитал на
+  // обе ноги, USD». Проверка живёт здесь, а не в «ну пусть подписано», потому
+  // что панель с двумя десятками полей неизбежно теряет одно.
+  const names: Offender[] = [];
+  for (const el of [...scope.querySelectorAll("input, select, textarea")] as (
+    | HTMLInputElement
+    | HTMLSelectElement
+    | HTMLTextAreaElement
+  )[]) {
+    if (!onScreen(el)) continue;
+    // Чекбокс и радиометка живут внутри <label> — это валидное имя.
+    if (el.closest("label")) continue;
+    const id = el.getAttribute("id");
+    const labelled =
+      (id && scope.querySelector(`label[for="${CSS.escape(id)}"]`) != null) ||
+      el.getAttribute("aria-label") != null ||
+      el.getAttribute("aria-labelledby") != null ||
+      (el.getAttribute("title") ?? "") !== "";
+    if (!labelled) {
+      names.push({
+        what: "у поля нет доступного имени",
+        where: `${el.tagName.toLowerCase()}.${((el.getAttribute("class") ?? "") as string).split(" ")[0]}${id ? `#${id}` : ""}`,
+        value: `placeholder=${el.getAttribute("placeholder") ?? "нет"}`,
+      });
+    }
+  }
+
+  // Кликабельность без мыши. data-action даёт строке курсор и обработчик
+  // onClick, но <tr> и <div> с обработчиком не являются фокусируемыми: с
+  // клавиатуры и диктором такое действие не существует вообще. Требование
+  // измеримое: внутри строки-действия обязан быть настоящий контрол.
+  const keyboard: Offender[] = [];
+  for (const el of [...scope.querySelectorAll("[data-action]")]) {
+    if (!onScreen(el)) continue;
+    const focusable = el.querySelector(
+      "button:not([disabled]), a[href], input:not([type=hidden]), select, [tabindex]:not([tabindex='-1'])"
+    );
+    if (!focusable) {
+      keyboard.push({
+        what: "действие строки недоступно с клавиатуры",
+        where: describe(el),
+        value: "внутри нет ни кнопки, ни ссылки, ни поля",
+      });
+    }
+  }
+
   return {
     clipping,
     contrast,
     placeholders,
     touch,
+    names,
+    keyboard,
     documentOverflow:
       scope === document
         ? document.documentElement.scrollWidth - document.documentElement.clientWidth
@@ -276,6 +329,72 @@ export async function auditDesign(page: Page, minTarget = 24, root?: string): Pr
   } finally {
     await tag.evaluate((el) => el.remove());
   }
+}
+
+/** Шкала темы: имена токенов размера из :root (index.css).
+ *
+ *  Список зеркалит тему нарочно: ?raw над CSS в этом проекте отдаёт пустое, а
+ *  новый токен, не названный здесь, проявит себя как «размер вне шкалы» на
+ *  любом его использовании — то есть расхождение видно, а не молчит. */
+export const FS_TOKENS = [
+  "--fs-label",
+  "--fs-data",
+  "--fs-ui",
+  "--fs-body",
+  "--fs-title",
+  "--fs-heading",
+  "--fs-metric",
+  "--fs-figure",
+  "--fs-wordmark",
+  "--fs-price",
+];
+
+/** Каждый текстовый узел обязан печататься размером со шкалы темы.
+ *
+ *  Смысл: проверка «крупного текста» удваивает значения `--fs-*`, а элемент с
+ *  `fontSize: "13px"` внутри панели удвоение не видит вообще. Пока это не
+ *  измерялось, тест оставался зелёным при интерфейсе, который не масштабируется
+ *  вовсе. Зеркалим не «до и после» (живая лента меняет число узлов между
+ *  проходами), а «размер ∈ шкала»: допустимые значения измеряются теми же
+ *  токенами в том же вьюпорте, включая fluid clamp-цены. */
+export async function auditTypeScale(
+  page: Page,
+  tokens: string[] = FS_TOKENS,
+  root?: string
+): Promise<Offender[]> {
+  return page.evaluate(
+    ({ names, sel }) => {
+      const scope: ParentNode = (sel ? document.querySelector(sel) : null) ?? document;
+      const probe = document.createElement("span");
+      probe.style.cssText = "position:absolute;left:-9999px;top:0;";
+      document.body.appendChild(probe);
+      const allowed: number[] = [];
+      for (const name of names) {
+        probe.style.fontSize = `var(${name})`;
+        const px = parseFloat(getComputedStyle(probe).fontSize);
+        if (Number.isFinite(px)) allowed.push(px);
+      }
+      probe.remove();
+
+      const out: Offender[] = [];
+      for (const el of [...scope.querySelectorAll("*")]) {
+        if (el.children.length !== 0) continue;
+        const text = (el.textContent ?? "").trim();
+        if (!text) continue;
+        const box = el.getBoundingClientRect();
+        if (box.width <= 0 || box.height <= 0) continue;
+        const px = Math.round(parseFloat(getComputedStyle(el).fontSize) * 100) / 100;
+        if (allowed.some((a) => Math.abs(a - px) < 0.02)) continue;
+        out.push({
+          what: `размер ${px}px вне шкалы (допустимо: ${allowed.sort((a, b) => a - b).join(", ")})`,
+          where: `${el.tagName.toLowerCase()}.${((el.getAttribute("class") ?? "") as string).split(" ")[0]} «${text.slice(0, 28)}»`,
+          value: "панель печатает размер числом — возьмите var(--fs-*)",
+        });
+      }
+      return out;
+    },
+    { names: tokens, sel: root ?? null }
+  );
 }
 
 /** Кольцо фокуса на реальной Tab-навигации. */

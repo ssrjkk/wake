@@ -7,7 +7,7 @@
 // сообщение юзер видит в панели вместо внятной причины.
 import { BACKEND_URL } from "./config";
 import { authHeader, clearSession } from "./session";
-import { BACKEND_TIMEOUT_MS, isTimeoutError, timeoutText } from "./net";
+import { BACKEND_TIMEOUT_MS, isAbortError, isTimeoutError, timeoutText } from "./net";
 
 // Событие уходит, когда бэкенд отверг токен: приложение чистит состояние входа,
 // а не ждёт, пока пользователь сам сообразит, почему панели пустые.
@@ -46,6 +46,9 @@ export async function backendJson<T>(path: string, init?: RequestInit): Promise<
     // более короткий: он опрашивает сервис, который может быть не поднят.
     res = await fetch(`${BACKEND_URL}${path}`, { ...init, headers, signal: init?.signal ?? AbortSignal.timeout(BACKEND_TIMEOUT_MS) });
   } catch (e) {
+    // Отмена по сигналу вызывающего — не ошибка сервиса: пусть тот, кто
+    // отменил, разбирается с результатом сам.
+    if (isAbortError(e)) throw e;
     if (isTimeoutError(e)) {
       // DOMException с "signal timed out" в тосте не читается как объяснение.
       throw new Error(

@@ -68,5 +68,53 @@ class TestCachedKey(unittest.TestCase):
         )
 
 
+class TestCacheIsBounded(unittest.TestCase):
+    """Кэш не должен расти на каждый встреченный ключ.
+
+    Пространство ключей здесь открытое: market_id, индекс аккаунта Lighter, сеть.
+    Истёкшую запись выкидывало только чтение ЭТОЙ ЖЕ строки, поэтому перебор
+    индексов (бот, лидеры, будущий кэш по аккаунтам) добавлял по строке и никогда
+    их не убирал — медленный рост в процессе, который держит запросы к базе."""
+
+    def setUp(self):
+        cache.clear()
+        self.addCleanup(cache.clear)
+
+    def test_expired_entries_leave_on_write(self):
+        cache.set("a", 1, ttl=0)
+        cache.set("b", 2, ttl=60)
+        self.assertIsNone(cache.get("a"), "ttl=0 — запись протухла сразу")
+        # Протухшая «a» обязана исчезнуть из словаря при следующей записи, а не
+        # висеть в нём до того момента, пока её снова спросят.
+        cache.set("c", 3, ttl=60)
+        self.assertNotIn("a", cache._cache)
+
+    def test_size_never_passes_the_cap_and_the_newest_survive(self):
+        for i in range(cache.MAX_ENTRIES + 500):
+            cache.set(f"k{i}", i, ttl=60)
+        self.assertLessEqual(
+            len(cache._cache),
+            cache.MAX_ENTRIES,
+            "словарь растёт на каждый встреченный ключ — протухшее выкидывало "
+            "только чтение этой же строки",
+        )
+        self.assertEqual(
+            cache.get(f"k{cache.MAX_ENTRIES + 499}"),
+            cache.MAX_ENTRIES + 499,
+            "вытесняются старые, а не последние: иначе кэш промахивается по "
+            "горячим ключам",
+        )
+
+    def test_eviction_keeps_fresh_data_not_the_whole_oldest_half(self):
+        """Вытесняются старые, а не половина списка наугад: живые записи должны
+        остаться, иначе кэш начинает промахиваться по горячим ключам."""
+        for i in range(cache.MAX_ENTRIES):
+            cache.set(f"fresh{i}", i, ttl=60)
+        self.assertEqual(len(cache._cache), cache.MAX_ENTRIES)
+        cache.set("one-more", 1, ttl=60)
+        self.assertEqual(len(cache._cache), cache.MAX_ENTRIES)
+        self.assertEqual(cache.get("fresh1"), 1, "самые старые ушли, следующие живы")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

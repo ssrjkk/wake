@@ -86,7 +86,7 @@ alembic check
 
 ## Tests
 
-**Backend** — one command, 613 tests (612 passed, 1 skipped), against a real PostgreSQL:
+**Backend** — one command, 635 tests (634 passed, 1 skipped), against a real PostgreSQL:
 
 ```bash
 cd backend
@@ -108,10 +108,10 @@ Four rules the suite enforces on itself (the first three come from `backend/test
 npm ci
 npm run lint                      # ESLint over src/, e2e/ and the config files
 npx tsc --noEmit
-npm run test:run                  # vitest: 229 tests in 17 files
+npm run test:run                  # vitest: 264 tests in 19 files
 node scripts/brand-assets.mjs       # re-render public/og.png and apple-touch-icon.png
 npm run build
-PW_PORT=5178 npx playwright test  # first run needs `npx playwright install chromium`
+PW_PORT=5178 npx playwright test  # 70 tests; first run needs `npx playwright install chromium`
 ```
 
 `src/components/theme.gate.test.ts` keeps the panel honest about its own style:
@@ -127,6 +127,22 @@ tints seriously as backgrounds: a text token is measured against its own
 translucent underlay composited onto every panel, which is where `#ef4444` on
 `--down-faint` sat at 4.44:1 while every "text on panel" check stayed green.
 These are numbers from the palette, not opinions about a screenshot.
+
+The same file also measures typography and mouse behaviour: no `fontSize` or
+`fontFamily` literal in a panel (the scale is `--fs-*` and `--font-mono`), no
+`onMouseEnter`/`onMouseLeave` handler (hover is a `:hover` rule), no
+`window.confirm`. Each of those three had a concrete cost: the "200% text" check
+doubles the tokens, so 219 inline pixel sizes made that gate green while half the
+interface did not scale; a JS hover listener is a handler per row that does not
+answer to Tab; and `window.confirm` is not shown in the Telegram Mini App, so the
+unfollow button did nothing there.
+
+`e2e/design-audit.ts` adds three browser measurements on top: every text node's
+computed size must equal a live value of the theme scale (`auditTypeScale`), every
+`input`/`select`/`textarea` must have an accessible name (a placeholder is not one
+— it disappears on the first character), and every `[data-action]` row must contain
+a focusable control, because a `<tr>` with a click handler is invisible to the
+keyboard. All three failed on their first run, which is the point.
 
 `e2e/design-gate.spec.ts` measures the same promises in a browser, on rendered
 DOM: text that disappears without a scroll container and without an ellipsis,
@@ -373,7 +389,7 @@ alembic check
 
 ## Тесты
 
-**Бэкенд** — одна команда, 613 тестов, против настоящего PostgreSQL:
+**Бэкенд** — одна команда, 635 тестов (634 прошли, 1 пропущен), против настоящего PostgreSQL:
 
 ```bash
 cd backend
@@ -395,10 +411,10 @@ python -m pytest . -q
 npm ci
 npm run lint                      # ESLint по src/, e2e/ и конфигам
 npx tsc --noEmit
-npm run test:run                  # vitest: 229 тестов в 17 файлах
+npm run test:run                  # vitest: 264 теста в 19 файлах
 node scripts/brand-assets.mjs       # перерендерить public/og.png и apple-touch-icon.png
 npm run build
-PW_PORT=5178 npx playwright test  # первый прогон требует `npx playwright install chromium`
+PW_PORT=5178 npx playwright test  # 70 тестов; первый прогон требует `npx playwright install chromium`
 ```
 
 `src/components/theme.gate.test.ts` следит за стилем самой панели: ни градиентов,
@@ -413,6 +429,23 @@ PW_PORT=5178 npx playwright test  # первый прогон требует `np
 против его же полупрозрачного слоя, смешанного с каждой поверхностью панели, —
 именно там `#ef4444` на `--down-faint` давал 4.44:1, пока все проверки «текст на
 панели» оставались зелёными.
+
+Тот же файл следит за типографикой и за поведением мыши: ни одного `fontSize` или
+`fontFamily` числом в панели (шкала — `--fs-*` и `--font-mono`), ни одного
+`onMouseEnter`/`onMouseLeave` (наведение рисуется правилом `:hover`), ни одного
+`window.confirm`. У каждого запрета есть конкретная цена: проверка «крупного
+текста» удваивает токены, поэтому 219 литералов в пикселях держали её зелёной
+там, где половина интерфейса на удвоение не реагировала; обработчик наведения —
+слушатель на каждую строку, который не отвечает на Tab; а `window.confirm` в
+Telegram Mini App не показывается, и кнопка отписки там молчала.
+
+`e2e/design-audit.ts` добавляет три измерения прямо в браузере: размер каждой
+надписи обязан совпасть с живым значением шкалы темы (`auditTypeScale`), у каждого
+`input`/`select`/`textarea` обязано быть доступное имя (placeholder именем не
+считается — он исчезает на первом символе), и внутри каждой `[data-action]`-строки
+обязан найтись фокусируемый контрол, потому что `<tr>` с обработчиком для
+клавиатуры невидим. Все три краснели на первом же прогоне — именно за этим они и
+написаны.
 
 `e2e/design-gate.spec.ts` меряет те же обещания в браузере на живом DOM: текст,
 который исчезает без контейнера со скроллом и без многоточия; контраст по

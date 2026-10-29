@@ -9,10 +9,39 @@ The backend is one Docker image (`Dockerfile` at the repo root) that needs a Pos
 | Backend (Dockerfile) | API, `/auth/*`, copy trading, Predict | the domain the frontend sends to `VITE_BACKEND_URL` |
 | PostgreSQL | the only store: followers/leaders/follows, Predict markets, subscriptions, agent history, audit | a connection string for `WAKE_DATABASE_URL` |
 | Redis | token-bucket rate limiting and single-use wallet challenges | a connection string for `WAKE_REDIS_URL` |
-| Signing service (optional) | signs Lighter orders | a second service from the same image, command `uvicorn signing_service:app --host 0.0.0.0 --port $PORT` |
+| Signing service (**do not publish**) | signs Lighter orders for the solo terminal | `uvicorn signing_service:app --host 127.0.0.1 --port 8787` on the machine that runs the browser, or a tunnel to it — see §1.1 |
 | Telegram bot (optional) | answers `/price`, `/markets`, `/funding`, `/predict` and opens the Mini App | a second service from the same image, command `python telegram_bot.py`; needs `TELEGRAM_BOT_TOKEN`, `WAKE_MINIAPP_URL` (https) and `WAKE_BACKEND_URL` (the API service's own domain — `localhost` in its container is not the API) |
 
 Railway hands out the connection strings when you attach a service. A plain `postgresql://…` without a driver is fine: `backend/config.py` appends `+asyncpg` while validating, and alembic uses the same value.
+
+### 1.1 Why the signing service is not a Railway service
+
+`/place-order` has no authentication, and it cannot have any: a secret shipped in a
+public browser bundle is not a secret. So the only boundary that endpoint has is the
+address it is published on. `signing_service.py` enforces that instead of documenting
+it: every request is checked against its `Host` header, and anything outside
+`WAKE_SIGNING_ALLOWED_HOSTS` (default `localhost,127.0.0.1,::1,signing`) gets
+`403 SIGNING_HOST_NOT_ALLOWED` before the key is touched.
+
+Publishing it as a second Railway service hands out a `*.up.railway.app` domain, which
+is exactly the case the gate refuses — and before the gate existed, following that
+instruction produced a public endpoint that moved money on whoever's key was
+configured, reachable by `curl` from anywhere (CORS does not help here: it decides
+whether a foreign *page* may read the response, not whether the request arrives).
+
+To use the solo terminal against a backend hosted on Railway, run the signer locally
+and point the frontend at it:
+
+```bash
+# on your own machine
+cd backend && uvicorn signing_service:app --port 8787
+# the browser then reaches a loopback service
+VITE_SIGNING_SERVICE_URL=http://localhost:8787 npm run dev
+```
+
+If you genuinely need it on another host, list that hostname explicitly in
+`WAKE_SIGNING_ALLOWED_HOSTS` and treat the network in front of it as part of your
+security boundary: the endpoint moves real orders the moment `WAKE_DRY_RUN=false`.
 
 ## 2. Variables
 
@@ -42,8 +71,10 @@ Defaults worth knowing:
 ```
 WAKE_LIGHTER_NETWORK = mainnet    one name decides the REST host, the WS host and the market indexes
 WAKE_DRY_RUN = true               false means live orders
-WAKE_SESSION_TTL_DAYS = 30
+WAKE_SESSION_TTL_DAYS = 7         no revocation list exists, so the token's own lifetime is the only expiry there is
 WAKE_RATE_LIMIT_CAPACITY / REFILL = 40 / 20
+WAKE_SIGNING_ALLOWED_HOSTS = localhost,127.0.0.1,::1,signing   the only Host values the signing service answers (see §1.1)
+WAKE_ENABLE_DOCS = false          Swagger and /openapi.json exist only when this is true — CSP 'default-src self' blocks the UI anyway
 TELEGRAM_BOT_TOKEN                needed by the bot process and by Telegram login verification (503 without it)
 WAKE_MINIAPP_URL = http://localhost:5173/   the address the bot's Open Wake button opens; Telegram accepts https only, so on http the bot drops the button and logs why
 WAKE_BACKEND_URL = http://localhost:8000    where the bot fetches Predict markets from; on Railway this must be the API service's own https domain

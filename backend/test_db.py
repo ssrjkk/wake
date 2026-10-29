@@ -6,6 +6,7 @@
 в этом слое.
 """
 
+import asyncio
 import unittest
 import uuid
 
@@ -207,9 +208,49 @@ class TestFollows(DbCase):
 
     def test_mirrored_size_is_persisted(self):
         follow_id = self.follow(self.add_follower(1), 1000)
-        _run(db.update_mirrored_size(follow_id, 0.05))
+        _run(db.add_mirrored_size(follow_id, 0.05))
         row = _run(db.owned_follow(follow_id, "f1"))
         self.assertAlmostEqual(row["current_mirrored_size"], 0.05)
+
+    def test_mirrored_size_accumulates_instead_of_overwriting(self):
+        """Дельта прибавляется в базе, а не заменяется значением из Питона.
+
+        Вызывающий код читал follow_row ДО исполнения ордера и писал обратно
+        «прочитанное + дельта»: два события лидера рядом давали два итога из
+        одного прочитанного числа, и второй стирал учёт первого. Это не
+        округление, которое можно пережить, — follows отвечает движьку, сколько
+        уже зеркальено, и расхождение остаётся навсегда."""
+        follow_id = self.follow(self.add_follower(1), 1000)
+        _run(db.add_mirrored_size(follow_id, 0.05))
+        _run(db.add_mirrored_size(follow_id, 0.02))
+        row = _run(db.owned_follow(follow_id, "f1"))
+        self.assertAlmostEqual(row["current_mirrored_size"], 0.07)
+
+    def test_mirrored_size_never_goes_negative(self):
+        follow_id = self.follow(self.add_follower(1), 1000)
+        _run(db.add_mirrored_size(follow_id, 0.05))
+        _run(db.add_mirrored_size(follow_id, -1.0))
+        row = _run(db.owned_follow(follow_id, "f1"))
+        self.assertAlmostEqual(row["current_mirrored_size"], 0.0)
+
+    def test_concurrent_increments_all_land(self):
+        """Несколько параллельных дельт обязаны дать сумму дельт, а не последнее
+        записанное число.
+
+        С `SET current_mirrored_size = <число из Питона>` теряется всё, что
+        пересеклось по времени; с `col + delta` внутри UPDATE — ничего, потому
+        что читает и складывает сама база под строкой. Количество меньше размера
+        пула соединений намеренно: запросы должны идти одновременно, а не
+        выстраиваться в очередь ожидания пула."""
+        follow_id = self.follow(self.add_follower(1), 1000)
+        deltas = [0.1] * 8
+
+        async def _all_at_once():
+            await asyncio.gather(*[db.add_mirrored_size(follow_id, d) for d in deltas])
+
+        _run(_all_at_once())
+        row = _run(db.owned_follow(follow_id, "f1"))
+        self.assertAlmostEqual(row["current_mirrored_size"], sum(deltas), places=6)
 
     def test_duplicate_follow_of_the_same_leader_is_rejected(self):
         f1 = self.add_follower(1)

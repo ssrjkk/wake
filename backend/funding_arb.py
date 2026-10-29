@@ -196,17 +196,28 @@ def venue_rate_rows(rows: list, symbol: str) -> list[dict]:
     ставки и кто платит.
     """
     wanted = base_asset(symbol)
-    matched = [
-        {
-            "venue": r.get("exchange"),
-            "symbol": r.get("symbol"),
-            "market_id": r.get("market_id"),
-            "signed_rate": float(r["rate"]),
-        }
-        for r in rows
-        if r.get("exchange") in VENUES
-        and base_asset(str(r.get("symbol", ""))) == wanted
-    ]
+    matched = []
+    for r in rows:
+        if r.get("exchange") not in VENUES:
+            continue
+        if base_asset(str(r.get("symbol", ""))) != wanted:
+            continue
+        # Ставка читается так же, как в funding_by_market: строка без "rate" или
+        # с мусором вместо числа — это пропущенная площадка, а не 500 на всём
+        # ответе. Остальные поля строки берутся через .get() по той же причине,
+        # и один `float(r["rate"])` без проверки был дырой во всём роуте.
+        try:
+            signed_rate = float(r["rate"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        matched.append(
+            {
+                "venue": r.get("exchange"),
+                "symbol": r.get("symbol"),
+                "market_id": r.get("market_id"),
+                "signed_rate": signed_rate,
+            }
+        )
     matched.sort(key=lambda m: m["signed_rate"], reverse=True)
     return matched
 
@@ -315,7 +326,8 @@ def pairable_carry_markets(books: list, quote: str = "USDC") -> list:
     рабочем API.
 
     Поля min_base_amount в ответе Lighter — строки ("0.0050"), отсюда явные
-    float()/int(). Неактивные книги исключаются: поставить ордер в них нельзя,
+    float()/int(), но внутри проверки: битая строка книги вычёркивает пару, а не
+    ответ целиком. Неактивные книги исключаются: поставить ордер в них нельзя,
     и показывать их как возможность — значит врать про ликвидность."""
     perps = {
         b["symbol"]: b
@@ -332,8 +344,12 @@ def pairable_carry_markets(books: list, quote: str = "USDC") -> list:
         perp = perps.get(base) if sep and quoted == quote else None
         if perp is None:
             continue
-        legs.append(
-            CarryLegs(
+        # Числа читаются с проверкой: поле в живой книге может отсутствовать или
+        # прийти не-числом, и тогда одна битая строка в ответе Lighter роняла бы
+        # весь /funding/carry-markets. Пропущенная пара — «не показали
+        # возможность», битый роут — «страница не работает».
+        try:
+            leg = CarryLegs(
                 symbol=base,
                 perp_market_id=int(perp["market_id"]),
                 spot_market_id=int(b["market_id"]),
@@ -342,5 +358,7 @@ def pairable_carry_markets(books: list, quote: str = "USDC") -> list:
                 perp_size_decimals=int(perp["supported_size_decimals"]),
                 spot_size_decimals=int(b["supported_size_decimals"]),
             )
-        )
+        except (KeyError, TypeError, ValueError):
+            continue
+        legs.append(leg)
     return sorted(legs, key=lambda leg: leg.symbol)

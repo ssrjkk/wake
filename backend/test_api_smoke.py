@@ -252,8 +252,11 @@ class TestApiSmoke(HttpCase):
         self.assertEqual(health["status"], "ok")
         self.assertEqual(health["network"], app.settings.wake_lighter_network)
         self.assertTrue(health["dry_run"])
-        self.assertEqual((await self.client.get("/docs")).status_code, 200)
-        self.assertEqual((await self.client.get("/openapi.json")).status_code, 200)
+        # /docs отсюда убран намеренно: он проверяется отдельным тестом ниже, и
+        # прежняя строка `assertEqual(status_code, 200)` доказывала лишь то, что
+        # маршрут существует. Под CSP этого же приложения swagger-ui не грузит ни
+        # свой CDN, ни инлайновый скрипт, то есть 200 здесь означал «пустая
+        # страница», а не «документация работает».
 
     async def test_rate_limiter_middleware_really_wraps_the_routes(self):
         """Ведро по IP стоит перед всеми роутами: на нулевом восполнении второй
@@ -709,6 +712,15 @@ class TestApiSmoke(HttpCase):
             str(row["resolved_by"]).startswith("curator:"),
             "ручная резолюция обязана быть подписана оператором, а не «auto»: иначе "
             "в базе ручной выбор цены неотличим от тика резолвера",
+        )
+        # Подпись обязана различать авторов и не содержать материала секрета:
+        # resolved_by и audit_log.actor читаются не только этим роутом, и префикс
+        # токена в них — это кусок ключа куратора в любом дампе базы.
+        self.assertNotIn(testsupport.CURATOR_TOKEN, str(row["resolved_by"]))
+        self.assertNotIn(
+            testsupport.CURATOR_TOKEN[:4],
+            str(row["resolved_by"]),
+            "даже укороченный префикс секрета в таблице — не опечатка, а утечка",
         )
         refused = await self.client.post(
             f"/predict/markets/{past_id}/resolve-price",
@@ -1861,6 +1873,18 @@ class TestHardening(HttpCase):
             r.headers["referrer-policy"], "strict-origin-when-cross-origin"
         )
         self.assertIn("default-src 'self'", r.headers["content-security-policy"])
+
+    async def test_docs_are_absent_unless_explicitly_enabled(self):
+        """Swagger выключен по умолчанию, и это не «ограничен», а «нет пути».
+
+        Причина конкретна: CSP этого же приложения — `default-src 'self'`, а
+        swagger-ui грузит скрипт с CDN и пишет инлайновый тег. Под таким
+        заголовком он отдаёт пустую страницу, поэтому докстринг, обещавший
+        «/docs откроет Swagger», врал. Заодно схема API не раздаётся тому, кто
+        пришёл её сканировать: включается локально, WAKE_ENABLE_DOCS=true."""
+        for path in ("/docs", "/redoc", "/openapi.json"):
+            r = await self.client.get(path)
+            self.assertEqual(r.status_code, 404, path)
 
     async def test_cors_echoes_allowed_origin_and_silences_foreign(self):
         r = await self.client.options(

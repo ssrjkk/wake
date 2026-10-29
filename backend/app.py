@@ -35,7 +35,9 @@ REST-слой Wake backend. Тонкий файл: создаёт FastAPI, по�
 
 Запуск:
     pip install -r requirements.txt
-    uvicorn app:app --reload --port 8000   # /docs откроет Swagger
+    uvicorn app:app --reload --port 8000
+    # Swagger — только с WAKE_ENABLE_DOCS=true: при default-src 'self' он
+    # физически не может загрузить ни свой CDN, ни инлайновый скрипт.
 """
 
 import logging
@@ -106,7 +108,17 @@ async def lifespan(app: FastAPI):
     logger.info("Database connections closed")
 
 
-app = FastAPI(title="Wake backend", lifespan=lifespan)
+# Swagger открывается только по явному флагу. Причина не в паранойе, а в
+# заголовке ниже: CSP `default-src 'self'` блокирует и инлайновый скрипт
+# swagger-ui, и его CDN, то есть /docs на живом процессе отдавал пустую
+# страницу, а докстринг обещал «откроет Swagger» (см. WAKE_ENABLE_DOCS).
+app = FastAPI(
+    title="Wake backend",
+    lifespan=lifespan,
+    docs_url="/docs" if settings.wake_enable_docs else None,
+    redoc_url="/redoc" if settings.wake_enable_docs else None,
+    openapi_url="/openapi.json" if settings.wake_enable_docs else None,
+)
 
 
 # Стек middleware. Starlette вставляет каждый следующий слой в начало списка,
@@ -161,6 +173,9 @@ def _bucket_key(request: Request) -> str:
 # health-чекером, /ready начнёт отвечать 429, оркестратор решит, что приложение
 # не готово, и перезапустит его — классический self-inflicted restart loop.
 # Preflight (OPTIONS) — то же: это не запрос данных, а технический шаг браузера.
+# Документация в списке остаётся на случай WAKE_ENABLE_DOCS=true: по умолчанию
+# этих путей нет вовсе (см. создание `app`), а локально крутить Swagger под
+# общим ведром — значит ловить 429 на справочной странице.
 _UNLIMITED_PATHS = ("/health", "/ready", "/docs", "/openapi.json", "/redoc")
 
 
@@ -248,6 +263,11 @@ async def security_headers_middleware(request: Request, call_next):
     response.headers["Permissions-Policy"] = (
         "camera=(), microphone=(), geolocation=(), payment=()"
     )
+    # `default-src 'self'`: ни инлайновых скриптов, ни чужих CDN. Именно этот
+    # заголовок делает Swagger нерабочим, поэтому он выключен по умолчанию
+    # (см. создание `app`): swagger-ui грузится с CDN и пишет инлайновый тег, а
+    # под `default-src 'self'` он отдаёт пустую страницу, а не «документацию с
+    # оговорками».
     response.headers["Content-Security-Policy"] = "default-src 'self'"
     return response
 

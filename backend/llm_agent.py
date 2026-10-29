@@ -1,16 +1,19 @@
 """
-[!]   НЕ тестировалось мной — реальный вызов LLM API требует сети, которой нет
-в этой песочнице (проверено многократно за этот разговор). Написано аккуратно,
-тем же стилем, что и протестированный код, но статус честно другой.
-
 Дизайн осознанно defensive: если вызов LLM падает, недоступен, или не настроен
 (нет API-ключа) — функция ПАДАЕТ НАЗАД на протестированный rule_based_decision(),
 а не оставляет агента без решения и не притворяется, что LLM ответил. Торговый
 агент без работающего fallback на реальных деньгах — плохая идея.
+
+Сам HTTP-вызов проверяется только в тех частях, которые видны без сети: откат на
+правило, границы чисел из ответа и выключатель (llm_agent._trip). Живой ответ
+api.anthropic.com здесь не воспроизводится.
 """
 
 import json
 import math
+import time
+import urllib.request
+from urllib.error import HTTPError as _HTTPError
 from agent_memory import AgentMemoryStore
 from agent_decision import AgentDecision, rule_based_decision
 from config import ANTHROPIC_API_KEY
@@ -44,10 +47,22 @@ def llm_decision(
             f"[fallback: ANTHROPIC_API_KEY не задан] {fallback.reasoning}",
         )
 
-    try:
-        import urllib.request
-        import urllib.error
+    # Выключатель. Без него каждый шаг агента платит полным ожиданием ответа:
+    # неверный ключ (401) не меняется сам собой, а запрос к api.anthropic.com
+    # стоит 15 с — при 60 шагах это 15 минут ожидания, в которых решение всё
+    # равно принимает правило. Пауза делает это видимым: шаг идёт по правилу
+    # сразу, а в reasoning записано, почему модели не спрашивали.
+    paused_for = _paused_remaining()
+    if paused_for > 0:
+        return AgentDecision(
+            fallback.action,
+            fallback.confidence,
+            fallback.size_usd,
+            f"[fallback: LLM на паузе ещё {int(paused_for)} с после отказа] "
+            f"{fallback.reasoning}",
+        )
 
+    try:
         summary = memory.summarize_for_reasoning(market_id)
         user_message = (
             f"Рынок {market_id}. Последние цены: {recent_prices}. "
@@ -102,12 +117,43 @@ def llm_decision(
     except Exception as e:
         # Любая ошибка — сеть, парсинг, неожиданный формат — падаем на протестированный
         # rule-based, не оставляем агента без решения и не роняем весь процесс.
+        _trip(e)
         return AgentDecision(
             fallback.action,
             fallback.confidence,
             fallback.size_usd,
             f"[fallback: LLM-вызов не удался: {e}] {fallback.reasoning}",
         )
+
+
+# ── Выключатель LLM ───────────────────────────────────────────────────────────
+# Две длительности, потому что две разные причины. Отказ авторизации (401/403)
+# или отсутствие модели (404) не проходят сами: крутить их каждую минуту —
+# значит платить 15 с на каждом шаге бесконечно. Всё остальное — таймаут,
+# обрыв, неожиданный формат — может пройти со следующего запроса, и надолго
+# заглушать рассуждение из-за одного обрыва нельзя.
+_PAUSE_PERMANENT_S = 900
+_PAUSE_TRANSIENT_S = 60
+_paused_until = 0.0
+
+
+def _paused_remaining() -> float:
+    return max(0.0, _paused_until - time.monotonic())
+
+
+def _trip(exc: BaseException) -> None:
+    """Поставить выключатель на столько, насколько правдоподобен повтор отказа."""
+    global _paused_until
+    rejected_key = isinstance(exc, _HTTPError) and exc.code in (401, 403, 404)
+    _paused_until = time.monotonic() + (
+        _PAUSE_PERMANENT_S if rejected_key else _PAUSE_TRANSIENT_S
+    )
+
+
+def reset_circuit() -> None:
+    """Погасить выключатель — для тестов и для оператора, который починил ключ."""
+    global _paused_until
+    _paused_until = 0.0
 
 
 def _bounded_float(value: object, default: float, low: float, high: float) -> float:

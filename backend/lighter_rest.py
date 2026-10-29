@@ -6,7 +6,9 @@ requests/httpx, чтобы это можно было гонять где уго
 число, эта функция — то, что его реально достаёт).
 
 Кэширование: orderBooks и funding rates кэшируются на 30-60 секунд, чтобы
-не нагружать API и ускорить ответы. В проде заменить на Redis.
+не нагружать API и ускорить ответы. Кэш — процессный (backend/cache.py), и это
+решение, а не временная мера: вынос ключей в Redis добавил бы сетевой запрос и
+сериализацию нескольких сотен строк на каждое попадание.
 """
 
 import json
@@ -489,6 +491,16 @@ def _num(row: dict, key: str, default: float = 0.0) -> float:
         return default
 
 
+def _int_or_none(row: dict, key: str) -> int | None:
+    """То же, что _num, для целых: None означает «этого рынка нет», а не «обзор
+    упал». market_id — ключ, по которому рынку потом заказывают свечи, и `int()`
+    без проверки на строке без поля ронял весь /markets/overview."""
+    try:
+        return int(row[key])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
 @cached("market_overview", ttl=60)
 def get_market_overview(
     symbols: tuple = MAJOR_PERPS, network: str = LIGHTER_NETWORK
@@ -514,7 +526,10 @@ def get_market_overview(
         book = by_base.get(base_asset(str(symbol)))
         if book is None:
             continue
-        known.append((symbol, int(book["market_id"])))
+        market_id = _int_or_none(book, "market_id")
+        if market_id is None:
+            continue
+        known.append((symbol, market_id))
 
     # 18 свечных запросов подряд — это 18 × сетевой RTT (на mainnet ~6с за
     # запрос, суммарно холодный ответ растягивался на ~2 минуты). Свечи разных
@@ -544,13 +559,17 @@ def get_market_overview(
                 logger.warning("рынок %s без статистики: %s", symbol, e)
 
     known_symbols = {symbol for symbol, _ in known}
+    # market_id берётся из уже разобранного known, а не перечитывается из книги
+    # вторым int(): разбор был один раз с проверкой, и второй не должен ни
+    # расходиться с первым, ни ронять строку, которая уже прошла отбор.
+    id_by_symbol = dict(known)
     rows, no_market, no_data = [], [], []
     for symbol in symbols:
         if symbol not in stats_by_symbol:
             (no_market if symbol not in known_symbols else no_data).append(symbol)
             continue
         book = by_base.get(base_asset(str(symbol)))
-        market_id = int(book["market_id"])
+        market_id = id_by_symbol[symbol]
         stats = stats_by_symbol[symbol]
         rows.append(
             {

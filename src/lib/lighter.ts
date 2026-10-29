@@ -490,11 +490,31 @@ export async function listHydratedLeaders(): Promise<HydratedLeaderRow[]> {
 }
 
 // Ордер подписывает и отправляет локальный backend/signing_service.py; адрес — из
-// VITE_SIGNING_SERVICE_URL. Если сервис не запущен, запрос падает явной ошибкой —
-// интерфейс не делает вид, что сделка прошла. Пока у сервиса включён сухой ход
-// (WAKE_DRY_RUN, значение по умолчанию), он возвращает план, dry_run: true и
+// VITE_SIGNING_SERVICE_URL. Если сервис не запущен, интерфейс отвечает явной
+// ошибкой — он не делает вид, что сделка прошла. Пока у сервиса включён сухой
+// ход (WAKE_DRY_RUN, значение по умолчанию), он возвращает план, dry_run: true и
 // tx_hash=null: в Lighter ничего не уходит.
 const TICK_EPSILON = 1e-9;
+
+/** Что отвечает GET /health сервиса подписи.
+ *
+ * network здесь не справка для человека: это то, с чем сверяется сеть книги
+ * рынков перед отправкой ордера. market_id и decimals браузер берёт из книги
+ * своей сети (переключатель в шапке), а подписывает сервис своей, и расхождение
+ * означает «ордер по testnet-идентификатору уходит в mainnet».
+ */
+export type SignerHealth = { status: string; network: LighterNetwork; dry_run: boolean };
+
+/** Сервис спрашивается по действию пользователя, не при загрузке страницы: он
+ *  живёт на машине самого человека, и запрос к нему с публичного адреса браузер
+ *  режет ещё и по Private Network Access. */
+export async function getSignerHealth(): Promise<SignerHealth> {
+  const res = await fetch(`${SIGNING_SERVICE_URL}/health`, {
+    signal: AbortSignal.timeout(3000),
+  });
+  if (!res.ok) throw new Error(`Сервис подписи ответил ${res.status}`);
+  return json<SignerHealth>(res);
+}
 
 /** Базовые единицы рынка: amount * 10**size_decimals, округление вниз.
  *
@@ -529,12 +549,41 @@ export function randomClientOrderIndex(): number {
   return Number(buf[0] % 0x7fffffff) || 1;
 }
 
+export type OrderReceipt = {
+  tx_hash: string | null;
+  dry_run: boolean;
+  /** Индекс, по которому ордер находится в Lighter. Отдаётся всегда, а не
+   *  только при.unknown: зависший POST не даёт клиенту ответа, и этот номер —
+   *  единственное, по чему человек узнает, исполнился ордер или нет. */
+  client_order_index: number;
+};
+
+/** Ордер по market_id и decimals ЧУЖОЙ сети — это не «не та цифра», это другой
+ *  инструмент и другой размер. Book рынка, min_quote_amount и supported_*_decimals
+ *  приходят из книги той сети, которую выбрал переключатель в шапке, а
+ *  подписывает сервис из своего WAKE_LIGHTER_NETWORK, поэтому сверка обязана
+ *  случиться здесь, в последней точке перед отправкой, а не в подписи под
+ *  кнопкой. */
+export class SignerNetworkMismatch extends Error {
+  constructor(
+    readonly bookNetwork: LighterNetwork,
+    readonly signerNetwork: LighterNetwork
+  ) {
+    super(
+      `Данные взяты из ${bookNetwork}, а сервис подписи работает в ${signerNetwork}. ` +
+        "Ордер не отправлен: market_id и decimals рынка относятся к другой сети."
+    );
+    this.name = "SignerNetworkMismatch";
+  }
+}
+
 export async function placeOrderViaSigningService(
   market: OrderBook,
   side: "long" | "short",
   usdSize: number,
-  price: number
-): Promise<{ tx_hash: string | null; dry_run: boolean }> {
+  price: number,
+  signer: SignerHealth
+): Promise<OrderReceipt> {
   const baseAmount = toBaseUnits(usdSize / price, market.supported_size_decimals);
   const priceInt = toPriceTicks(price, market.supported_price_decimals);
   const minQuote = Number(market.min_quote_amount);
@@ -552,27 +601,55 @@ export async function placeOrderViaSigningService(
       `Минимальный ордер по паре — ${minQuote} USDC, у тебя ${usdSize} USDC`
     );
   }
+  if (signer.network !== getNetwork()) {
+    throw new SignerNetworkMismatch(getNetwork(), signer.network);
+  }
 
+  const clientOrderIndex = randomClientOrderIndex();
   // Таймаута здесь намеренно нет. GET можно оборвать без последствий, а POST,
   // который уже ушёл в Lighter, оборванный по таймеру оставляет состояние
   // «неизвестно»: клиент решит, что не вышло, повторит с новым client_order_index
   // и получит второй ордер. Пока запрос в полёте, кнопка заблокирована и
-  // повторить его нельзя — это и есть защита от дубля.
+  // повторить его нельзя — это и есть защита от дубля, а индекс печатается в
+  // интерфейсе, чтобы «неизвестно» было чем разобрать.
   const res = await fetch(`${SIGNING_SERVICE_URL}/place-order`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       market_index: market.market_id,
-      client_order_index: randomClientOrderIndex(),
+      client_order_index: clientOrderIndex,
       base_amount: baseAmount,
       price: priceInt,
       is_ask: side === "short",
       reduce_only: false,
     }),
   });
-  if (!res.ok) {
-    const detail = await res.text().catch(() => res.statusText);
-    throw new Error(detail);
+  if (!res.ok) throw new Error(signerErrorMessage(await read(res), res.status));
+  const body = await json<{ tx_hash: string | null; dry_run: boolean }>(res);
+  return { ...body, client_order_index: clientOrderIndex };
+}
+
+/** Ответ сервиса подписи — тот же единый формат, что у бэкенда Wake:
+ *  { error: { code, message } }. Голый JSON в тосте человек читает как поломку
+ *  терминала, а не как отказ биржи. */
+async function read(res: Response): Promise<string> {
+  try {
+    return await res.text();
+  } catch {
+    return "";
   }
-  return json<{ tx_hash: string | null; dry_run: boolean }>(res);
+}
+
+function signerErrorMessage(body: string, status: number): string {
+  try {
+    const parsed = JSON.parse(body) as { error?: { code?: string; message?: string } };
+    if (parsed.error?.message) {
+      return parsed.error.code
+        ? `${parsed.error.message} (${parsed.error.code})`
+        : parsed.error.message;
+    }
+  } catch {
+    // тело не JSON (прокси, страница ошибки хостинга) — показываем его как есть
+  }
+  return body || `Сервис подписи ответил ${status}`;
 }

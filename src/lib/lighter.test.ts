@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { BACKEND_URL } from './config'
+import { BACKEND_URL, SIGNING_SERVICE_URL } from './config'
 import { jsonBody } from '../test/request'
-import { setNetwork, getNetwork, getOrderBooks, getCandles, getRecentTrades, getAccountByL1Address, getMarketOverview, listOwnFollows, createFollow, setFollowPaused, deleteFollow, getMirrorLog, registerLeader, getMyLeader, setLeaderActive, openInterestUsd, toBaseUnits, toPriceTicks, randomClientOrderIndex, type OrderBook } from './lighter'
+import { setNetwork, getNetwork, getOrderBooks, getCandles, getRecentTrades, getAccountByL1Address, getMarketOverview, listOwnFollows, createFollow, setFollowPaused, deleteFollow, getMirrorLog, registerLeader, getMyLeader, setLeaderActive, openInterestUsd, toBaseUnits, toPriceTicks, randomClientOrderIndex, placeOrderViaSigningService, getSignerHealth, SignerNetworkMismatch, type OrderBook, type SignerHealth } from './lighter'
 
 describe('открытый интерес в долларах', () => {
   // Живой /orderBooks (mainnet, 2026-10-24) отдаёт open_interest_usd СТРОКОЙ
@@ -382,5 +382,132 @@ describe('lighter', () => {
 
       await expect(listOwnFollows()).rejects.toThrow(/SESSION_EXPIRED/)
     })
+  })
+})
+
+describe('отправка ордера в сервис подписи', () => {
+  const btc = {
+    symbol: 'BTC',
+    market_id: 0,
+    market_type: 'perp',
+    status: 'active',
+    supported_price_decimals: 2,
+    supported_size_decimals: 5,
+    min_quote_amount: '10',
+  } as unknown as OrderBook
+
+  const signer = (over: Partial<SignerHealth> = {}): SignerHealth =>
+    ({ status: 'ok', network: 'testnet', dry_run: true, ...over })
+
+  beforeEach(() => {
+    vi.restoreAllMocks()
+    setNetwork('testnet')
+  })
+
+  it('не отправляет ордер, если сеть сервиса не равна сети книги', async () => {
+    // Book, decimals и min_quote_amount приходят из книги той сети, которую
+    // выбрал переключатель страницы, а подписывает сервис из своего env. Без
+    // сверки market_id 0 с testnet-децималами уходил бы боевым ордером в mainnet.
+    const fetchMock = vi.fn()
+    global.fetch = fetchMock
+
+    await expect(
+      placeOrderViaSigningService(btc, 'long', 1000, 60000, signer({ network: 'mainnet' }))
+    ).rejects.toBeInstanceOf(SignerNetworkMismatch)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('отправляет масштаб рынка и получает индекс ордера обратно', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ tx_hash: '0xabc', dry_run: false }),
+    })
+
+    const receipt = await placeOrderViaSigningService(btc, 'short', 1000, 60000, signer())
+    const [url, init] = (global.fetch as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      string,
+      RequestInit,
+    ]
+    expect(url).toBe(`${SIGNING_SERVICE_URL}/place-order`)
+    expect(jsonBody(init)).toMatchObject({
+      market_index: 0,
+      base_amount: toBaseUnits(1000 / 60000, 5),
+      price: toPriceTicks(60000, 2),
+      is_ask: true,
+      reduce_only: false,
+    })
+    expect(receipt.tx_hash).toBe('0xabc')
+    expect(receipt.dry_run).toBe(false)
+    expect(Number.isInteger(receipt.client_order_index)).toBe(true)
+  })
+
+  it('индекс уникален, а не берётся из часов', () => {
+    // Date.now() % 1e6 повторяется каждые ~16,7 минуты и совпадает у двух кликов
+    // в одну миллисекунду; сервис помнит отправленные индексы час и на совпадении
+    // отдал бы tx_hash прошлой сделки.
+    const seen = new Set<number>()
+    for (let i = 0; i < 2000; i++) seen.add(randomClientOrderIndex())
+    expect(seen.size).toBe(2000)
+    for (const value of seen) {
+      expect(value).toBeGreaterThan(0)
+      expect(value).toBeLessThanOrEqual(0x7fffffff)
+    }
+  })
+
+  it('читает причину отказа из единого формата ошибок', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 400,
+      text: () =>
+        Promise.resolve(
+          '{"error":{"code":"SIGNING_ERROR","message":"Lighter отклонил ордер: Minimal price"}}'
+        ),
+    })
+
+    await expect(
+      placeOrderViaSigningService(btc, 'long', 1000, 60000, signer())
+    ).rejects.toThrow(/Minimal price.*SIGNING_ERROR/)
+  })
+
+  it('не отправляет то, что отверг бы сам рынок', async () => {
+    const fetchMock = vi.fn()
+    global.fetch = fetchMock
+
+    await expect(placeOrderViaSigningService(btc, 'long', 5, 60000, signer())).rejects.toThrow(
+      /Минимальный ордер по паре/
+    )
+    await expect(placeOrderViaSigningService(btc, 'long', 0, 60000, signer())).rejects.toThrow(
+      /положительными/
+    )
+    // 1000 USDC по цене, после округления которой остаётся 0 базовых единиц.
+    await expect(
+      placeOrderViaSigningService(btc, 'long', 1000, 1e12, signer())
+    ).rejects.toThrow(/размер после округления/i)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('POST ордера идёт без таймаута, а health — с таймаутом', async () => {
+    // Оборванный по таймеру POST оставляет состояние «неизвестно» и провоцирует
+    // второй ордер с новым индексом. GET /health обязан обрываться: он ничего не
+    // двигает, а висящий чип «подписание» хуже красного.
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ tx_hash: null, dry_run: true }),
+    })
+    await placeOrderViaSigningService(btc, 'long', 1000, 60000, signer())
+    const [, postInit] = (global.fetch as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      string,
+      RequestInit,
+    ]
+    expect(postInit.signal).toBeUndefined()
+
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ status: 'ok', network: 'mainnet', dry_run: false }),
+    })
+    const health = await getSignerHealth()
+    expect(calledUrlWithTimeout(global.fetch as ReturnType<typeof vi.fn>)).toContain('/health')
+    expect(health.network).toBe('mainnet')
+    expect(health.dry_run).toBe(false)
   })
 })

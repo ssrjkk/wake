@@ -16,8 +16,18 @@ export const PUBLIC_TIMEOUT_MS = 10_000;
 export const BACKEND_TIMEOUT_MS = 15_000;
 
 export function isTimeoutError(e: unknown): boolean {
-  const name = e instanceof Error ? e.name : "";
-  return name === "TimeoutError" || name === "AbortError";
+  return errorName(e) === "TimeoutError";
+}
+
+/** Отменённый самим вызывающим запрос. Отдельно от таймаута нарочно: «нет
+ *  ответа за 15 с» и «ты же сам отменил» — разные вещи, а name у обеих
+ *  DOMException различается только этим. */
+export function isAbortError(e: unknown): boolean {
+  return errorName(e) === "AbortError";
+}
+
+function errorName(e: unknown): string {
+  return e instanceof Error || e instanceof DOMException ? e.name : "";
 }
 
 /** Человек читает «нет ответа за 10 с», а не техническое "signal timed out". */

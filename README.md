@@ -36,7 +36,7 @@ Captured from this build with live data (2026-10-25), not mockups. The backend-d
 | Panel | Where the data comes from | Works without the Wake backend |
 | --- | --- | --- |
 | Обзор (Overview) | Market ranking by real 24h quote volume (`/markets/overview`, 18 perp markets, cached 60 s) plus open Predict markets | no |
-| Терминал (Terminal) | Candles and recent trades from Lighter's public REST; the hourly tick tape under the quote is drawn from the same 48 candles the chart uses | reads yes; sending an order needs the signing service |
+| Терминал (Terminal) | Candles and recent trades from Lighter's public REST; the hourly tick tape under the quote is drawn from the same 48 candles the chart uses | reads yes; sending an order needs the signing service, and the order is refused if that service runs on a different network than the one the book was read from |
 | Discover | Leaders ranked by follower count and AUM, follow / pause / unfollow | no |
 | Портфель (Portfolio) | Your positions on Lighter looked up by L1 address (public REST); subscriptions and the copy-engine log from the backend | positions yes, copy state no |
 | Earn | Copy subscription state and trial activation | no |
@@ -82,7 +82,7 @@ alembic upgrade head      # schema comes from migrations, never from the app
 uvicorn app:app --reload --port 8000
 ```
 
-Swagger UI at `http://localhost:8000/docs`, machine-readable schema (38 paths) at `/openapi.json`; both list the bearer token and the curator header as authorisation. Run it from `backend/` — `config.py` reads `.env` relative to the working directory, so starting from the repo root silently runs with a different configuration.
+The API documentation is off by default: this app answers with `Content-Security-Policy: default-src 'self'`, and Swagger UI loads a CDN script plus an inline tag, so `/docs` would render an empty page. Set `WAKE_ENABLE_DOCS=true` to get `/docs`, `/redoc` and the machine-readable schema at `/openapi.json` (38 paths, bearer token and curator header marked). Run it from `backend/` — `config.py` reads `.env` relative to the working directory, so starting from the repo root silently runs with a different configuration.
 
 ### Copy trading without a seed script
 
@@ -192,7 +192,7 @@ Price markets close themselves at the deadline only while this process runs; oth
 | --- | --- | --- |
 | `VITE_LIGHTER_NETWORK` | `mainnet` | must match the backend's `WAKE_LIGHTER_NETWORK`, or the site and the bot show different market ids |
 | `VITE_BACKEND_URL` | Railway URL | baked into the bundle, not changeable at runtime; set `http://localhost:8000` in `.env` for local dev, and note that a production build refuses a loopback value |
-| `VITE_SIGNING_SERVICE_URL` | `http://localhost:8787` | |
+| `VITE_SIGNING_SERVICE_URL` | `http://localhost:8787` | the solo terminal's order path. The service answers only on hosts listed in `WAKE_SIGNING_ALLOWED_HOSTS`, and the terminal compares its reported network with the network of the book it read before sending |
 | `VITE_WALLETCONNECT_PROJECT_ID` | empty | empty means no QR connector; injected wallets still work |
 | `VITE_TELEGRAM_BOT_NAME` | empty | empty disables the Telegram login panel |
 | `VITE_SENTRY_DSN` | empty | leave empty until a real project exists |
@@ -216,6 +216,8 @@ Price markets close themselves at the deadline only while this process runs; oth
 | `TELEGRAM_BOT_TOKEN` | empty | bot process and Telegram login verification |
 | `WAKE_MASTER_KEY` | empty | encrypts the key store; keep it in a secrets manager, not on disk |
 | `WAKE_RATE_LIMIT_CAPACITY` / `WAKE_RATE_LIMIT_REFILL` | 40 / 20 | token bucket per signed-in user, per IP for anonymous traffic; a write costs 3 tokens |
+| `WAKE_SIGNING_ALLOWED_HOSTS` | `localhost,127.0.0.1,::1,signing` | the only `Host` values the signing service answers; anything else is `403` before the key is read |
+| `WAKE_ENABLE_DOCS` | `false` | `/docs`, `/redoc` and `/openapi.json` exist only when this is on — the app's CSP blocks Swagger UI's script anyway |
 | `ANTHROPIC_API_KEY` | empty | only the LLM decision path; without it the agent runs the rule engine |
 
 ## Testing
@@ -224,7 +226,7 @@ Price markets close themselves at the deadline only while this process runs; oth
 # backend — run from backend/; needs a scratch PostgreSQL database
 createdb wake_test
 export WAKE_TEST_DATABASE_URL=postgresql+asyncpg://wake:wake@localhost:5432/wake_test
-python -m unittest discover        # 613 tests, all through discovery
+python -m unittest discover        # 635 tests, all through discovery
 python -m pytest -q                # the same set under pytest (+ Allure in CI)
 
 # frontend
