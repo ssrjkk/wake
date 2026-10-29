@@ -43,6 +43,13 @@ def _nonce_for_log(nonce: str) -> str:
     return nonce if _LOG_NONCE_RE.fullmatch(nonce) else "<invalid>"
 
 
+def _detail_for_log(detail: str) -> str:
+    """detail собирается из разобранной Redis-записи (имена полей, имя типа),
+    поэтому в лог уходит одна строка фиксированной длины."""
+    one_line = detail.replace("\r\n", " ").replace("\r", " ").replace("\n", " ")
+    return one_line[:120]
+
+
 class WalletAuthError(Exception):
     """Отказ proof-of-ownership с кодом и статусом для единого формата ошибок:
     кривой адрес — 400, непрошедшая подпись — 401, недоступный Redis — 503."""
@@ -145,7 +152,9 @@ def _broken_record(nonce: str, detail: str) -> WalletAuthError:
     что он не трогал, и спрятать инцидент: в аудите он выглядел бы как неудачная
     попытка входа, а не как отказ сервиса."""
     logger.error(
-        "challenge %s: запись Redis повреждена (%s)", _nonce_for_log(nonce), detail
+        "challenge %s: запись Redis повреждена (%s)",
+        _nonce_for_log(nonce),
+        _detail_for_log(detail),
     )
     return WalletAuthError(
         "CHALLENGE_STORE_CORRUPTED",

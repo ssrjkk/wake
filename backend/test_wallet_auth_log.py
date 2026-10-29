@@ -28,3 +28,24 @@ def test_broken_record_keeps_a_valid_nonce(caplog):
 
     assert nonce in caplog.text
     assert "<invalid>" not in caplog.text
+
+
+def test_broken_record_flattens_a_forged_detail_line(caplog):
+    forged = "нет полей: a\nchallenge aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa: вход выполнен"
+
+    with caplog.at_level(logging.ERROR, logger="wake.wallet_auth"):
+        _broken_record("b" * 32, forged)
+
+    records = [r for r in caplog.records if r.name == "wake.wallet_auth"]
+    assert len(records) == 1, (
+        "из одного вызова должно получаться ровно одна запись лога"
+    )
+    assert "\n" not in records[0].getMessage()
+
+
+def test_broken_record_caps_a_long_detail(caplog):
+    with caplog.at_level(logging.ERROR, logger="wake.wallet_auth"):
+        _broken_record("c" * 32, "x" * 5000)
+
+    assert "x" * 121 not in caplog.text
+    assert "x" * 120 in caplog.text
