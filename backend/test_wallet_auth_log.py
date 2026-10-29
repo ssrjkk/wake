@@ -1,13 +1,15 @@
-"""В аудит входа кошельком попадает только валидированный nonce и метка из
-замкнутого словаря `_REASONS`: разбор Redis-записи даёт строки, производные от
-клиентских байтов (CodeQL py/log-injection)."""
+"""В аудит входа кошельком попадает только префикс образа nonce и метка из
+замкнутого словаря `_REASONS`: сырые данные клиентского запроса в лог не пишут
+(CodeQL py/log-injection, py/clear-text-logging-sensitive-data)."""
 
+import hashlib
 import logging
 
 import pytest
 from wallet_auth import WalletAuthError, _broken_record, _record_of
 
 NONCE = "a" * 32
+REF = hashlib.sha256(NONCE.encode()).hexdigest()[:12]
 
 
 def _logs(caplog):
@@ -30,7 +32,7 @@ def test_broken_record_keeps_a_valid_nonce(caplog):
     with caplog.at_level(logging.ERROR, logger="wake.wallet_auth"):
         _broken_record(NONCE, "нет полей")
 
-    assert _logs(caplog) == [f"challenge {NONCE}: запись Redis повреждена (нет полей)"]
+    assert _logs(caplog) == [f"challenge {REF}: запись Redis повреждена (нет полей)"]
 
 
 def test_broken_record_drops_a_reason_outside_the_vocabulary(caplog):
@@ -40,9 +42,8 @@ def test_broken_record_drops_a_reason_outside_the_vocabulary(caplog):
         _broken_record(NONCE, f"клиент прислал {secret}")
 
     assert secret not in caplog.text
-    assert _logs(caplog) == [
-        f"challenge {NONCE}: запись Redis повреждена (unclassified)"
-    ]
+    assert NONCE not in caplog.text
+    assert _logs(caplog) == [f"challenge {REF}: запись Redis повреждена (unclassified)"]
 
 
 @pytest.mark.parametrize(
@@ -60,7 +61,7 @@ def test_record_of_reports_only_a_known_reason(caplog, raw, reason):
             _record_of(raw, NONCE)
 
     assert raised.value.code == "CHALLENGE_STORE_CORRUPTED"
-    assert _logs(caplog) == [f"challenge {NONCE}: запись Redis повреждена ({reason})"]
+    assert _logs(caplog) == [f"challenge {REF}: запись Redis повреждена ({reason})"]
 
 
 def test_record_of_accepts_a_well_formed_record():

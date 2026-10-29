@@ -15,6 +15,7 @@ Challenge лежит в Redis (SET с TTL + GETDEL): одноразовость 
 веру».
 """
 
+import hashlib
 import json
 import logging
 import re
@@ -38,10 +39,12 @@ _KEY = "wake:wallet:"
 
 
 def _nonce_for_log(nonce: str) -> str:
-    """Nonce приходит из тела клиента, поэтому в лог попадает только ожидаемый hex.
-
-    Иначе перевод строки в nonce позволял подменить целую запись аудита."""
-    return nonce if _LOG_NONCE_RE.fullmatch(nonce) else "<invalid>"
+    """Nonce приходит из тела клиента и стоит ровно пять минут, поэтому в аудит
+    уходит только префикс его образа: строку лога это по-прежнему сопоставляет с
+    запросом, а сырой hex (и перевод строки внутри него) наружу не печатается."""
+    if not _LOG_NONCE_RE.fullmatch(nonce):
+        return "<invalid>"
+    return hashlib.sha256(nonce.encode()).hexdigest()[:12]
 
 
 class WalletAuthError(Exception):
