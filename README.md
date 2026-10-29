@@ -379,3 +379,7 @@ To use this with real funds: get an external security audit, replace the file ke
 ## License
 
 MIT — see [LICENSE](LICENSE).
+
+---
+
+**SSRJKK** — [GitHub](https://github.com/ssrjkk) · [Telegram](https://t.me/ssrjkk) · [Projects hub](https://ssrjkk.github.io/) · [Bot catalogue](https://t.me/ssrjkk_bot)
