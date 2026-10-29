@@ -32,7 +32,15 @@ logger = logging.getLogger("wake.wallet_auth")
 
 CHALLENGE_TTL_S = 300
 _NONCE_RE = re.compile(r"^nonce: ([0-9a-f]{32})$", re.MULTILINE)
+_LOG_NONCE_RE = re.compile(r"^[0-9a-f]{32}$")
 _KEY = "wake:wallet:"
+
+
+def _nonce_for_log(nonce: str) -> str:
+    """Nonce приходит из тела клиента, поэтому в лог попадает только ожидаемый hex.
+
+    Иначе перевод строки в nonce позволял подменить целую запись аудита."""
+    return nonce if _LOG_NONCE_RE.fullmatch(nonce) else "<invalid>"
 
 
 class WalletAuthError(Exception):
@@ -136,7 +144,9 @@ def _broken_record(nonce: str, detail: str) -> WalletAuthError:
     не вина клиента. Отвечать таким 400 значит отправлять человека переделывать то,
     что он не трогал, и спрятать инцидент: в аудите он выглядел бы как неудачная
     попытка входа, а не как отказ сервиса."""
-    logger.error("challenge %s: запись Redis повреждена (%s)", nonce, detail)
+    logger.error(
+        "challenge %s: запись Redis повреждена (%s)", _nonce_for_log(nonce), detail
+    )
     return WalletAuthError(
         "CHALLENGE_STORE_CORRUPTED",
         "Сервер не смог разобрать сохранённый challenge — вход кошельком временно недоступен",

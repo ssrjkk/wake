@@ -230,7 +230,7 @@ async def error_envelope_middleware(request: Request, call_next):
             content={
                 "error": {
                     "code": "VALIDATION_ERROR",
-                    "message": str(exc),
+                    "message": "Некорректные данные запроса",
                 }
             },
         )

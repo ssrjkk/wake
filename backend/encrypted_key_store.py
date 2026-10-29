@@ -178,7 +178,7 @@ def _cli(argv: list[str] | None = None) -> int:
             print("пустой ключ — ничего не записано", file=sys.stderr)
             return 2
         store_obj.set_key(args.follower_id, args.api_key_index, secret)
-        print(f"ключ записан: {args.follower_id} (api_key_index {args.api_key_index})")
+        print("ключ записан")
         return 0
     if args.cmd == "remove":
         removed = store_obj.remove_key(args.follower_id)
