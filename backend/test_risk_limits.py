@@ -127,6 +127,17 @@ class TestNonFiniteCannotPass(unittest.TestCase):
         self.assertEqual(state.volume_today_usd, 100.0)
         self.assertEqual(state.open_position_usd[0], 50.0)
 
+    def test_int_too_large_for_float_is_blocked_not_crashing(self):
+        """10**400 не помещается в float: float() бросает OverflowError, и
+        проверка лимита падала исключением вместо отказа. Для денежного
+        расчёта это «не число», а не повод уронить запрос."""
+        res = check_order(RiskLimits(), UserRiskState("u1"), 0, 10**400)
+        self.assertFalse(res.allowed)
+        self.assertEqual(res.capped_size_usd, 0.0)
+        state = UserRiskState("u1")
+        record_executed(state, market_id=0, executed_usd=10**400)
+        self.assertEqual(state.volume_today_usd, 0.0)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

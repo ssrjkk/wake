@@ -86,7 +86,7 @@ alembic check
 
 ## Tests
 
-**Backend** — one command, 635 tests (634 passed, 1 skipped), against a real PostgreSQL:
+**Backend** — one command, 668 tests (667 passed, 1 skipped), against a real PostgreSQL:
 
 ```bash
 cd backend
@@ -108,10 +108,10 @@ Four rules the suite enforces on itself (the first three come from `backend/test
 npm ci
 npm run lint                      # ESLint over src/, e2e/ and the config files
 npx tsc --noEmit
-npm run test:run                  # vitest: 264 tests in 19 files
+npm run test:run                  # vitest: 271 tests in 20 files
 node scripts/brand-assets.mjs       # re-render public/og.png and apple-touch-icon.png
 npm run build
-PW_PORT=5178 npx playwright test  # 70 tests; first run needs `npx playwright install chromium`
+PW_PORT=5178 npx playwright test  # 71 tests; first run needs `npx playwright install chromium`
 ```
 
 `src/components/theme.gate.test.ts` keeps the panel honest about its own style:
@@ -397,7 +397,7 @@ alembic check
 
 ## Тесты
 
-**Бэкенд** — одна команда, 635 тестов (634 прошли, 1 пропущен), против настоящего PostgreSQL:
+**Бэкенд** — одна команда, 668 тестов (667 прошли, 1 пропущен), против настоящего PostgreSQL:
 
 ```bash
 cd backend
@@ -419,10 +419,10 @@ python -m pytest . -q
 npm ci
 npm run lint                      # ESLint по src/, e2e/ и конфигам
 npx tsc --noEmit
-npm run test:run                  # vitest: 264 теста в 19 файлах
+npm run test:run                  # vitest: 271 тест в 20 файлах
 node scripts/brand-assets.mjs       # перерендерить public/og.png и apple-touch-icon.png
 npm run build
-PW_PORT=5178 npx playwright test  # 70 тестов; первый прогон требует `npx playwright install chromium`
+PW_PORT=5178 npx playwright test  # 71 тест; первый прогон требует `npx playwright install chromium`
 ```
 
 `src/components/theme.gate.test.ts` следит за стилем самой панели: ни градиентов,

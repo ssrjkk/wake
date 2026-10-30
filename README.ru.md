@@ -132,6 +132,8 @@ python leader_listener.py --leader-id <leader_id> --account-index 12345
 
 С `WAKE_DRY_RUN=true` он пишет план зеркалирования в лог и ничего не подписывает.
 
+Первый снапшот позиций, который получает листенер, — база, а не сделка: он запоминает, что у лидера уже есть, и ордеров из него не выводит. База лежит в `leader_tracker_state`, поэтому рестарт или деплой продолжает с последних известных позиций, а не зеркалирует весь портфель заново. Размеры зеркала хранятся на подписчика и на рынок (`mirror_positions`): закрытие BTC считается от размера в BTC, а не от суммы BTC + ETH, а поле `current_mirrored_size` в `/leaders/{id}/followers` — сумма по рынкам для отображения.
+
 ### Signing service
 
 ```bash
@@ -226,7 +228,7 @@ Price-рынки закрываются по дедлайну только по�
 # бэкенд — из backend/; нужна отдельная PostgreSQL-база для тестов
 createdb wake_test
 export WAKE_TEST_DATABASE_URL=postgresql+asyncpg://wake:wake@localhost:5432/wake_test
-python -m unittest discover        # 635 тестов, всё через discover
+python -m unittest discover        # 668 тестов, всё через discover
 python -m pytest -q                # тот же набор под pytest (в CI ещё и Allure)
 
 # фронтенд

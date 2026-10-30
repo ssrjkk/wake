@@ -98,7 +98,7 @@ def challenge_text(address: str, nonce: str, expires_at: float) -> str:
 
 
 async def new_challenge(l1_address: str) -> tuple[str, float]:
-    """Выдаёт (текст подписи, epoch истечения).Nonce случайный и хранится под
+    """Выдаёт (текст подписи, epoch истечения). Nonce случайный и хранится под
     своим ключом: угадать challenge, чтобы потом подделать подпись, нельзя."""
     address = normalize_address(l1_address)
     nonce = secrets.token_hex(16)

@@ -40,7 +40,10 @@ def is_finite(value: object) -> bool:
     `<= 0`, что NaN пропускает."""
     try:
         return math.isfinite(float(value))  # type: ignore[arg-type]
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
+        # OverflowError — не «почти конечное» значение: float(10**400) не
+        # существует, и вызывающий код обязан увидеть «нет данных», а не
+        # исключение на границе денежного расчёта.
         return False
 
 
@@ -49,7 +52,10 @@ def _dec(value: float) -> Decimal:
     и ровно этот шум round_down() затем режет вниз."""
     try:
         x = float(value)
-    except (TypeError, ValueError) as e:
+    except (TypeError, ValueError, OverflowError) as e:
+        # OverflowError: int шире float64 (10**400). Документированный контракт
+        # модуля — ValueError на нечисло, и он не должен зависеть от того,
+        # помещается ли целое в float.
         raise ValueError(f"нужно число, пришло {value!r}") from e
     if not math.isfinite(x):
         raise ValueError(f"нужно конечное число, пришло {value!r}")

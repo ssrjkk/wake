@@ -9,7 +9,7 @@
 
 import unittest
 
-from quant import round_down, scale_to_int
+from quant import is_finite, round_down, scale_to_int
 
 
 class TestRoundDown(unittest.TestCase):
@@ -43,6 +43,28 @@ class TestScaleToInt(unittest.TestCase):
 
     def test_base_amount_of_a_full_tick_survives(self):
         self.assertEqual(scale_to_int(0.29, 2), 29)
+
+
+class TestHugeIntegersAreDataNotCrashes(unittest.TestCase):
+    """int шире float64 — это «нет данных», а не исключение.
+
+    float(10**400) бросает OverflowError, и math.isfinite на таком int падал
+    им же: фильтр «конечное число» не отвечал False, а ронял вызывающую
+    функцию — в том числе проверку размера ордера. Документированный контракт
+    quant — ValueError на невалидный вход, а не OverflowError.
+    """
+
+    def test_is_finite_false_for_unrepresentable_int(self):
+        self.assertFalse(is_finite(10**400))
+        self.assertTrue(is_finite(10**300))
+
+    def test_round_down_raises_documented_value_error(self):
+        with self.assertRaises(ValueError):
+            round_down(10**400, 2)
+
+    def test_scale_to_int_raises_documented_value_error(self):
+        with self.assertRaises(ValueError):
+            scale_to_int(10**400, 2)
 
 
 if __name__ == "__main__":

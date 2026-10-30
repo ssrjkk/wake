@@ -132,6 +132,8 @@ python leader_listener.py --leader-id <leader_id> --account-index 12345
 
 With `WAKE_DRY_RUN=true` it logs the mirror plan instead of signing anything.
 
+The first position snapshot a listener receives is a baseline, not a trade: it records what the leader already holds and derives no orders from it. The baseline lives in `leader_tracker_state`, so a restart or a deploy continues from the last known positions instead of mirroring the whole portfolio again. Mirror sizes are kept per follower and per market (`mirror_positions`): closing a BTC position is computed from the follower's BTC size, not from a BTC + ETH total, and the `current_mirrored_size` field on `/leaders/{id}/followers` is the display sum across markets.
+
 ### Signing service
 
 ```bash
@@ -226,7 +228,7 @@ Price markets close themselves at the deadline only while this process runs; oth
 # backend — run from backend/; needs a scratch PostgreSQL database
 createdb wake_test
 export WAKE_TEST_DATABASE_URL=postgresql+asyncpg://wake:wake@localhost:5432/wake_test
-python -m unittest discover        # 635 tests, all through discovery
+python -m unittest discover        # 668 tests, all through discovery
 python -m pytest -q                # the same set under pytest (+ Allure in CI)
 
 # frontend

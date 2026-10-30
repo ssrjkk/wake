@@ -452,8 +452,14 @@ async def simulate_mirror(req: SimulateMirrorRequest):
     из поля follows: план, посчитанный от числа, которое подписчик вписал себе сам
     (до $1e9 на валидаторе), оператор читал бы как настоящий, и он расходился бы
     с тем, что копия исполняет. Подписчик без подтверждённых средств попадает в
-    `skipped` с причиной `margin_unverified`, а не исчезает из плана молча."""
+    `skipped` с причиной `margin_unverified`, а не исчезает из плана молча.
+    Зеркальный размер — из mirror_positions по рынку запроса: simulate обязан
+    считать reduce так же, как его посчитает живой движок."""
     rows = await db.active_follows_for_leader(req.leader_id)
+    # Размер — в рынке события, как и в живом листенере. Сумма по рынкам,
+    # которую отдаёт follows, годится только для отображения: reduce на USD-рынок
+    # не должен считаться от базовых единиц другого рынка.
+    mirrored_sizes = await db.mirrored_sizes_for_leader(req.leader_id)
 
     followers: list[FollowerConfig] = []
     skipped: list[SkippedFollower] = []
@@ -481,7 +487,9 @@ async def simulate_mirror(req: SimulateMirrorRequest):
                 allocation_usd=r["allocation_usd"],
                 available_margin_usd=equity,
                 max_leverage=r["max_leverage"],
-                current_mirrored_size=r["current_mirrored_size"],
+                current_mirrored_size=mirrored_sizes.get(r["follow_id"], {}).get(
+                    req.market_id, 0.0
+                ),
             )
         )
 

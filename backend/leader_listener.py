@@ -1,13 +1,13 @@
 """
-[!]   Сам websockets.connect() НЕ запускался мной — библиотеки нет в этой песочнице
-(проверено). Но это теперь тонкая обвязка вокруг протестированной логики, не
-написанный вслепую парсинг: сравнение снапшотов позиции (leader_position_tracker.py)
-прогнано 9/9 тестами на фикстурах, точно соответствующих официальной схеме
+Тонкая обвязка вокруг протестированной логики: сравнение снапшотов позиции
+(leader_position_tracker.py) и план зеркалирования (mirror_engine.py) проверены
+тестами на фикстурах, точно соответствующих официальной схеме
 apidocs.lighter.xyz/docs/websocket-reference — включая разворот позиции (закрытие
 старой стороны + открытие новой, два события) и согласованность состояния между
-сообщениями.
+сообщениями. Сам websockets.connect() тестами не покрыт: ему нужна живая сеть, и
+проверено ровно то, что можно проверить без неё.
 
-Что теперь ТОЧНО подтверждено, не предположение:
+Что подтверждено, не предположение:
   - Каналы и их точная форма: account_all_positions/{ACCOUNT_ID} для позиций,
     user_stats/{ACCOUNT_ID} для portfolio_value как equity — обе схемы взяты из
     официальной документации, не угаданы
@@ -31,12 +31,20 @@ apidocs.lighter.xyz/docs/websocket-reference — включая разворот
     market_id события; рынка, которого нет в полученной книге, событие логируется
     как skip и не исполняется. Книга берётся один раз на старте процесса — новые
     рынки Lighter потребуют перезапуска листенера.
-  - current_mirrored_size в follows — учёт того, что движок ОТПРАВИЛ, а не того,
-    что показывает биржа: после исполненного ордера размер двигается на base_amount
-    этого ордера, отдельного цикла сверки с позициями подписчика нет. Пока заявка
-    MARKET+IOC исполняется целиком, расхождения не возникает; частичное исполнение
-    (или сделка подписчика руками в том же рынке) накопит дрейф, и следующий reduce
-    пойдёт от числа листенера, а не от реальной позиции на Lighter.
+  - mirror_positions (follow_id, market_id) — учёт того, что движок ОТПРАВИЛ, а
+    не того, что показывает биржа: после исполненного ордера размер этого рынка
+    двигается на base_amount ордера, отдельного цикла сверки с позициями
+    подписчика нет. Пока заявка MARKET+IOC исполняется целиком, расхождения не
+    возникает; частичное исполнение (или сделка подписчика руками в том же
+    рынке) накопит дрейф, и следующий reduce пойдёт от числа листенера, а не от
+    реальной позиции на Lighter.
+
+    Учёт per-market по той же причине: у подписчика с позициями в BTC и ETH
+    закрытие BTC не вычитается из общей суммы и не теряет ETH. Сумма по рынкам
+    (её отдаёт follows_for_leader под именем current_mirrored_size) остаётся
+    только числом для отображения. Дрейф от ручных сделок отсутствие сверки не
+    лечит и здесь — сверка с позициями подписчика на Lighter остаётся следующей
+    задачей, а не сделанной.
 
 Запуск:
     pip install lighter-sdk websockets
@@ -60,8 +68,10 @@ from mirror_engine import (
     MirrorOrder,
     Side,
     compute_mirror_plan,
+    is_buy_order,
+    marketable_limit_price,
 )
-from quant import scale_to_int
+from quant import is_finite, scale_to_int
 import lighter_rest
 from config import DRY_RUN, LIGHTER_BASE_URL, LIGHTER_NETWORK, LIGHTER_WS_URL
 
@@ -90,7 +100,7 @@ def _key_store() -> EncryptedKeyStore | None:
 
 def build_order_args(
     order: MirrorOrder,
-    event_price: float,
+    limit_price: float,
     constraints: MarketConstraints,
     follower_account_index: int,
     order_uid: str,
@@ -103,7 +113,8 @@ def build_order_args(
       Цена. Lighter ждёт целое в тиках рынка (price * 10**supported_price_decimals —
       см. place_order_example.py и src/lib/lighter.ts). `int(event.price)` давал
       DOGE 0.16 -> 0 и BTC 110432.55 -> 110432, то есть лимитку в $110 на рынок
-      по $110k: IOC-бай не исполнялся никогда.
+      по $110k: IOC-бай не исполнялся никогда. Значение сюда приходит уже
+      рыночным (mark-цена от _event_mark_price), а не ценой входа лидера.
 
       Сторона. order.side — это СТОРОНА ПОЗЫЦИИ (её берёт из снапшота лидера),
       а не направление сделки. Открыть лонг = buy, закрыть лонг = sell. Без
@@ -119,11 +130,52 @@ def build_order_args(
         "market_index": order.market_id,
         "client_order_index": int(uuid.UUID(order_uid).int % 2**31),
         "base_amount": scale_to_int(order.base_amount, constraints.size_decimals),
-        "price": scale_to_int(event_price, constraints.price_decimals),
-        "is_ask": (order.side == Side.SHORT) != order.reduce_only,
+        "price": scale_to_int(limit_price, constraints.price_decimals),
+        "is_ask": not is_buy_order(order),
         "reduce_only": order.reduce_only,
         "account_index": follower_account_index,
     }
+
+
+async def _event_mark_price(market_id: int) -> float | None:
+    """Текущая mark-цена рынка для IOC-лимита, либо None, если её нет.
+
+    Цена события — это avg_entry_price лидера, а не рынок. Для закрытия
+    убыточной позиции она стоит по другую сторону книги (лонг, вошедший по
+    2000 при рынке 1500, закрывается sell-лимитом 2000), IOC не исполняется,
+    и подписчик остаётся в позиции, из которой лидер уже вышел; на
+    наращивании симметрично — buy-лимит ниже рынка. Поэтому опорная цена —
+    mark, а запас MAX_SLIPPAGE_BPS задаёт, какое проскальзывание приемлемо.
+
+    Читается ОДИН раз на событие, а не на ордер: запрос синхронный (urllib),
+    и в цикле подписчиков он блокировал бы event loop на таймаут каждого
+    запроса, останавливая и вебсокет, и обработку следующих событий. Поэтому
+    run_in_threadpool, как и у остальных HTTP-вызовов в этом файле.
+
+    None, а не «подставь цену события», потому что решение о фолбэке — в
+    вызывающем коде: запас на проскальзывание вокруг цены входа лидера
+    придвинул бы лимит к рынку в неверную пользу (продажу убыточного лонга
+    опустил бы ещё ниже). Без mark ордер идёт по цене события как есть, и
+    причина видна в логе."""
+    try:
+        mark = await run_in_threadpool(
+            lighter_rest.get_mark_price, market_id, LIGHTER_NETWORK
+        )
+    except (RuntimeError, ValueError) as e:
+        logger.warning(
+            "mark-цена рынка %s не получена (%s) — IOC-лимит по цене события",
+            market_id,
+            e,
+        )
+        return None
+    if not is_finite(mark) or mark <= 0:
+        logger.warning(
+            "mark-цена рынка %s невалидна (%r) — IOC-лимит по цене события",
+            market_id,
+            mark,
+        )
+        return None
+    return mark
 
 
 async def handle_leader_event(
@@ -146,6 +198,10 @@ async def handle_leader_event(
 
     rows = await db.active_follows_for_leader(leader_id)
     by_follower = {r["follower_id"]: r for r in rows}
+    # Размер подписчика — в рынке СОБЫТИЯ. Сумма по всем рынкам (её отдаёт
+    # follows_for_leader для отображения) для reduce непригодна: закрытие BTC
+    # посчитало бы долю от BTC+ETH и запросило больше, чем у подписчика есть.
+    mirrored_sizes = await db.mirrored_sizes_for_leader(leader_id)
 
     if constraints is None:
         reason = f"market_constraints_unavailable:{event.market_id}"
@@ -208,7 +264,9 @@ async def handle_leader_event(
                 allocation_usd=r["allocation_usd"],
                 available_margin_usd=equity,
                 max_leverage=r["max_leverage"],
-                current_mirrored_size=r["current_mirrored_size"],
+                current_mirrored_size=mirrored_sizes.get(r["follow_id"], {}).get(
+                    event.market_id, 0.0
+                ),
             )
         )
 
@@ -243,6 +301,12 @@ async def handle_leader_event(
             "skipped",
             skipped.reason,
         )
+
+    # Mark-цена нужна только живому исполнению и одна на всё событие: у всех
+    # ордеров по нему один рынок, а в dry-run сеть трогать незачем.
+    mark_price = None
+    if plan.orders and not DRY_RUN:
+        mark_price = await _event_mark_price(event.market_id)
 
     for order in plan.orders:
         follow_row = by_follower[order.follower_id]
@@ -306,9 +370,14 @@ async def handle_leader_event(
             )
             continue
 
+        limit_price = (
+            marketable_limit_price(mark_price, is_buy_order(order))
+            if mark_price is not None
+            else event.price
+        )
         args = build_order_args(
             order,
-            event.price,
+            limit_price,
             constraints,
             follow_row["follower_account_index"],
             log_id,
@@ -381,7 +450,7 @@ async def handle_leader_event(
             tx_hash,
         )
         delta = order.base_amount if not order.reduce_only else -order.base_amount
-        await db.add_mirrored_size(follow_row["follow_id"], delta)
+        await db.add_mirrored_size(follow_row["follow_id"], order.market_id, delta)
 
 
 def build_constraints(books: list) -> dict:
@@ -409,6 +478,67 @@ def build_constraints(books: list) -> dict:
         except (KeyError, TypeError, ValueError):
             continue  # рынок без полей ограничения не должен ронять весь список
     return out
+
+
+async def handle_stream_message(
+    msg: dict, tracker, leader_id: str, constraints_by_market: dict
+) -> None:
+    """Одно сообщение вебсокета — отдельно от соединения, чтобы ветки разбора
+    (и их отказы) проверялись тестами без живого Lighter.
+
+    user_stats больше не применяется «как есть»: portfolio_value приходит
+    строкой из внешнего источника, и float() на неожиданной форме бросал
+    TypeError прямо в цикле `async for`, то есть обрывал стрим для всех
+    подписчиков из-за одного поля в одном сообщении. Отказ разбора — строка в
+    логе, соединение живёт.
+
+    Состояние сохраняется ДО исполнения событий. Порядок выбран сознательно:
+    упавший посреди обработки процесс повторит событие от старой базы
+    (at-most-once — лучше пропущенная сделка, чем удвоенная позиция), а не
+    применит его дважды от новой."""
+    msg_type = msg.get("type", "")
+
+    if msg_type == "update/user_stats":
+        try:
+            tracker.apply_user_stats(msg)
+        except (KeyError, TypeError, ValueError) as e:
+            logger.warning("user_stats не разобран: %s — пропускаю", e)
+        return
+
+    if msg_type not in (
+        "update/account_all_positions",
+        "subscribed/account_all_positions",
+    ):
+        # Прочие типы (heartbeat и т.п.) — игнорируем осознанно, не молча.
+        return
+
+    try:
+        events = tracker.apply_position_update(msg)
+    except (KeyError, TypeError, ValueError) as e:
+        # Сообщения Lighter бывают и по другой схеме, чем позиции (например,
+        # пустой market id). Умирать из-за одного такого — значит оставить всех
+        # подписчиков без зеркаления.
+        logger.warning("снапшот позиций не разобран: %s — пропускаю", e)
+        return
+
+    try:
+        await db.save_tracker_state(
+            leader_id, tracker.equity, tracker.snapshot()["positions"]
+        )
+    except Exception as e:
+        # Не блокируем зеркалирование из-за учёта: без базы после рестарта
+        # будет пропуск, но сейчас сделка важнее.
+        logger.error("состояние трекера не сохранено: %s", e)
+
+    for raw_event in events:
+        try:
+            await handle_leader_event(
+                leader_id,
+                raw_event,
+                constraints_by_market.get(raw_event["market_id"]),
+            )
+        except Exception:
+            logger.exception("событие лидера %s не обработано до конца", raw_event)
 
 
 async def _stream(
@@ -439,39 +569,7 @@ async def _stream(
             except (ValueError, TypeError):
                 logger.warning("не-JSON в стриме — пропускаю: %.120r", raw)
                 continue
-
-            msg_type = msg.get("type", "")
-
-            if msg_type == "update/user_stats":
-                tracker.apply_user_stats(msg)
-                continue
-
-            if msg_type in (
-                "update/account_all_positions",
-                "subscribed/account_all_positions",
-            ):
-                try:
-                    events = tracker.apply_position_update(msg)
-                except (KeyError, TypeError, ValueError) as e:
-                    # Сообщения Lighter бывают и по другой схеме, чем позиции
-                    # (например, пустой market id). Умирать из-за одного такого —
-                    # значит оставить всех подписчиков без зеркаления.
-                    logger.warning("снапшот позиций не разобран: %s — пропускаю", e)
-                    continue
-                for raw_event in events:
-                    try:
-                        await handle_leader_event(
-                            leader_id,
-                            raw_event,
-                            constraints_by_market.get(raw_event["market_id"]),
-                        )
-                    except Exception:
-                        logger.exception(
-                            "событие лидера %s не обработано до конца", raw_event
-                        )
-                continue
-
-            # Прочие типы сообщений (heartbeat и т.п.) — игнорируем осознанно, не молча.
+            await handle_stream_message(msg, tracker, leader_id, constraints_by_market)
 
 
 async def run_forever(
@@ -498,6 +596,32 @@ async def run_forever(
         logger.error("order books не получены (%s) — ордера исполняться не будут", e)
 
     tracker = LeaderPositionTracker()
+    # База для диффа после рестарта. Без неё первый снапшот выглядит как
+    # «лидер только что открыл весь портфель»: деплой зеркалил бы его позиции
+    # заново поверх уже открытых у подписчиков, а закрытия, сделанные за время
+    # простоя, не эмитились бы никогда.
+    try:
+        state = await db.load_tracker_state(leader_id)
+    except Exception as e:
+        state = None
+        logger.error(
+            "сохранённое состояние лидера не прочитано (%s) — базой станет "
+            "первый снапшот",
+            e,
+        )
+    if state is not None:
+        try:
+            tracker.restore(state)
+            logger.info(
+                "состояние восстановлено: позиций %d, equity %s",
+                len(tracker.positions),
+                tracker.equity,
+            )
+        except (KeyError, TypeError, ValueError) as e:
+            logger.error(
+                "сохранённое состояние не разобрано (%s) — базой станет первый снапшот",
+                e,
+            )
 
     logger.info(
         "DRY_RUN=%s — %s",

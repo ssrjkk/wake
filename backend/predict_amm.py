@@ -15,11 +15,18 @@ predict_resolution.py, две совершенно разные по довер�
 
 import math
 
+from quant import is_finite
+
 
 class LMSRMarket:
     def __init__(self, b: float, q_yes: float = 0.0, q_no: float = 0.0):
-        if b <= 0:
-            raise ValueError("b (параметр ликвидности) должен быть > 0")
+        # is_finite, а не сравнение: `NaN <= 0` — False, поэтому NaN проходил
+        # проверку и дальше price_yes() возвращал NaN; inf в b давал inf/inf.
+        # Оба значения приходят из строки БД Float.
+        if not is_finite(b) or b <= 0:
+            raise ValueError("b (параметр ликвидности) должен быть конечным и > 0")
+        if not is_finite(q_yes) or not is_finite(q_no):
+            raise ValueError("q_yes и q_no должны быть конечными числами")
         self.b = b
         self.q_yes = q_yes
         self.q_no = q_no

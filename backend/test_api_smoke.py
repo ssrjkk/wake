@@ -1941,6 +1941,19 @@ class TestHardening(HttpCase):
         self.assertTrue(err["code"])
         self.assertNotIn("detail", r.json())
 
+    async def test_unknown_path_uses_the_unified_error_format(self):
+        """404 маршрутизатора — тоже ответ клиенту.
+
+        Starlette бросает свой HTTPException, а fastapi.HTTPException — его
+        подкласс; обработчик, зарегистрированный на подкласс, на этот случай не
+        срабатывал, и неизвестный путь отвечал дефолтным {"detail": "Not Found"}.
+        Единый формат держался для всех ошибок, кроме самой частой — опечатки в
+        пути, — а клиент разбирает ровно одну форму."""
+        r = await self.client.get("/no-such-route")
+        self.assertEqual(r.status_code, 404)
+        self.assertEqual(r.json()["error"]["code"], "NOT_FOUND")
+        self.assertNotIn("detail", r.json())
+
 
 class TestFailureResponseContract(HttpCase):
     """Отказ обязан долетать до клиента читаемым.

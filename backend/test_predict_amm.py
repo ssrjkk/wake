@@ -120,6 +120,20 @@ class TestLiquidityParameter(unittest.TestCase):
         with self.assertRaises(ValueError):
             LMSRMarket(b=-5)
 
+    def test_rejects_non_finite_b_and_q(self):
+        """NaN проходил `b <= 0` (сравнение с NaN — False) и price_yes()
+        возвращал NaN; inf давал inf/inf в _cost. Оба значения приходят из
+        строки БД Float, то есть из данных, а не из констант кода."""
+        for bad in (float("nan"), float("inf"), float("-inf")):
+            with self.subTest(b=bad):
+                with self.assertRaises(ValueError):
+                    LMSRMarket(b=bad)
+            with self.subTest(q=bad):
+                with self.assertRaises(ValueError):
+                    LMSRMarket(b=100, q_yes=bad)
+                with self.assertRaises(ValueError):
+                    LMSRMarket(b=100, q_no=bad)
+
 
 class TestCostPreview(unittest.TestCase):
     def test_cost_to_trade_does_not_mutate_state(self):

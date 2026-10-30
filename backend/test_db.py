@@ -208,7 +208,7 @@ class TestFollows(DbCase):
 
     def test_mirrored_size_is_persisted(self):
         follow_id = self.follow(self.add_follower(1), 1000)
-        _run(db.add_mirrored_size(follow_id, 0.05))
+        _run(db.add_mirrored_size(follow_id, 8, 0.05))
         row = _run(db.owned_follow(follow_id, "f1"))
         self.assertAlmostEqual(row["current_mirrored_size"], 0.05)
 
@@ -218,39 +218,84 @@ class TestFollows(DbCase):
         Вызывающий код читал follow_row ДО исполнения ордера и писал обратно
         «прочитанное + дельта»: два события лидера рядом давали два итога из
         одного прочитанного числа, и второй стирал учёт первого. Это не
-        округление, которое можно пережить, — follows отвечает движьку, сколько
-        уже зеркальено, и расхождение остаётся навсегда."""
+        округление, которое можно пережить, — движок отвечает сам себе, сколько
+        уже зеркалено, и расхождение остаётся навсегда."""
         follow_id = self.follow(self.add_follower(1), 1000)
-        _run(db.add_mirrored_size(follow_id, 0.05))
-        _run(db.add_mirrored_size(follow_id, 0.02))
+        _run(db.add_mirrored_size(follow_id, 8, 0.05))
+        _run(db.add_mirrored_size(follow_id, 8, 0.02))
         row = _run(db.owned_follow(follow_id, "f1"))
         self.assertAlmostEqual(row["current_mirrored_size"], 0.07)
 
     def test_mirrored_size_never_goes_negative(self):
         follow_id = self.follow(self.add_follower(1), 1000)
-        _run(db.add_mirrored_size(follow_id, 0.05))
-        _run(db.add_mirrored_size(follow_id, -1.0))
+        _run(db.add_mirrored_size(follow_id, 8, 0.05))
+        _run(db.add_mirrored_size(follow_id, 8, -1.0))
         row = _run(db.owned_follow(follow_id, "f1"))
         self.assertAlmostEqual(row["current_mirrored_size"], 0.0)
+
+    def test_mirrored_size_is_per_market_and_reduce_does_not_eat_other_markets(self):
+        """Размер рынка — отдельная строка, а не доля общей суммы.
+
+        Закрытие BTC списывало дельту из общей суммы BTC+ETH: после reduce учёт
+        по ETH оставался в aggregate, но движок читал его как размер ETH и не
+        мог отличить «открыто 0.5 ETH» от «0.5 осталось от чего-то другого»;
+        при вычитании больше, чем было в BTC, сумма уходила в ноль и позиция
+        ETH терялась целиком."""
+        follow_id = self.follow(self.add_follower(1), 1000)
+        _run(db.add_mirrored_size(follow_id, 8, 0.5))
+        _run(db.add_mirrored_size(follow_id, 9, 0.5))
+
+        sizes = _run(db.mirrored_sizes_for_leader(self.leader_id))
+        self.assertEqual(sizes[follow_id], {8: 0.5, 9: 0.5})
+
+        _run(db.add_mirrored_size(follow_id, 8, -1.0))  # больше, чем есть в рынке 8
+        sizes = _run(db.mirrored_sizes_for_leader(self.leader_id))
+        self.assertEqual(
+            sizes[follow_id],
+            {8: 0.0, 9: 0.5},
+            "reduce в рынке 8 не трогает позицию в рынке 9",
+        )
+        row = _run(db.owned_follow(follow_id, "f1"))
+        self.assertAlmostEqual(
+            row["current_mirrored_size"], 0.5, msg="сумма для отображения"
+        )
 
     def test_concurrent_increments_all_land(self):
         """Несколько параллельных дельт обязаны дать сумму дельт, а не последнее
         записанное число.
 
-        С `SET current_mirrored_size = <число из Питона>` теряется всё, что
-        пересеклось по времени; с `col + delta` внутри UPDATE — ничего, потому
-        что читает и складывает сама база под строкой. Количество меньше размера
-        пула соединений намеренно: запросы должны идти одновременно, а не
+        С `SET size = <число из Питона>` теряется всё, что пересеклось по
+        времени; с `size + delta` внутри upsert — ничего, потому что читает и
+        складывает сама база под строкой. Количество меньше размера пула
+        соединений намеренно: запросы должны идти одновременно, а не
         выстраиваться в очередь ожидания пула."""
         follow_id = self.follow(self.add_follower(1), 1000)
         deltas = [0.1] * 8
 
         async def _all_at_once():
-            await asyncio.gather(*[db.add_mirrored_size(follow_id, d) for d in deltas])
+            await asyncio.gather(
+                *[db.add_mirrored_size(follow_id, 8, d) for d in deltas]
+            )
 
         _run(_all_at_once())
         row = _run(db.owned_follow(follow_id, "f1"))
         self.assertAlmostEqual(row["current_mirrored_size"], sum(deltas), places=6)
+
+    def test_tracker_state_round_trips(self):
+        positions = {"8": {"size": 0.5, "sign": -1, "price": 2000.0}}
+        self.assertIsNone(_run(db.load_tracker_state(self.leader_id)))
+        _run(db.save_tracker_state(self.leader_id, 50000.0, positions))
+        self.assertEqual(
+            _run(db.load_tracker_state(self.leader_id)),
+            {"equity": 50000.0, "positions": positions},
+        )
+
+        _run(db.save_tracker_state(self.leader_id, 51000.0, {}))
+        self.assertEqual(
+            _run(db.load_tracker_state(self.leader_id)),
+            {"equity": 51000.0, "positions": {}},
+            "повторное сохранение заменяет состояние, а не копит строки",
+        )
 
     def test_duplicate_follow_of_the_same_leader_is_rejected(self):
         f1 = self.add_follower(1)

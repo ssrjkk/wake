@@ -21,7 +21,9 @@ def _finite(value: float) -> bool:
     """Конечное число, а не «то, что прошло бы сравнение»."""
     try:
         return isfinite(float(value))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
+        # int шире float64 (10**400) — это тоже «не число» для лимита, а не
+        # повод уронить проверку ордера исключением.
         return False
 
 

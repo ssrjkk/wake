@@ -10,6 +10,12 @@ from the commit history rather than from a release.
 ## [Unreleased]
 
 ### Added
+- `mirror_positions` and `leader_tracker_state` (migration 005). The mirrored size
+  was one number on `follows`, which is the wrong shape for a book that spans
+  markets; it now lives per (follow, market), and the old column is dropped after
+  a backfill from `mirror_log` rows whose `SUM(reduce_only ? -amount : amount)` is
+  positive. The listener's position state is persisted in the same migration, so
+  a restart continues from the last known positions instead of starting over.
 - `WAKE_SIGNING_ALLOWED_HOSTS` and the Host gate in `backend/signing_service.py`.
   `/place-order` has no authentication and cannot have any (a secret in a public
   browser bundle is not a secret), so the only boundary is the address it is
@@ -738,6 +744,45 @@ from the commit history rather than from a release.
   claim of an "optional KMS mode", which the removed file could not deliver.
 
 ### Fixed
+- An unknown path answered FastAPI's default `{"detail": "Not Found"}` while
+  every other error used `{"error": {code, message}}`: the handler was registered
+  for `fastapi.HTTPException`, but routing raises Starlette's class, of which
+  FastAPI's is a subclass. Registered on the parent now, so 404 and 405 keep the
+  one format the frontend parses.
+- A restarted or redeployed leader listener mirrored the leader's whole portfolio
+  again: the first websocket snapshot was treated as "everything just opened",
+  and no state survived the restart. The first snapshot is a baseline now —
+  recorded in `leader_tracker_state` and never turned into orders — so a crash or
+  a deploy cannot double somebody else's position.
+- Closing a BTC position computed the follower's share from his BTC + ETH total,
+  because the mirror size was one column per follow. Sizes are per market now,
+  and `POST /simulate-mirror` reads the same per-market numbers as the live
+  engine.
+- The mirror order's IOC limit was built from the leader's `avg_entry_price`. For
+  a losing exit that price sits on the far side of the book — a long entered at
+  2000 with the market at 1500 is closed with a sell limit of 2000 — so the order
+  could never fill and the follower stayed in a position the leader had left. The
+  limit is the current mark price widened by 100 bps in the direction that keeps
+  the order marketable; the mark is read once per event in a threadpool, only when
+  live orders exist, instead of once per follower inside the event loop.
+- One malformed websocket message ended mirroring for every follower of the
+  leader (`KeyError`/`TypeError` straight out of the `async for`). Parsing
+  failures — an unknown snapshot shape, a non-numeric `portfolio_value` — are
+  logged and the connection stays up, and an exception while handling one
+  follower's order cannot stop the others. Tracker state is saved before the
+  events run, so a crash mid-way repeats from the old baseline instead of applying
+  a delta twice.
+- The price oracle could settle a market on a candle it could not read: a missing
+  `c` raised `KeyError` (a 500 above it) and `"NaN"` was returned as a price.
+  Malformed or non-finite rows are skipped in favour of the last readable closed
+  minute, and a series without one is a `RuntimeError`, not a number.
+  `get_mark_price` refuses a non-finite or non-positive close for the same reason
+  — that number becomes the price of a real order.
+- `float(10**400)` raised `OverflowError` past the finite checks in `quant.py`,
+  `risk_limits.py` and `LMSRMarket`: an integer too wide for float64 is a missing
+  value, and the boundary now answers "no data" instead of raising into a money
+  path. `LMSRMarket` also validates its inputs: `NaN <= 0` is False, so NaN passed
+  the liquidity check and came out of `price_yes()`.
 - Panels kept polling while the Telegram Mini App was minimized:
   `document.hidden` stays false in the webview, so `setIntervalWhenVisible` only
   ever saw a tab switch, and the trade feed asked Lighter for fresh trades every

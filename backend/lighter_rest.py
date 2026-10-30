@@ -265,11 +265,27 @@ def get_mark_price(market_id: int, network: str = LIGHTER_NETWORK) -> float:
     """Последняя цена закрытия по market_id — close последней 1-минутной свечи.
     Для резолюции price-рынков достаточно точно; для чего-то более
     времячувствительного лучше websocket (см. leader_position_tracker.py —
-    тот же принцип, другой канал)."""
+    тот же принцип, другой канал).
+
+    Кривая свеча — RuntimeError, а не число и не KeyError: этим значением
+    листенер строит IOC-лимит реального ордера, а KeyError из разбора чужого
+    ответа — это 500 вместо 502 выше по стеку. Нулевое или неконечное close
+    ценой не является: NaN молча прошёл бы в scale_to_int и умер бы уже на
+    подписи."""
     candles = get_candles(market_id, "1m", 10, network)
     if not candles:
         raise RuntimeError(f"нет свечей для market_id={market_id}")
-    return float(candles[-1]["c"])
+    try:
+        close = float(candles[-1]["c"])
+    except (KeyError, TypeError, ValueError) as e:
+        raise RuntimeError(
+            f"mark-цена market_id={market_id} не разобрана: {e!r}"
+        ) from e
+    if not math.isfinite(close) or close <= 0:
+        raise RuntimeError(
+            f"mark-цена market_id={market_id} не положительна: {close!r}"
+        )
+    return close
 
 
 @cached("funding_rates", ttl=60)
@@ -330,16 +346,36 @@ def get_price_at(
     текущей минутой), так что свеча с t = дедлайн покрывает [дедлайн,
     дедлайн+1мин) — это уже цены ПОСЛЕ дедлайна, и при разрешении внутри минуты
     ещё и незакрытая свеча. Такая свеча в расчёт не берётся: исход не может
-    решаться будущим движением цены."""
+    решаться будущим движением цены.
+
+    Кривая строка не цена и не ошибка: она пропускается, и берётся последняя
+    валидная закрытая минута. Ронять весь запрос из-за одной строки — значит
+    отложить выплаты по рынку из-за формата чужого ответа, а пропустить её
+    молча нельзя по другой причине: NaN в close проходит любую проверку вида
+    `close > порог` как False, то есть рынок разрешился бы исходом, который
+    никто не выбирал. Проверяются только те поля, которые здесь читаются (t и
+    c): строку с отсутствующим объёмом отбрасывать незачем — иначе ответ
+    съезжал бы на более старую минуту из-за поля, не участвующего в исходе."""
     interval_ms = RESOLUTION_MS["1m"]
     when_ms = int(when_s * 1000)
     candles = get_candles(market_id, "1m", 6, network, end_ms=when_ms + interval_ms)
-    completed = [c for c in candles if int(c["t"]) + interval_ms <= when_ms]
+    completed = []
+    for c in candles:
+        try:
+            t_ms = int(c["t"])
+            close = float(c["c"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        if t_ms + interval_ms > when_ms:
+            continue
+        if not math.isfinite(close) or close <= 0:
+            continue
+        completed.append((t_ms, close))
     if not completed:
         raise RuntimeError(
             f"нет закрытых минутных свечей к моменту {when_s} для market_id={market_id}"
         )
-    return float(completed[-1]["c"])
+    return max(completed, key=lambda row: row[0])[1]
 
 
 def usable_candles(candles: list) -> list:
