@@ -447,6 +447,17 @@ from the commit history rather than from a release.
   a freshly opened list.
 
 ### Changed
+- The tab strip shows its own overflow: at 390 px three of the nine panels sat
+  past the edge with nothing to suggest the list continues, so the right end
+  read as the end. The edge fade appears only while the strip is wider than the
+  window (e2e asserts both widths), and the active tab still scrolls to centre.
+- The backend banner names the reason instead of guessing: the `/ready` check
+  list (`redis: fail`) or the transport wording reaches the notice, because
+  «unavailable» about a service that answers 503 with its check list is a guess,
+  and a panel below it can simultaneously show that same service's error.
+- The Funding row in both READMEs no longer quotes rate and perp counts: they
+  move with the market (735/214 when written, 732/213 three weeks later) and the
+  panel prints the live numbers itself.
 - Fonts come from the bundle instead of `fonts.googleapis.com`: Inter, JetBrains
   Mono and Azeret Mono are shipped by `@fontsource-variable`, imported in
   `src/main.tsx`, and the page makes no third-party font request. The link was
@@ -719,6 +730,13 @@ from the commit history rather than from a release.
   blue for both buy and sell; it now reads the way the Terminal order ticket does.
 
 ### Removed
+- `mockups/wake-mockup.jsx` and `mockups/wake-web.jsx`: 1251 lines of invented
+  traders and PnL, imported by nothing, linted by nothing, while the README
+  states the screenshots are live captures «not mockups». A public repo
+  shipping fabricated numbers next to that sentence invites exactly the
+  misreading the sentence exists to prevent.
+- Root `screenshots/bot.png` and `screenshots/terminal.png`, unreferenced since
+  2026-10-07 and superseded by the per-panel set in `docs/screenshots/`.
 - `database.init_db()` and `database.is_connected()`. Neither had a caller: the
   schema comes from Alembic in production and from `testsupport.py`
   (`Base.metadata.create_all`) in tests, `/ready` runs a real `SELECT 1`, and
@@ -744,6 +762,13 @@ from the commit history rather than from a release.
   claim of an "optional KMS mode", which the removed file could not deliver.
 
 ### Fixed
+- Panels printed raw JSON whenever a backend answer was not the unified
+  envelope: `{"detail": "Not Found"}` from a service older than the error
+  format, and FastAPI's validation array, both reached the screen verbatim.
+  `detail` as a string or as `msg` items is now read into the message, and a
+  404/405 on a route this build knows is named as version skew — the live case
+  was Pages calling `/leaders/hydrated` against a Railway service deployed
+  before that route existed.
 - An unknown path answered FastAPI's default `{"detail": "Not Found"}` while
   every other error used `{"error": {code, message}}`: the handler was registered
   for `fastapi.HTTPException`, but routing raises Starlette's class, of which

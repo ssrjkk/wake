@@ -21,7 +21,7 @@ Captured from this build with live data (2026-10-25), not mockups. The backend-d
 | --- | --- |
 | ![Terminal](docs/screenshots/terminal-1440.png) | **Терминал** — the desk: quote in a display mono, hourly tick tape, candles, trade tape, order ticket, and a market list with a liquidity rank along each row. Public Lighter REST, no backend. |
 | ![Overview](docs/screenshots/overview-1440.png) | **Обзор** — ranking by real 24h quote volume, Arcus markets, open Predict markets. The ranking itself is a backend call, so the notice in the shot is the current production state. |
-| ![Funding](docs/screenshots/funding-1440.png) | **Funding** — 735 live rates across four venues and 214 Lighter perps, with the carry candidates where both legs exist on one exchange. |
+| ![Funding](docs/screenshots/funding-1440.png) | **Funding** — live rates from four venues (Lighter, Binance, Bybit, Hyperliquid) ranked by annualised yield, with the carry candidates where both legs exist on one exchange. The rate and perp counts move with the market, so the panel prints them itself rather than this sentence naming a number. |
 | ![Portfolio](docs/screenshots/portfolio-1440.png) | **Портфель** — subscriptions from the `follows` table and the Lighter account by L1 address; both empty states say what is missing and where to act. |
 | ![Discover](docs/screenshots/discover-1440.png) | **Discover** — leader directory with followers, AUM and the leader's own Lighter account. No leaders yet, and the panel names the backend address it tried. |
 | ![Earn](docs/screenshots/earn-1440.png) | **Earn** — subscription tier and trial state; the shot shows the publish gate, because there is no leader record yet. |

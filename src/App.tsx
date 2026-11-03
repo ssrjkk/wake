@@ -184,6 +184,11 @@ export default function App() {
   const [session, setSession] = useState<Session | null>(() => getSession());
   const [backend, setBackend] = useState<BackendHealth | null>(null);
   const [backendChecked, setBackendChecked] = useState(false);
+  // Причина отказа /ready: баннер обязан называть её, а не утверждать
+  // «недоступен» про сервис, который отвечает 503 с перечнем проверок.
+  const [backendReason, setBackendReason] = useState("");
+  // Лента вкладок шире окна: краю нужна подсказка, что список продолжается.
+  const [navOverflow, setNavOverflow] = useState(false);
   const [miniAppBusy, setMiniAppBusy] = useState(() => isTelegramWebView());
   const [walletBusy, setWalletBusy] = useState(false);
   const [leaderId, setLeaderId] = useState<string | null>(null);
@@ -203,8 +208,14 @@ export default function App() {
   // том, что значит «не отвечает».
   function probeBackendState() {
     probeBackend()
-      .then(setBackend)
-      .catch(() => setBackend(null))
+      .then((health) => {
+        setBackend(health);
+        setBackendReason("");
+      })
+      .catch((e) => {
+        setBackend(null);
+        setBackendReason(e instanceof Error ? e.message : String(e));
+      })
       .finally(() => setBackendChecked(true));
   }
 
@@ -374,6 +385,19 @@ export default function App() {
       active.offsetLeft - (bar.clientWidth - active.offsetWidth) / 2,
     );
   }, [tab]);
+
+  // Затемнение краёв ленты — только когда лента действительно не влезает: на
+  // широком окне девять подписей видны целиком, и подсказка про скролл врала бы.
+  useEffect(() => {
+    const bar = navRef.current;
+    if (!bar) return;
+    const update = () =>
+      setNavOverflow(bar.scrollWidth > bar.clientWidth + 1);
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(bar);
+    return () => observer.disconnect();
+  }, []);
 
   function switchNetwork(next: LighterNetwork) {
     setLighterNetwork(next);
@@ -874,7 +898,7 @@ export default function App() {
                     {backend
                       ? `бэкенд · ${backend.network} · ${backend.dry_run ? "dry-run" : "live"}`
                       : backendChecked
-                        ? "бэкенд недоступен"
+                        ? "бэкенд не готов"
                         : "бэкенд: проверяю…"}
                   </span>
                 </div>
@@ -1193,7 +1217,7 @@ export default function App() {
 
             <nav
               ref={navRef}
-              className="tabbar scrollbar-hide"
+              className={`tabbar scrollbar-hide${navOverflow ? " tabbar-overflow" : ""}`}
               aria-label="Основная навигация"
             >
               {TABS.map((t) => (
@@ -1213,9 +1237,15 @@ export default function App() {
             <div className="notice animate-fade-in">
               <ServerOff className="w-3.5 h-3.5 shrink-0" />
               <span>
-                Бэкенд Wake недоступен: работают Терминал, Funding и Портфель —
+                Бэкенд Wake не готов: работают Терминал, Funding и Портфель —
                 они читают публичный API Lighter. Копи-трейд, Predict, агент и
                 обзор рынка хранят состояние в базе Wake.
+                {backendReason && (
+                  <span className="notice-reason">
+                    {" "}
+                    Причина: {errorText(backendReason, 200)}
+                  </span>
+                )}
               </span>
               <details className="notice-more">
                 <summary>Почему так</summary>

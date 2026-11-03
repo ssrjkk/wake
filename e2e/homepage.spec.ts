@@ -93,6 +93,17 @@ test.describe("Оболочка приложения", () => {
     }
   });
 
+  // Девять панелей не влезают в 390 px: без затемнения края правый конец ленты
+  // выглядит концом списка, и три вкладки остаются ненайденными. Подсказка
+  // обязана исчезать там, где лента влезает целиком, иначе она врёт про скролл.
+  test("край ленты вкладок подсказывает про скролл только когда он есть", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/");
+    await expect(nav(page)).toHaveClass(/tabbar-overflow/);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await expect(nav(page)).not.toHaveClass(/tabbar-overflow/);
+  });
+
   test("Терминал рисует свечи и блокирует повторную отправку до ответа signing service", async ({ page }) => {
     const errors: string[] = [];
     page.on("pageerror", (error) => errors.push(error.message));

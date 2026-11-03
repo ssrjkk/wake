@@ -20,15 +20,39 @@ function signedOut() {
 
 // message из {error: {code, message}} — то, что бэкенд написал для человека;
 // голый JSON в тосте читается как поломка клиента.
-function backendMessage(body: string, status: number): string {
+const STARLETTE_DEFAULTS = new Set(["Not Found", "Method Not Allowed"]);
+
+function backendMessage(body: string, status: number, path: string): string {
+  let detail: string | null = null;
   try {
-    const parsed = JSON.parse(body) as { error?: { code?: string; message?: string } };
+    const parsed = JSON.parse(body) as {
+      error?: { code?: string; message?: string };
+      detail?: unknown;
+    };
     if (parsed.error?.message) {
       return parsed.error.code ? `${parsed.error.message} (${parsed.error.code})` : parsed.error.message;
+    }
+    // Тело без нашего конверта: {"detail": "..."} у сервиса старше единого
+    // формата ошибок и массив деталей у валидации FastAPI. Оба разбираются в
+    // человеческую строку, иначе панель печатает сырой JSON.
+    if (typeof parsed.detail === "string") detail = parsed.detail;
+    else if (Array.isArray(parsed.detail)) {
+      const msgs = parsed.detail
+        .map((item) => (item && typeof item === "object" && "msg" in item ? String((item as { msg: unknown }).msg) : ""))
+        .filter(Boolean);
+      if (msgs.length) detail = msgs.slice(0, 2).join("; ");
     }
   } catch {
     // тело не JSON (прокси, страница ошибки хостинга) — показываем его как есть
   }
+  // 404/405 на известный маршруту — это не «данных нет», а расхождение версий:
+  // сайт собран новее сервиса, который стоит по этому адресу. Дефолтная фраза
+  // Starlette («Not Found») ничего человеку не объясняет, а осмысленный detail
+  // (например «нет ставок funding по символу X») остаётся собой.
+  if ((status === 404 || status === 405) && (detail === null || STARLETTE_DEFAULTS.has(detail))) {
+    return `Бэкенд Wake не знает маршрут ${path} (${status}): сервис по этому адресу старше сборки сайта — обновите его или укажите другой адрес.`;
+  }
+  if (detail) return detail;
   return body || `Бэкенд Wake ${status}`;
 }
 
@@ -67,12 +91,12 @@ export async function backendJson<T>(path: string, init?: RequestInit): Promise<
     // Токен просрочен или подписан другим секретом: держать его дальше нельзя,
     // каждый следующий запрос получил бы тот же 401.
     signedOut();
-    throw new Error(backendMessage(await readText(res), res.status));
+    throw new Error(backendMessage(await readText(res), res.status, path));
   }
   if (!res.ok) {
     // Текст ошибки от бэкенда говорящий (409 «рынок уже резолвлен», 400 «недостаточно
     // shares»), поэтому он идёт в сообщение, а не голый код состояния.
-    throw new Error(backendMessage(await readText(res), res.status));
+    throw new Error(backendMessage(await readText(res), res.status, path));
   }
   try {
     return (await res.json()) as T;
@@ -103,9 +127,24 @@ export function errorText(e: unknown, max = 140): string {
 
 export type BackendHealth = { status: "ok"; network: string; dry_run: boolean };
 
+export type BackendReady = { status: string; checks?: Record<string, string> };
+
 export async function probeBackend(): Promise<BackendHealth> {
   const health = await backendJson<BackendHealth>("/health", { signal: AbortSignal.timeout(5000) });
-  const ready = await backendJson<{ status: string }>("/ready", { signal: AbortSignal.timeout(5000) });
-  if (ready.status !== "ready") throw new Error("Бэкенд Wake не готов");
+  // /ready читается напрямую, а не через backendJson: его отказ — штатный ответ
+  // (503 с перечнем проверок), а не ошибка транспорта, и перечень нужен баннеру,
+  // чтобы назвать причину, а не утверждать «недоступен» про отвечающий сервис.
+  const res = await fetch(`${BACKEND_URL}/ready`, { signal: AbortSignal.timeout(5000) });
+  const ready = (await res.json().catch(() => null)) as BackendReady | null;
+  if (!ready || ready.status !== "ready") {
+    const failing = Object.entries(ready?.checks ?? {})
+      .filter(([, state]) => state !== "ok")
+      .map(([name, state]) => `${name}: ${state}`);
+    throw new Error(
+      failing.length
+        ? `Бэкенд Wake отвечает, но не готов — ${failing.join(", ")}`
+        : "Бэкенд Wake отвечает, но не готов"
+    );
+  }
   return health;
 }

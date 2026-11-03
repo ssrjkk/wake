@@ -108,10 +108,10 @@ Four rules the suite enforces on itself (the first three come from `backend/test
 npm ci
 npm run lint                      # ESLint over src/, e2e/ and the config files
 npx tsc --noEmit
-npm run test:run                  # vitest: 271 tests in 20 files
+npm run test:run                  # vitest: 278 tests in 21 files
 node scripts/brand-assets.mjs       # re-render public/og.png and apple-touch-icon.png
 npm run build
-PW_PORT=5178 npx playwright test  # 71 tests; first run needs `npx playwright install chromium`
+PW_PORT=5178 npx playwright test  # 72 tests; first run needs `npx playwright install chromium`
 ```
 
 `src/components/theme.gate.test.ts` keeps the panel honest about its own style:
@@ -419,10 +419,10 @@ python -m pytest . -q
 npm ci
 npm run lint                      # ESLint по src/, e2e/ и конфигам
 npx tsc --noEmit
-npm run test:run                  # vitest: 271 тест в 20 файлах
+npm run test:run                  # vitest: 278 тестов в 21 файле
 node scripts/brand-assets.mjs       # перерендерить public/og.png и apple-touch-icon.png
 npm run build
-PW_PORT=5178 npx playwright test  # 71 тест; первый прогон требует `npx playwright install chromium`
+PW_PORT=5178 npx playwright test  # 72 теста; первый прогон требует `npx playwright install chromium`
 ```
 
 `src/components/theme.gate.test.ts` следит за стилем самой панели: ни градиентов,
