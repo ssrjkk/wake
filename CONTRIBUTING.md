@@ -86,7 +86,7 @@ alembic check
 
 ## Tests
 
-**Backend** — one command, 668 tests (667 passed, 1 skipped), against a real PostgreSQL:
+**Backend** — one command, 696 tests (695 passed, 1 skipped), against a real PostgreSQL:
 
 ```bash
 cd backend
@@ -397,7 +397,7 @@ alembic check
 
 ## Тесты
 
-**Бэкенд** — одна команда, 668 тестов (667 прошли, 1 пропущен), против настоящего PostgreSQL:
+**Бэкенд** — одна команда, 696 тестов (695 прошли, 1 пропущен), против настоящего PostgreSQL:
 
 ```bash
 cd backend
