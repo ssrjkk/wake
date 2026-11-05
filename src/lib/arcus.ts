@@ -50,6 +50,9 @@ export type ArcusMarket = {
   category?: string;
   minOrderSize?: string;
   maxOrderSize?: string;
+  fundingRate?: string;
+  markPrice?: string;
+  minOrderNotional?: string;
 };
 
 export function isArcusPerp(m: ArcusMarket): boolean {
@@ -62,6 +65,30 @@ export function isArcusPerp(m: ArcusMarket): boolean {
  *  была серой и подписывалась сырым "online". */
 export function isArcusOnline(m: ArcusMarket): boolean {
   return m.status === "ONLINE";
+}
+
+/** Годовая ставка из почасовой, которую отдаёт /v1/markets.
+ *
+ * Arcus начисляет funding раз в час («Funding is charged once an hour»), и для
+ * крипты годовая = ставка × 24 × 365. Для RWA база задаётся иначе:
+ * «sofr_rate_hourly = (SOFR + 0.5%) / 360 / 24» — то есть год там 360 дней.
+ * Умножать почасовую ставку акции на 365 значит завысить годовую на ~1.4 %
+ * ровно на том рынке, где ставка и так копеечная. Знаменатель берётся из
+ * категории рынка, а ставка — из API, а не пересчитывается нами. */
+export function arcusFundingHourly(m: ArcusMarket): number | null {
+  const raw = m.fundingRate;
+  // Number('') === 0 и Number(null) === 0: пустое поле иначе печаталось бы как
+  // «ставка нуля», а это утверждение о рынке, у которого ставки просто нет.
+  if (typeof raw !== "string" || raw.trim() === "") return null;
+  const rate = Number(raw);
+  return Number.isFinite(rate) ? rate : null;
+}
+
+export function arcusAnnualizedFunding(m: ArcusMarket): number | null {
+  const rate = arcusFundingHourly(m);
+  if (rate === null) return null;
+  const daysPerYear = m.category === "CRYPTO" ? 365 : 360;
+  return rate * 24 * daysPerYear;
 }
 
 export async function getMarkets(): Promise<ArcusMarket[]> {

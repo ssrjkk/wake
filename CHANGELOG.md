@@ -10,6 +10,14 @@ from the commit history rather than from a release.
 ## [Unreleased]
 
 ### Added
+- Обзор читает funding Robinhood Chain, а не только mid-цены: `/v1/markets`
+  отдаёт почасовую ставку на каждый рынок, и панель показывает её и годовую.
+  Годовая считается по конвенции класса актива — 24 × 365 для крипты и 24 × 360
+  для RWA: база RWA задаётся как `(SOFR + 0.5%) / 360 / 24`, и умножение на 365
+  поднимало бы 4.44 % до 4.50 % ровно там, где вся ставка меньше одного
+  процента. Пять тестов на замеренных значениях (ETH `0.0000125`/ч → 10.95 %,
+  AMD `0.000005138888888888`/ч → 4.44 %), включая то, что `fundingRate: "0"` —
+  это ноль, а не отсутствие ставки, и что пустое поле не превращается в `0`.
 - `mirror_positions` and `leader_tracker_state` (migration 005). The mirrored size
   was one number on `follows`, which is the wrong shape for a book that spans
   markets; it now lives per (follow, market), and the old column is dropped after
@@ -762,6 +770,21 @@ from the commit history rather than from a release.
   claim of an "optional KMS mode", which the removed file could not deliver.
 
 ### Fixed
+- Баннер печатал техническое `signal timed out`: `/ready` в `probeBackend`
+  читался прямым `fetch` и проходил мимо human-маппинга, который для остальных
+  путей существовал именно ради этой строки. Маппинг стал одной функцией на оба
+  пути, а бюджет опроса поднят с 5 с до 10 по замеру с живой страницы: у одного
+  origin браузер держит шесть соединений, опрос стоит в той же очереди, что
+  `/markets/overview` и `/predict/markets`, и второй `/ready` ждал 4.03 с там,
+  где сервис отвечал за 1.0 с — пять секунд мерили очередь сокетов и обвиняли
+  сервис.
+- Фикстура Arcus в e2e изобретала SPOT-рынки: `type` чередовался PERPETUAL /
+  SPOT, хотя живой `/v1/markets` (замер 2026-11-03) знает только PERPETUAL —
+  81 рынок из 81. Панель печатала колонку «Тип» по этому различию, и тесты
+  закрепляли то, чего площадка не отдаёт. Колонка стала «Классом»
+  (CRYPTO / EQUITIES / COMMODITIES / INDICES — полем, которое действительно
+  меняется), строка над таблицей описывает живые данные, а счётчики фикстур
+  пересняты (81 рынок Arcus, 732 строки funding-ставок).
 - Panels printed raw JSON whenever a backend answer was not the unified
   envelope: `{"detail": "Not Found"}` from a service older than the error
   format, and FastAPI's validation array, both reached the screen verbatim.

@@ -186,6 +186,22 @@ describe('backendJson', () => {
     await expect(probeBackend()).rejects.toThrow('не готов')
   })
 
+  // Опрос идёт своим бюджетом (10 с), а не бюджетом рабочего запроса (15 с):
+  // он спрашивает про сервис, который может быть не поднят. Техническое
+  // "signal timed out" баннер печатать не должен вовсе — это ровно то
+  // сообщение, ради которого human-маппинг и существует.
+  it('names a /ready timeout in human words and with its own budget', async () => {
+    const timeout = new Error('signal timed out')
+    timeout.name = 'TimeoutError'
+    fetchMock
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ status: 'ok', network: 'mainnet', dry_run: true }) })
+      .mockRejectedValueOnce(timeout)
+    const message = await expectError(() => probeBackend())
+    expect(message).toContain('нет ответа за 10 с')
+    expect(message).not.toContain('signal timed out')
+    expect(message).not.toContain('15 с')
+  })
+
   // Сервис старше сборки сайта отвечает на известный маршрут дефолтной фразой
   // Starlette: человек видит «Not Found» и не понимает, что обновлять. Живой кейс:
   // Pages с /leaders/hydrated против Railway без этого маршрута.

@@ -5,9 +5,9 @@
 // краснеет без причины. Замеры снимались 2026-10-26:
 //
 //   curl https://mainnet.zklighter.elliot.ai/api/v1/orderBooks?filter=all  → 246 rows, 187 KB, 32 поля
-//   curl https://mainnet.zklighter.elliot.ai/api/v1/funding-rates          → 733 rows, 52,7 KB
+//   curl https://mainnet.zklighter.elliot.ai/api/v1/funding-rates          → 732 rows (пересъёмка 2026-11-03)
 //   backend: len(MAJOR_PERPS)                                              → 18
-//   src/lib/arcus.ts (замер 2026-10-24, подтверждён тем же curl-путём)     → 70 рынков
+//   curl https://api.arcus.xyz/v1/markets                                  → 81 рынок (пересъёмка 2026-11-03)
 //
 // Форма поля повторяет захваченный ответ слово в слово (включая числа
 // СТРОКАМИ — lighter отдаёт fees/OI/min_base_amount строками, и Number()-коэрция
@@ -21,11 +21,11 @@ export const MEASURED = {
   /** Из них status=active: неактивные фронт показывает, но не в рельсе. */
   orderBookActive: 226,
   /** GET /api/v1/funding-rates — по одной строке на (рынок, площадка). */
-  fundingRows: 733,
+  fundingRows: 732,
   /** MAJOR_PERPS в backend/lighter_rest.py — ранжируемый список /markets/overview. */
   overviewRows: 18,
   /** GET https://api.arcus.xyz/v1/markets. */
-  arcusMarkets: 70,
+  arcusMarkets: 81,
   /** Terminal.tsx: getCandles(id, "1h", 48) — 48 свечей на график. */
   candles: 48,
   /** Terminal.tsx: getRecentTrades(marketId, N) — лента сделок. */
@@ -159,6 +159,13 @@ function tradeRows(n: number) {
 
 function arcusMarketRow(i: number) {
   const symbol = wideSymbol(i);
+  // Живой /v1/markets (замер 2026-11-03) знает один type — "PERPETUAL": рынок
+  // акций это тоже перп, а не спот. Прежняя фикстура чередовала PERPETUAL/SPOT,
+  // и панель показывала различие, которого площадка не отдаёт вовсе.
+  const category = ["CRYPTO", "EQUITIES", "COMMODITIES", "INDICES"][i % 4];
+  // Ставки — живого порядка: крипта 0.0000125/час (≈10.95 % годовых по базе),
+  // RWA ≈0.0000051/час (SOFR + 0.5 % по 360-дневной конвенции).
+  const fundingRate = category === "CRYPTO" ? "0.0000125" : "0.000005138888888888";
   return {
     marketDisplayName: `${symbol}-USD`,
     marketId: i + 1,
@@ -167,8 +174,11 @@ function arcusMarketRow(i: number) {
     quoteAsset: "USD",
     tickSize: "0.01",
     stepSize: "0.00001",
-    type: i % 5 === 4 ? "SPOT" : "PERPETUAL",
-    category: "CRYPTO",
+    type: "PERPETUAL",
+    category,
+    fundingRate,
+    markPrice: String(80_000 - i * 100),
+    minOrderNotional: "5",
     minOrderSize: "10",
     maxOrderSize: "100000",
   };
