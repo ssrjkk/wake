@@ -32,7 +32,7 @@ Response timeline:
 Verification compares the signature with `hmac.compare_digest` before it looks at
 `exp`. The secret is `WAKE_SESSION_SECRET`; with no secret configured the server
 answers 503 (`SESSION_NOT_CONFIGURED`) rather than signing with a guessable key.
-TTL is `WAKE_SESSION_TTL_DAYS`, validated to 1–180 days, default 30.
+TTL is `WAKE_SESSION_TTL_DAYS`, validated to 1–30 days, default 7.
 
 There is no revocation list. A token is valid until it expires; what it opens is
 a non-custodial terminal — positions, follows, subscription state — not a way out
@@ -413,7 +413,7 @@ dry-run-инстанс), видимый эффект, предложение п�
 Подпись сравнивается через `hmac.compare_digest` до того, как смотрятся на `exp`.
 Секрет — `WAKE_SESSION_SECRET`; без него сервер отвечает 503
 (`SESSION_NOT_CONFIGURED`), а не подписывает угадываемым ключом. Срок —
-`WAKE_SESSION_TTL_DAYS`, валидируется в диапазоне 1–180, по умолчанию 30.
+`WAKE_SESSION_TTL_DAYS`, валидируется в диапазоне 1–30, по умолчанию 7.
 
 Отзыва нет: токен живёт до истечения. Что он открывает — некастодиальный
 терминал (позиции, подписки, состояние подписки), а не способ вывести деньги на

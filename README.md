@@ -5,7 +5,7 @@ Trading terminal for [Lighter](https://lighter.xyz) (zk perp DEX): a React web a
 Default configuration is **mainnet** with `WAKE_DRY_RUN=true`: real market data from the real network, and no order ever leaves the process until you turn dry-run off yourself.
 
 Live frontend: https://wake-7k6.pages.dev  
-Live backend: https://wake-backend-production-3483.up.railway.app — `/health` answers `{"status":"ok","network":"mainnet","dry_run":true}`, `/ready` currently answers 503 (`database: fail, redis: fail`): the process is deployed, the PostgreSQL and Redis services are not attached to it yet. Market-data panels work; sign-in, copy trading and Predict do not. [docs/RAILWAY_DEPLOY.md](docs/RAILWAY_DEPLOY.md) is the path from this state to a ready one.
+Live backend: https://wake-backend-production-3483.up.railway.app — its current state is one `curl` away, not a paragraph: `curl -s …/health` answers whether the process is deployed at all, `curl -s …/ready` names the missing dependency (`database`, `redis`). The division of panels follows that answer: market data works without the Wake backend, sign-in, copy trading and Predict do not. [docs/RAILWAY_DEPLOY.md](docs/RAILWAY_DEPLOY.md) is the path from a not-ready service to a ready one.
 
 ## Contact
 
@@ -15,7 +15,7 @@ Live backend: https://wake-backend-production-3483.up.railway.app — `/health` 
 
 ## Screens
 
-Captured from this build with live data (2026-11-03 for the Overview panel, 2026-10-25 for the rest), not mockups. Panels that need the Wake backend show its not-ready state on purpose: the process answers `/health` but reports `/ready` not ready until PostgreSQL and Redis are attached, and a screenshot with invented numbers would be worse than an honest empty state.
+Captured from this build with live data (2026-11-03 for the Overview panel, 2026-10-25 for the rest), not mockups. Panels that need the Wake backend show its degraded state on purpose: the backend is a separate service, and until PostgreSQL and Redis are attached it answers `/health` while `/ready` reports the failing check — or it does not answer at all when the deployment is stopped. A screenshot with invented numbers would be worse than an honest empty state.
 
 | | |
 | --- | --- |
@@ -228,7 +228,7 @@ Price markets close themselves at the deadline only while this process runs; oth
 # backend — run from backend/; needs a scratch PostgreSQL database
 createdb wake_test
 export WAKE_TEST_DATABASE_URL=postgresql+asyncpg://wake:wake@localhost:5432/wake_test
-python -m unittest discover        # 696 tests, all through discovery
+python -m unittest discover        # 704 tests, all through discovery
 python -m pytest -q                # the same set under pytest (+ Allure in CI)
 
 # frontend
@@ -242,7 +242,7 @@ PW_PORT=5178 npx playwright test
 
 `test_api_smoke.py` walks every API route over HTTP against a real PostgreSQL, including the parts of the security model that are easy to lose silently: no token, forged token, expired token, another user's record, a replayed wallet signature, a curator endpoint without the header. A route that regresses from 403 to 200 fails there, not on the first click.
 
-The interface is checked with numbers too. `theme.gate.test.ts` computes WCAG contrast from the theme's own values — text on every panel surface, dark ink on a filled status chip, and each status label against its own translucent underlay — and fails on a colour literal outside the palette, `rgba()` included. `e2e/design-gate.spec.ts` measures clipping, contrast on composited backgrounds (through every translucent layer and the ancestor `opacity` chain), focus rings under real Tab navigation, touch targets under both a finger and a pointer, `::placeholder`, and whether the document pans sideways — at four widths, and again at 320 px with the type scale doubled. `e2e/render-budget.spec.ts` budgets nodes, page height, mounted rows and requests per panel; virtualisation is measured as geometry (rendered row pitch, the scroll range it promises, and whether the last row is reachable), and render cost is budgeted in **frames** rather than milliseconds, because the same build swings 295–1 079 ms per open on a busy laptop while staying at two frames. Their fixtures carry the row counts measured from live provider responses — Lighter's book is 246 markets, its funding endpoint 733 rows — plus a worst-case contour with 24-character tickers and seven-digit prices, which asserts the extreme value reached the screen before measuring it. A budget set on invented, plausible data catches nothing.
+The interface is checked with numbers too. `theme.gate.test.ts` computes WCAG contrast from the theme's own values — text on every panel surface, dark ink on a filled status chip, and each status label against its own translucent underlay — and fails on a colour literal outside the palette, `rgba()` included. `e2e/design-gate.spec.ts` measures clipping, contrast on composited backgrounds (through every translucent layer and the ancestor `opacity` chain), focus rings under real Tab navigation, touch targets under both a finger and a pointer, `::placeholder`, and whether the document pans sideways — at four widths, and again at 320 px with the type scale doubled. `e2e/render-budget.spec.ts` budgets nodes, page height, mounted rows and requests per panel; virtualisation is measured as geometry (rendered row pitch, the scroll range it promises, and whether the last row is reachable), and render cost is budgeted in **frames** rather than milliseconds, because the same build swings 295–1 079 ms per open on a busy laptop while staying at two frames. Their fixtures carry the row counts measured from live provider responses — the numbers and the commands that produced them live in `MEASURED` in `e2e/fixtures.ts` and are deliberately not repeated here, because they move with the market — plus a worst-case contour with 24-character tickers and seven-digit prices, which asserts the extreme value reached the screen before measuring it. A budget set on invented, plausible data catches nothing.
 
 ## Architecture
 

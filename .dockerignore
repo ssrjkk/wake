@@ -10,8 +10,7 @@ dist/
 public/
 src/
 e2e/
-mockups/
-screenshots/
+docs/
 coverage/
 test-results/
 playwright-report/
@@ -22,7 +21,6 @@ package-lock.json
 eslint.config.js
 playwright.config.ts
 postcss.config.js
-tailwind.config.js
 tsconfig.json
 vite.config.ts
 vitest.config.ts
@@ -45,11 +43,8 @@ backend/.env.*
 Dockerfile
 docker-compose.yml
 LICENSE
-Procfile
 *.md
 railway.json
-runtime.txt
-wrangler.toml
 backend/__pycache__/
 backend/.pytest_cache/
 backend/.ruff_cache/

@@ -2,12 +2,17 @@
 //
 // Каждое число здесь — замер живого ответа, а не предположение: проверка,
 // построенная на выдуманном объёме, либо не ловит реальную просадку, либо
-// краснеет без причины. Замеры снимались 2026-10-26:
+// краснеет без причины. Последний снимок — 2026-11-06:
 //
-//   curl https://mainnet.zklighter.elliot.ai/api/v1/orderBooks?filter=all  → 246 rows, 187 KB, 32 поля
-//   curl https://mainnet.zklighter.elliot.ai/api/v1/funding-rates          → 732 rows (пересъёмка 2026-11-03)
+//   curl https://mainnet.zklighter.elliot.ai/api/v1/orderBooks?filter=all  → 246 rows, 225 из них active, 32 поля
+//   curl https://mainnet.zklighter.elliot.ai/api/v1/funding-rates          → 732 rows
 //   backend: len(MAJOR_PERPS)                                              → 18
-//   curl https://api.arcus.xyz/v1/markets                                  → 81 рынок (пересъёмка 2026-11-03)
+//   curl https://api.arcus.xyz/v1/markets                                  → 81 рынок, 74 ONLINE
+//
+// Эти же числа не живут ни в одном другом файле: README и CONTRIBUTING ссылаются
+// на MEASURED, а не пересказывают его, потому что объёмы двигаются вместе с
+// рынком, и четвёртая копия числа расходится с первой в течение пары недель
+// (было 733 и 70 в доках при 732 и 81 в фикстурах).
 //
 // Форма поля повторяет захваченный ответ слово в слово (включая числа
 // СТРОКАМИ — lighter отдаёт fees/OI/min_base_amount строками, и Number()-коэрция
@@ -19,7 +24,7 @@ export const MEASURED = {
   /** GET /api/v1/orderBooks?filter=all — все строки книги, активные и нет. */
   orderBookRows: 246,
   /** Из них status=active: неактивные фронт показывает, но не в рельсе. */
-  orderBookActive: 226,
+  orderBookActive: 225,
   /** GET /api/v1/funding-rates — по одной строке на (рынок, площадка). */
   fundingRows: 732,
   /** MAJOR_PERPS в backend/lighter_rest.py — ранжируемый список /markets/overview. */

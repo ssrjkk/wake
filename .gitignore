@@ -22,13 +22,9 @@ backend/*.enc
 
 # Logs
 *.log
-cloudflared.log
 
 # Linter / tool caches
 .ruff_cache/
-
-# Generated images / mockups
-vibe_images/
 
 # OS
 .DS_Store

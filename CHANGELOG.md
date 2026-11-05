@@ -10,6 +10,29 @@ from the commit history rather than from a release.
 ## [Unreleased]
 
 ### Added
+- `backend/test_api_contract.py` — каждый путь, который фронтенд просит у
+  Wake-бэкенда и у сервиса подписи, обязан существовать в реестре маршрутов
+  той стороны. Класс ловли — вчерашний прода: Pages звал `/leaders/hydrated`,
+  задеплоенный Railway был старше этого маршрута, и ни один тест этого не
+  видел: юниты знают свои строки путей, e2e работает на заглушках, а смоук
+  бэкенда проверяет роуты, которые знает бэкенд, а не те, что просит фронтенд.
+  Сканер читает места вызова (`backendJson`, `${BACKEND_URL}`,
+  `${SIGNING_SERVICE_URL}`) разбором кавычек с балансом `${}` — наивный regex
+  съедал `${paused ? "resume" : "pause"}` и превращал сверку в сравнение
+  мусора. Реестр берётся из OpenAPI-схемы: в fastapi 0.143 включённые роутеры
+  лежат за объектами `_IncludedRouter` без `.path`, и сбор по `.routes` дал бы
+  две строки на сорок с лишним маршрутов — зелёный тест, сверяющий пустоту с
+  пустотой. Обе стороны обязаны быть непустыми.
+- `src/lib/tabs.test.ts` — последний непокрытый модуль (`tabs.ts`) оказался
+  местом, где ошибка молчит: вкладка в списке без ветки рендера в App.tsx —
+  это кнопка на пустой экран, а десятая вкладка физически остаётся без горячей
+  клавиши (обработчик знает 1..9). Тест сверяет список с App.tsx и с TAB_IDS в
+  deeplink.ts; мутация «добавить ledger» ловится обоими.
+- `starlette` объявлена в `backend/requirements.txt`: её импортируют семь
+  модулей (HTTPException в app.py, `run_in_threadpool` в роутерах и в
+  листенере), а приходила она только транзитом от fastapi — смена или
+  исчезновение пакета уронили бы импорт в проде, и смотреть в манифесте было
+  бы не на что. Нижняя граница — та же, что требует fastapi (0.46.0).
 - `backend/arcus_orders.py` — правила кодирования ордеров Arcus, вынесенные
   отдельно от сети и ключей: цена и размер как целые числа тиков движка
   (`tickSize`/`stepSize`, не-кратность — отказ, а не округление), канонический
@@ -751,6 +774,12 @@ from the commit history rather than from a release.
   blue for both buy and sell; it now reads the way the Terminal order ticket does.
 
 ### Removed
+- Пять npm-зависимостей, которые не импортировал ни один файл:
+  `class-variance-authority`, `clsx`, `tailwind-merge`, `framer-motion` и
+  `@testing-library/user-event` — наследие библиотеки компонентов эпохи
+  shadcn, пережившее сами компоненты. `npm ci` стал легче на семь пакетов,
+  `npm audit --omit=dev` — по-прежнему ноль. `viem` и `@testing-library/dom`
+  остались намеренно: это peer-требования wagmi и jest-dom, а не мёртвый вес.
 - `mockups/wake-mockup.jsx` and `mockups/wake-web.jsx`: 1251 lines of invented
   traders and PnL, imported by nothing, linted by nothing, while the README
   states the screenshots are live captures «not mockups». A public repo
@@ -783,6 +812,27 @@ from the commit history rather than from a release.
   claim of an "optional KMS mode", which the removed file could not deliver.
 
 ### Fixed
+- Документы утверждали факты, которые уже устарели, и противоречили друг
+  другу. SECURITY.md (оба языка) описывал `WAKE_SESSION_TTL_DAYS` как
+  «1–180 дней, по умолчанию 30», тогда как config валидирует 1–30 и держит 7,
+  а список известных пробелов в README рядом говорил про «default is 7 days
+  with a hard ceiling of 30» — то есть пара файлов документировала два разных
+  срока жизни токена. Живое состояние прода тоже стало фактом в доке: строка
+  бэкенда в README описывала «/health отвечает ok, /ready отвечает 503
+  (database fail, redis fail)», а на следующий день сервис перестал быть
+  развёрнут вовсе (edge отвечает `Application not found`). Текст про uptime
+  убран, вместо него команда, которая отвечает на это сегодня:
+  `curl …/health` и `curl …/ready`.
+- Объёмы фикстур e2e были продублированы числами в README и CONTRIBUTING, и
+  эти числа разъехались: в доках 733 строки ставок и 70 рынков Arcus, в
+  `MEASURED` — уже 732 и 81. Значения теперь живут в одном месте, доки
+  ссылаются на него, а фикстуры пересняты сегодня (246 строк книги, 225
+  активных, 732 ставки, 81 рынок).
+- `.dockerignore` и `.railwayignore` перечисляли файлы, которых в репозитории
+  больше нет (`mockups/`, корневые `screenshots/`, `tailwind.config.js`,
+  `Procfile`, `runtime.txt`, `wrangler.toml`), `.gitignore` повторял `*.log`
+  отдельной строкой `cloudflared.log`, а `docs/` (1.3 МБ снимков) ехал в
+  контекст сборки бэкенда впустую.
 - Баннер печатал техническое `signal timed out`: `/ready` в `probeBackend`
   читался прямым `fetch` и проходил мимо human-маппинга, который для остальных
   путей существовал именно ради этой строки. Маппинг стал одной функцией на оба

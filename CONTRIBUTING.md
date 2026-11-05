@@ -86,7 +86,7 @@ alembic check
 
 ## Tests
 
-**Backend** — one command, 696 tests (695 passed, 1 skipped), against a real PostgreSQL:
+**Backend** — one command, 704 tests (703 passed, 1 skipped), against a real PostgreSQL:
 
 ```bash
 cd backend
@@ -108,7 +108,7 @@ Four rules the suite enforces on itself (the first three come from `backend/test
 npm ci
 npm run lint                      # ESLint over src/, e2e/ and the config files
 npx tsc --noEmit
-npm run test:run                  # vitest: 284 tests in 21 files
+npm run test:run                  # vitest: 288 tests in 22 files
 node scripts/brand-assets.mjs       # re-render public/og.png and apple-touch-icon.png
 npm run build
 PW_PORT=5178 npx playwright test  # 72 tests; first run needs `npx playwright install chromium`
@@ -168,10 +168,13 @@ the word the pass failed on at 215.5 px, the runner's DejaVu fallback set it at
 265 px inside a 262 px paragraph, and `.14em` brings Inter to 266. The mutation
 is the proof — remove `overflow-wrap: anywhere` and the pass goes red on that
 same paragraph. The data behind those panels comes from
-`e2e/fixtures.ts`, whose row counts are measured from live responses (Lighter
-`/orderBooks` 246 rows, `/funding-rates` 733, Arcus `/markets` 70, the backend's
-`MAJOR_PERPS` 18, the `/mirror-log` ceiling 200) — a budget test on invented
-volumes either misses the real slowdown or fails without cause.
+`e2e/fixtures.ts`, whose row counts are measured from live responses — the
+numbers and the `curl` commands that produced them live in `MEASURED` at the top
+of that file, and this document deliberately does not copy them: the volumes move
+with the market, and a fourth copy of a number diverges from the first within a
+couple of weeks (the docs said 733 funding rows and 70 Arcus markets while the
+fixtures already measured 732 and 81). A budget test on invented volumes either
+misses the real slowdown or fails without cause.
 
 `e2e/render-budget.spec.ts` then puts numbers on what those volumes cost: nodes
 per panel, page height, mounted rows in the market picker (windowed, not all
@@ -397,7 +400,7 @@ alembic check
 
 ## Тесты
 
-**Бэкенд** — одна команда, 696 тестов (695 прошли, 1 пропущен), против настоящего PostgreSQL:
+**Бэкенд** — одна команда, 704 теста (703 прошли, 1 пропущен), против настоящего PostgreSQL:
 
 ```bash
 cd backend
@@ -419,7 +422,7 @@ python -m pytest . -q
 npm ci
 npm run lint                      # ESLint по src/, e2e/ и конфигам
 npx tsc --noEmit
-npm run test:run                  # vitest: 284 теста в 21 файле
+npm run test:run                  # vitest: 288 тестов в 22 файлах
 node scripts/brand-assets.mjs       # перерендерить public/og.png и apple-touch-icon.png
 npm run build
 PW_PORT=5178 npx playwright test  # 72 теста; первый прогон требует `npx playwright install chromium`
@@ -481,10 +484,12 @@ Inter рисует слово, на котором прогон падал, за
 Sans — за 265 px в абзаце шириной 262 px, а `.14em` доводит Inter до 266.
 Доказательство чувствительности — мутация: убери `overflow-wrap: anywhere`, и
 прогон краснеет ровно на этом абзаце. Данные для панелей берёт
-`e2e/fixtures.ts`, а объёмы в нём — замеры живых ответов (Lighter `/orderBooks` —
-246 строк, `/funding-rates` — 733, Arcus `/markets` — 70, `MAJOR_PERPS` бэкенда —
-18, потолок `/mirror-log` — 200): бюджет на выдуманном объёме либо не замечает
-настоящую просадку, либо краснеет без причины.
+`e2e/fixtures.ts`, а объёмы в нём — замеры живых ответов; сами числа и `curl`-команды,
+которые их дали, лежат в `MEASURED` в начале этого файла, и этот документ их
+сознательно не копирует: объёмы двигаются вместе с рынком, и четвёртая копия числа
+разъезжается с первой за пару недель (в доках значилось 733 строки ставок и 70
+рынков Arcus, когда в фикстурах уже было 732 и 81). Бюджет на выдуманном объёме
+либо не замечает настоящую просадку, либо краснеет без причины.
 
 `e2e/render-budget.spec.ts` ставит числа на то, сколько этот объём стоит: узлов
 на панель, высота страницы, сколько строк окна рынка живёт в DOM (окно, а не все
