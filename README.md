@@ -5,7 +5,7 @@ Trading terminal for [Lighter](https://lighter.xyz) (zk perp DEX): a React web a
 Default configuration is **mainnet** with `WAKE_DRY_RUN=true`: real market data from the real network, and no order ever leaves the process until you turn dry-run off yourself.
 
 Live frontend: https://wake-7k6.pages.dev  
-Live backend: https://wake-backend-production-3483.up.railway.app — `/health` answers `{"status":"ok","network":"mainnet","dry_run":true}`, `/ready` currently answers 503 (`database: fail, redis: fail`): the process is deployed, the PostgreSQL and Redis services are not attached to it yet. Market-data panels work; sign-in, copy trading and Predict do not. [docs/RAILWAY_DEPLOY.md](docs/RAILWAY_DEPLOY.md) is the path from this state to a ready one.
+Live backend: https://wake-backend-production-3483.up.railway.app — its current state is one `curl` away, not a paragraph: `curl -s …/health` answers whether the process is deployed at all, `curl -s …/ready` names the missing dependency (`database`, `redis`). The division of panels follows that answer: market data works without the Wake backend, sign-in, copy trading and Predict do not. [docs/RAILWAY_DEPLOY.md](docs/RAILWAY_DEPLOY.md) is the path from a not-ready service to a ready one.
 
 ## Contact
 
@@ -15,13 +15,13 @@ Live backend: https://wake-backend-production-3483.up.railway.app — `/health` 
 
 ## Screens
 
-Captured from this build with live data (2026-10-25), not mockups. The backend-dependent panels show the "backend unavailable" state on purpose: the deployed process answers `/health` but not `/ready` until PostgreSQL and Redis are attached, and a screenshot with invented numbers would be worse than an honest empty state.
+Captured from this build with live data (2026-11-03 for the Overview panel, 2026-10-25 for the rest), not mockups. Panels that need the Wake backend show its degraded state on purpose: the backend is a separate service, and until PostgreSQL and Redis are attached it answers `/health` while `/ready` reports the failing check — or it does not answer at all when the deployment is stopped. A screenshot with invented numbers would be worse than an honest empty state.
 
 | | |
 | --- | --- |
 | ![Terminal](docs/screenshots/terminal-1440.png) | **Терминал** — the desk: quote in a display mono, hourly tick tape, candles, trade tape, order ticket, and a market list with a liquidity rank along each row. Public Lighter REST, no backend. |
-| ![Overview](docs/screenshots/overview-1440.png) | **Обзор** — ranking by real 24h quote volume, Arcus markets, open Predict markets. The ranking itself is a backend call, so the notice in the shot is the current production state. |
-| ![Funding](docs/screenshots/funding-1440.png) | **Funding** — 735 live rates across four venues and 214 Lighter perps, with the carry candidates where both legs exist on one exchange. |
+| ![Overview](docs/screenshots/overview-1440.png) | **Обзор** — ranking by real 24h quote volume, Arcus markets, open Predict markets. The ranking itself is a backend call. The shot is framed on the Robinhood Chain table: class, mid, and the venue's own hourly funding with its annualised figure. |
+| ![Funding](docs/screenshots/funding-1440.png) | **Funding** — live rates from four venues (Lighter, Binance, Bybit, Hyperliquid) ranked by annualised yield, with the carry candidates where both legs exist on one exchange. The rate and perp counts move with the market, so the panel prints them itself rather than this sentence naming a number. |
 | ![Portfolio](docs/screenshots/portfolio-1440.png) | **Портфель** — subscriptions from the `follows` table and the Lighter account by L1 address; both empty states say what is missing and where to act. |
 | ![Discover](docs/screenshots/discover-1440.png) | **Discover** — leader directory with followers, AUM and the leader's own Lighter account. No leaders yet, and the panel names the backend address it tried. |
 | ![Earn](docs/screenshots/earn-1440.png) | **Earn** — subscription tier and trial state; the shot shows the publish gate, because there is no leader record yet. |
@@ -132,6 +132,8 @@ python leader_listener.py --leader-id <leader_id> --account-index 12345
 
 With `WAKE_DRY_RUN=true` it logs the mirror plan instead of signing anything.
 
+The first position snapshot a listener receives is a baseline, not a trade: it records what the leader already holds and derives no orders from it. The baseline lives in `leader_tracker_state`, so a restart or a deploy continues from the last known positions instead of mirroring the whole portfolio again. Mirror sizes are kept per follower and per market (`mirror_positions`): closing a BTC position is computed from the follower's BTC size, not from a BTC + ETH total, and the `current_mirrored_size` field on `/leaders/{id}/followers` is the display sum across markets.
+
 ### Signing service
 
 ```bash
@@ -226,7 +228,7 @@ Price markets close themselves at the deadline only while this process runs; oth
 # backend — run from backend/; needs a scratch PostgreSQL database
 createdb wake_test
 export WAKE_TEST_DATABASE_URL=postgresql+asyncpg://wake:wake@localhost:5432/wake_test
-python -m unittest discover        # 635 tests, all through discovery
+python -m unittest discover        # 704 tests, all through discovery
 python -m pytest -q                # the same set under pytest (+ Allure in CI)
 
 # frontend
@@ -240,7 +242,7 @@ PW_PORT=5178 npx playwright test
 
 `test_api_smoke.py` walks every API route over HTTP against a real PostgreSQL, including the parts of the security model that are easy to lose silently: no token, forged token, expired token, another user's record, a replayed wallet signature, a curator endpoint without the header. A route that regresses from 403 to 200 fails there, not on the first click.
 
-The interface is checked with numbers too. `theme.gate.test.ts` computes WCAG contrast from the theme's own values — text on every panel surface, dark ink on a filled status chip, and each status label against its own translucent underlay — and fails on a colour literal outside the palette, `rgba()` included. `e2e/design-gate.spec.ts` measures clipping, contrast on composited backgrounds (through every translucent layer and the ancestor `opacity` chain), focus rings under real Tab navigation, touch targets under both a finger and a pointer, `::placeholder`, and whether the document pans sideways — at four widths, and again at 320 px with the type scale doubled. `e2e/render-budget.spec.ts` budgets nodes, page height, mounted rows and requests per panel; virtualisation is measured as geometry (rendered row pitch, the scroll range it promises, and whether the last row is reachable), and render cost is budgeted in **frames** rather than milliseconds, because the same build swings 295–1 079 ms per open on a busy laptop while staying at two frames. Their fixtures carry the row counts measured from live provider responses — Lighter's book is 246 markets, its funding endpoint 733 rows — plus a worst-case contour with 24-character tickers and seven-digit prices, which asserts the extreme value reached the screen before measuring it. A budget set on invented, plausible data catches nothing.
+The interface is checked with numbers too. `theme.gate.test.ts` computes WCAG contrast from the theme's own values — text on every panel surface, dark ink on a filled status chip, and each status label against its own translucent underlay — and fails on a colour literal outside the palette, `rgba()` included. `e2e/design-gate.spec.ts` measures clipping, contrast on composited backgrounds (through every translucent layer and the ancestor `opacity` chain), focus rings under real Tab navigation, touch targets under both a finger and a pointer, `::placeholder`, and whether the document pans sideways — at four widths, and again at 320 px with the type scale doubled. `e2e/render-budget.spec.ts` budgets nodes, page height, mounted rows and requests per panel; virtualisation is measured as geometry (rendered row pitch, the scroll range it promises, and whether the last row is reachable), and render cost is budgeted in **frames** rather than milliseconds, because the same build swings 295–1 079 ms per open on a busy laptop while staying at two frames. Their fixtures carry the row counts measured from live provider responses — the numbers and the commands that produced them live in `MEASURED` in `e2e/fixtures.ts` and are deliberately not repeated here, because they move with the market — plus a worst-case contour with 24-character tickers and seven-digit prices, which asserts the extreme value reached the screen before measuring it. A budget set on invented, plausible data catches nothing.
 
 ## Architecture
 

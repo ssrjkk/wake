@@ -105,9 +105,6 @@ class Follow(Base):
     )
     allocation_usd: Mapped[float] = mapped_column(Float, nullable=False)
     max_leverage: Mapped[float] = mapped_column(Float, nullable=False, default=3.0)
-    current_mirrored_size: Mapped[float] = mapped_column(
-        Float, nullable=False, default=0.0
-    )
     paused: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     """Отписка — не удаление строки. На подписке висит mirror_log с журналом
@@ -120,6 +117,54 @@ class Follow(Base):
     follower: Mapped[Follower] = relationship(back_populates="follows")
     leader: Mapped[Leader] = relationship(back_populates="follows")
     mirror_log: Mapped[list["MirrorLog"]] = relationship(back_populates="follow")
+
+
+class MirrorPosition(Base):
+    """Сколько зеркальной позиции открыто у подписчика в КАЖДОМ рынке.
+
+    Одна колонка follows.current_mirrored_size до этого хранила сумму по всем
+    рынкам, и движок читал её как «размер в этом рынке»: закрытие 0.5 BTC у
+    лидера, у подписчика с 1.0 в BTC и 1.0 в ETH, планировало reduce на 2.0 BTC
+    (вдвое больше всей позиции в BTC), а учёт после него уходил в ноль и терял
+    открытый ETH — следующее его закрытие уходило в «нечего уменьшать».
+
+    Составной первичный ключ — это и есть уникальность (подписка, рынок);
+    size всегда >= 0, сторона не нужна: она приходит из события лидера."""
+
+    __tablename__ = "mirror_positions"
+
+    follow_id: Mapped[str] = mapped_column(
+        String, ForeignKey("follows.id"), primary_key=True
+    )
+    market_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    size: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class LeaderTrackerState(Base):
+    """Последнее состояние позиций лидера, переживающее рестарт процесса.
+
+    Трекер сравнивает снапшоты Lighter с предыдущим состоянием. Состояние жило
+    только в памяти, поэтому после каждого рестарта первый снапшот выглядел как
+    «лидер только что открыл весь портфель»: подписчикам заново открывался
+    объём, который у них уже был, а закрытия, сделанные пока листенер лежал,
+    не эмитились никогда. Строка здесь — база для диффа после перезапуска.
+
+    positions — JSON-объект {"market_id": {"size", "sign", "price"}} текстом,
+    как details в audit_log: структура внутренняя, читается только tracker.restore."""
+
+    __tablename__ = "leader_tracker_state"
+
+    leader_id: Mapped[str] = mapped_column(
+        String, ForeignKey("leaders.id"), primary_key=True
+    )
+    equity: Mapped[float | None] = mapped_column(Float)
+    positions: Mapped[str] = mapped_column(Text, nullable=False, default="{}")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
 
 
 class MirrorLog(Base):

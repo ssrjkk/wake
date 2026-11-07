@@ -49,10 +49,11 @@ import sentry_sdk
 from sentry_sdk.integrations.fastapi import FastApiIntegration
 from sentry_sdk.integrations.starlette import StarletteIntegration
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 import database
 import net
@@ -294,8 +295,14 @@ app.add_middleware(
 # валидации FastAPI приходят в том же едином формате, что и всё остальное —
 # иначе у клиента два контракта ошибок вместо одного. dict-детали вида
 # {"error": {...}} из auth.py пробрасываются как есть.
-@app.exception_handler(HTTPException)
-async def http_exception_handler(request: Request, exc: HTTPException):
+#
+# Регистрируется класс Starlette, а не fastapi.HTTPException: маршрутизатор на
+# несуществующий путь бросает именно Starlette'овский, а fastapi'шный — его
+# подкласс, и обработчик подкласса на родителя не срабатывает. С подклассом в
+# декораторе неизвестный путь отвечал дефолтным {"detail": "Not Found"} —
+# единый формат держался для всех ошибок, кроме самой частой.
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(request: Request, exc: StarletteHTTPException):
     if isinstance(exc.detail, dict) and "error" in exc.detail:
         payload = exc.detail
     else:

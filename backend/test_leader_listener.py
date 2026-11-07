@@ -13,13 +13,45 @@ import uuid
 import testsupport
 import db
 import leader_listener
-from mirror_engine import MarketConstraints, MirrorOrder, Side
+import lighter_rest
+from leader_position_tracker import LeaderPositionTracker
+from mirror_engine import (
+    MarketConstraints,
+    MirrorOrder,
+    Side,
+    is_buy_order,
+    marketable_limit_price,
+)
 
 
 def _patch_module(module, name, value):
     original = getattr(module, name)
     setattr(module, name, value)
     return lambda: setattr(module, name, original)
+
+
+def _snapshot(rows: dict, msg_type: str = "update/account_all_positions") -> dict:
+    """Снапшот positions в форме Lighter — ровно та, которую разбирает трекер."""
+    return {
+        "channel": "account_all_positions:1",
+        "positions": {
+            str(market_id): {
+                "sign": row["sign"],
+                "position": row["position"],
+                "avg_entry_price": row["avg_entry_price"],
+            }
+            for market_id, row in rows.items()
+        },
+        "type": msg_type,
+    }
+
+
+def _user_stats(portfolio_value: str) -> dict:
+    return {
+        "channel": "user_stats:1",
+        "stats": {"portfolio_value": portfolio_value},
+        "type": "update/user_stats",
+    }
 
 
 class ListenerDbCase(testsupport.PgCase):
@@ -32,8 +64,6 @@ class ListenerDbCase(testsupport.PgCase):
         self.follow_ids = {}
         # Маржа подписчика в живом пути читается с Lighter (get_account_equity);
         # в песочнице вместо неё таблица по индексам, которую тесты меняют сами.
-        import lighter_rest
-
         self.margin_by_index: dict[int, float | None] = {900: 100_000.0}
         self.addCleanup(
             _patch_module(
@@ -50,7 +80,7 @@ class ListenerDbCase(testsupport.PgCase):
         )
 
     async def add_follower(
-        self, allocation_usd: float, current_mirrored_size: float = 0.0
+        self, allocation_usd: float, mirrored: dict[int, float] | None = None
     ) -> str:
         follower_id = f"f-{uuid.uuid4().hex[:8]}"
         await db.upsert_follower(
@@ -66,8 +96,8 @@ class ListenerDbCase(testsupport.PgCase):
             allocation_usd=allocation_usd,
             max_leverage=5,
         )
-        if current_mirrored_size:
-            await db.add_mirrored_size(follow_id, current_mirrored_size)
+        for market_id, size in (mirrored or {}).items():
+            await db.add_mirrored_size(follow_id, market_id, size)
         self.follow_ids[follower_id] = follow_id
         return follower_id
 
@@ -309,7 +339,7 @@ class TestHandleLeaderEvent(ListenerDbCase):
         self.assertTrue(all(r["base_amount"] == 0 for r in rows))
 
     async def test_reduce_event_logs_reduce_only_order(self):
-        follower_id = await self.add_follower(1000.0, current_mirrored_size=0.4)
+        follower_id = await self.add_follower(1000.0, mirrored={8: 0.4})
         await self.run_event(
             raw_event(
                 is_increase=False,
@@ -324,6 +354,36 @@ class TestHandleLeaderEvent(ListenerDbCase):
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["status"], "dry_run")
         self.assertEqual(rows[0]["reduce_only"], 1)
+
+    async def test_reduce_uses_the_event_market_not_the_portfolio_sum(self):
+        """Закрытие считается от размера В ЭТОМ рынке.
+
+        До исправления follows.current_mirrored_size была одна на все рынки, и
+        движок читал её как «сколько у подписчика в BTC»: при позициях
+        0.5 BTC + 0.5 ETH закрытие всей BTC-позиции планировало reduce на 1.0
+        BTC — вдвое больше, чем у него есть, — а учёт после него уходил в ноль и
+        терял ETH. Тест падал ровно этим числом: 1.0 вместо 0.5.
+        """
+        follower_id = await self.add_follower(1000.0, mirrored={8: 0.5, 9: 0.5})
+        await self.run_event(
+            raw_event(
+                market_id=8,
+                is_increase=False,
+                size_delta=0.5,
+                leader_position_before=0.5,
+                leader_equity_usd=50000.0,
+            ),
+            MarketConstraints(min_base_amount=0.001, size_decimals=3, price_decimals=2),
+        )
+
+        rows = await self.mirror_log(follower_id)
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["reduce_only"], 1)
+        self.assertAlmostEqual(
+            rows[0]["base_amount"],
+            0.5,
+            msg="reduce ограничен позицией в рынке 8, а не суммой BTC+ETH",
+        )
 
     async def test_paused_follower_is_not_mirrored(self):
         follower_id = await self.add_follower(1000.0)
@@ -370,6 +430,153 @@ class TestHandleLeaderEvent(ListenerDbCase):
         self.assertEqual(rows[0]["status"], "skipped")
         self.assertEqual(rows[0]["reason"], "margin_unverified")
         self.assertEqual(rows[0]["base_amount"], 0)
+
+
+class TestOrderLimitPrice(unittest.IsolatedAsyncioTestCase):
+    """IOC-лимит строится от mark-цены, а не от цены входа лидера.
+
+    Цена события — это avg_entry_price лидера. Для закрытия убыточной позиции
+    она стоит по другую сторону книги: лонг, вошедший по 2000 при рынке 1500,
+    уходил sell-лимитом 2000 — такой ордер не исполнится никогда, и подписчик
+    остаётся в позиции, из которой лидер уже вышел. Тот же дефект на
+    наращивании: buy-лимит ниже рынка. Тест держит обе стороны и запас.
+
+    Чтение mark-цены — async через threadpool: синхронный urllib в обработчике
+    события останавливал бы event loop (и вебсокет) на таймаут каждого запроса.
+    """
+
+    def setUp(self):
+        self.addCleanup(
+            _patch_module(
+                lighter_rest, "get_mark_price", lambda market_id, network=None: 1900.0
+            )
+        )
+
+    def order(self, side, reduce_only):
+        return MirrorOrder("f1", 8, side, 0.5, reduce_only)
+
+    async def limit(self, side, reduce_only):
+        mark = await leader_listener._event_mark_price(8)
+        return marketable_limit_price(mark, is_buy_order(self.order(side, reduce_only)))
+
+    async def test_losing_long_exit_is_priced_below_market(self):
+        price = await self.limit(Side.LONG, True)
+        self.assertLess(price, 1900.0, "sell-лимит обязан быть не выше рынка")
+        self.assertAlmostEqual(price, 1881.0)
+
+    async def test_closing_a_short_is_priced_above_market(self):
+        price = await self.limit(Side.SHORT, True)
+        self.assertGreater(price, 1900.0, "buy-лимит обязан быть не ниже рынка")
+        self.assertAlmostEqual(price, 1919.0)
+
+    async def test_opening_uses_the_same_market_reference(self):
+        self.assertAlmostEqual(await self.limit(Side.LONG, False), 1919.0)
+        self.assertAlmostEqual(await self.limit(Side.SHORT, False), 1881.0)
+
+    async def test_missing_mark_falls_back_to_event_price(self):
+        def boom(market_id, network=None):
+            raise RuntimeError("нет свечей")
+
+        self.addCleanup(_patch_module(lighter_rest, "get_mark_price", boom))
+        self.assertIsNone(
+            await leader_listener._event_mark_price(8),
+            "без mark вызывающий обязан взять цену события как есть",
+        )
+
+    async def test_non_finite_mark_is_not_used(self):
+        for bad in (float("nan"), float("inf"), 0.0, -1.0):
+            self.addCleanup(
+                _patch_module(
+                    lighter_rest,
+                    "get_mark_price",
+                    lambda market_id, network=None, v=bad: v,
+                )
+            )
+            self.assertIsNone(
+                await leader_listener._event_mark_price(8), f"mark={bad!r}"
+            )
+
+
+class TestStreamMessage(ListenerDbCase):
+    """Разбор сообщений стрима без живого соединения.
+
+    Главный сценарий — рестарт: состояние трекера лежит в leader_tracker_state,
+    и первый снапшот после перезапуска сравнивается с ним, а не с пустотой.
+    """
+
+    def constraints(self):
+        return MarketConstraints(
+            min_base_amount=0.001, size_decimals=3, price_decimals=2
+        )
+
+    async def test_restart_does_not_replay_existing_positions(self):
+        follower_id = await self.add_follower(1000.0)
+        await db.save_tracker_state(
+            self.leader_id, 50000.0, {"8": {"size": 0.5, "sign": 1, "price": 2000.0}}
+        )
+        tracker = LeaderPositionTracker()
+        tracker.restore(await db.load_tracker_state(self.leader_id))
+
+        await leader_listener.handle_stream_message(
+            _snapshot({"8": {"sign": 1, "position": "0.5", "avg_entry_price": "2000"}}),
+            tracker,
+            self.leader_id,
+            {8: self.constraints()},
+        )
+
+        self.assertEqual(
+            await self.mirror_log(follower_id),
+            [],
+            "позиция уже была у подписчика — рестарт не открывает её заново",
+        )
+
+    async def test_close_during_downtime_is_mirrored_after_restart(self):
+        follower_id = await self.add_follower(1000.0, mirrored={8: 0.5})
+        await db.save_tracker_state(
+            self.leader_id, 50000.0, {"8": {"size": 0.5, "sign": 1, "price": 2000.0}}
+        )
+        tracker = LeaderPositionTracker()
+        tracker.restore(await db.load_tracker_state(self.leader_id))
+
+        await leader_listener.handle_stream_message(
+            _snapshot({}), tracker, self.leader_id, {8: self.constraints()}
+        )
+
+        rows = await self.mirror_log(follower_id)
+        self.assertEqual(len(rows), 1, "закрытие, сделанное за время простоя")
+        self.assertEqual(rows[0]["reduce_only"], 1)
+        self.assertAlmostEqual(rows[0]["base_amount"], 0.5)
+
+    async def test_state_is_persisted_after_a_position_snapshot(self):
+        tracker = LeaderPositionTracker()
+        tracker.equity = 50000.0
+        await leader_listener.handle_stream_message(
+            _snapshot(
+                {"8": {"sign": -1, "position": "2.0", "avg_entry_price": "3500"}}
+            ),
+            tracker,
+            self.leader_id,
+            {},
+        )
+
+        state = await db.load_tracker_state(self.leader_id)
+        self.assertEqual(state["equity"], 50000.0)
+        self.assertEqual(state["positions"]["8"]["size"], 2.0)
+        self.assertEqual(state["positions"]["8"]["sign"], -1)
+
+    async def test_malformed_user_stats_does_not_break_the_stream(self):
+        tracker = LeaderPositionTracker()
+        await leader_listener.handle_stream_message(
+            {"type": "update/user_stats", "stats": {}}, tracker, self.leader_id, {}
+        )
+        self.assertIsNone(
+            tracker.equity, "битое сообщение пропущено, а не уронило цикл"
+        )
+
+        await leader_listener.handle_stream_message(
+            _user_stats("50000"), tracker, self.leader_id, {}
+        )
+        self.assertEqual(tracker.equity, 50000.0)
 
 
 if __name__ == "__main__":

@@ -9,8 +9,11 @@ from mirror_engine import (
     LeaderEvent,
     FollowerConfig,
     MarketConstraints,
+    MirrorOrder,
     Side,
     compute_mirror_plan,
+    is_buy_order,
+    marketable_limit_price,
 )
 
 BTC = MarketConstraints(min_base_amount=0.001, size_decimals=3, price_decimals=2)
@@ -291,6 +294,56 @@ class TestExactTickSizing(unittest.TestCase):
         plan = self._plan(0.0, 1000.0, equity=10_000.0)
         self.assertEqual(plan.orders, [])
         self.assertEqual([s.reason for s in plan.skipped], ["price_unavailable"])
+
+
+class TestOrderDirection(unittest.TestCase):
+    """Направление сделки: сторона позиции плюс reduce_only.
+
+    side в MirrorOrder — сторона ПОЗИЦИИ из снапшота лидера, not направление
+    ордера. Открыть лонг и закрыть шорт — обе покупки; спутать их значит
+    отправить закрытие покупкой и никогда не закрыться.
+    """
+
+    def test_position_side_plus_reduce_only(self):
+        cases = [
+            (Side.LONG, False, True),  # открыть лонг — buy
+            (Side.LONG, True, False),  # закрыть лонг — sell
+            (Side.SHORT, False, False),  # открыть шорт — sell
+            (Side.SHORT, True, True),  # закрыть шорт — buy
+        ]
+        for side, reduce_only, expected_buy in cases:
+            with self.subTest(side=side, reduce_only=reduce_only):
+                order = MirrorOrder("f1", 8, side, 1.0, reduce_only)
+                self.assertEqual(is_buy_order(order), expected_buy)
+
+
+class TestMarketableLimitPrice(unittest.TestCase):
+    """IOC-лимит — рыночная цена плюс/минус запас, а не цена входа лидера.
+
+    Lighter трактует price маркет-ордера как худшую цену, которую готовы
+    принять. Лимит по цене входа стоит по другую сторону книги, когда позиция
+    убыточна, и IOC не исполняется: подписчик остаётся в позиции, из которой
+    лидер вышел. Запас — MAX_SLIPPAGE_BPS, это и есть максимальное
+    проскальзывание, которое он принимает.
+    """
+
+    def test_buy_is_above_market_sell_is_below(self):
+        self.assertAlmostEqual(marketable_limit_price(2000.0, True), 2020.0)
+        self.assertAlmostEqual(marketable_limit_price(2000.0, False), 1980.0)
+
+    def test_stale_entry_price_is_not_marketable_signal(self):
+        # Лонг вошёл по 2000, рынок 1500: лимит по цене входа (2000) стоит
+        # выше рынка и не исполнится. Лимит от рынка — ниже и исполним.
+        market = 1500.0
+        entry = 2000.0
+        self.assertLess(marketable_limit_price(market, False), market)
+        self.assertGreater(entry, market)
+
+    def test_rejects_non_positive_or_non_finite_reference(self):
+        for bad in (0.0, -1.0, float("nan"), float("inf")):
+            with self.subTest(value=bad):
+                with self.assertRaises(ValueError):
+                    marketable_limit_price(bad, True)
 
 
 if __name__ == "__main__":

@@ -77,7 +77,7 @@ class FollowerConfig:
     allocation_usd: float
     available_margin_usd: float
     max_leverage: float
-    current_mirrored_size: float = 0.0  # текущий размер зеркальной позиции подписчика
+    current_mirrored_size: float = 0.0  # размер в РЫНКЕ события, не сумма по портфелю
 
 
 @dataclass(frozen=True)
@@ -103,6 +103,40 @@ class SkippedFollower:
 class MirrorPlan:
     orders: list = field(default_factory=list)  # list[MirrorOrder]
     skipped: list = field(default_factory=list)  # list[SkippedFollower]
+
+
+# Запас, который IOC-ордер разрешает себе от текущей mark-цены. Это ровно
+# максимальное проскальзывание, которое подписчик готов принять ради того,
+# чтобы сделка состоялась: без запаса ордер исполняется только по цене не хуже
+# самой mark-цены и на двинувшемся рынке не исполняется вовсе.
+MAX_SLIPPAGE_BPS = 100.0
+
+
+def is_buy_order(order: "MirrorOrder") -> bool:
+    """Направление СДЕЛКИ, а не сторона позиции: открыть лонг и закрыть шорт —
+    обе покупки. side в MirrorOrder — сторона позиции из снапшота лидера."""
+    return (order.side == Side.LONG) != order.reduce_only
+
+
+def marketable_limit_price(reference_price: float, is_buy: bool) -> float:
+    """Предельно приемлемая цена IOC-ордера от текущей рыночной цены.
+
+    Lighter трактует price маркет-ордера как худшую цену, которую готовы
+    принять: buy не выше неё, sell не ниже. Поэтому запас направлен наружу от
+    рынка — buy чуть выше, sell чуть ниже, — и ордер остаётся исполнимым на
+    любом движении в пределах MAX_SLIPPAGE_BPS.
+
+    Опорная цена обязана быть рыночной. Цена события — это avg_entry_price
+    лидера, и для закрытия убыточной позиции она стоит по другую сторону книги
+    (лонг, вошедший по 2000 при рынке 1500, закрывается sell-лимитом 2000 —
+    такой ордер не исполнится никогда, и подписчик останется в позиции, из
+    которой лидер вышел)."""
+    if not is_finite(reference_price) or reference_price <= 0:
+        raise ValueError(
+            f"нужна положительная конечная цена, пришло {reference_price!r}"
+        )
+    slip = MAX_SLIPPAGE_BPS / 10_000
+    return reference_price * (1 + slip) if is_buy else reference_price * (1 - slip)
 
 
 def _size_on_grid(value: float, decimals: int) -> float | None:

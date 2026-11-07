@@ -40,8 +40,8 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
     """FastAPI dependency — yields an async session, auto-closes on exit.
 
     Usage in endpoints:
-        @router.get("/items")
-        async def list_items(db: AsyncSession = Depends(get_db)):
+        @router.post("/auth/telegram")
+        async def auth_telegram(data: TelegramAuthData, db: AsyncSession = Depends(get_db)):
             ...
     """
     async with async_session_factory() as session:

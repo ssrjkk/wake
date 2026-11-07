@@ -1206,6 +1206,7 @@
   .notice-error { border-left-color: var(--down); color: var(--fg-2); }
   .notice-error svg { color: var(--down); }
   .notice code { color: var(--fg); }
+  .notice-reason { color: var(--fg-3); }
 
   .notice-more { margin-left: auto; }
 
@@ -1789,6 +1790,30 @@
     .tabbar .nav-tab::after { top: 0; bottom: auto; left: 10px; right: 10px; }
     .tabbar .tab-icon { display: block; }
     .tabbar .live-indicator { position: absolute; top: 7px; right: 7px; }
+
+    /* Девять панелей не влезают в узкое окно: без подсказки правый край выглядит
+       концом списка, и три вкладки остаются ненайденными. Затемнение рисуется
+       только когда лента действительно шире экрана (класс ставит App по факту
+       overflow), иначе на широком окне оно врало бы про несуществующий скролл.
+       Градиент — цветом фона самой ленты, поэтому контент под ней не проступает. */
+    .tabbar-overflow::before,
+    .tabbar-overflow::after {
+      content: "";
+      position: absolute;
+      top: 1px;
+      bottom: 0;
+      width: 22px;
+      pointer-events: none;
+      z-index: 1;
+    }
+    .tabbar-overflow::before {
+      left: 0;
+      background: linear-gradient(to right, var(--bg-1), transparent);
+    }
+    .tabbar-overflow::after {
+      right: 0;
+      background: linear-gradient(to left, var(--bg-1), transparent);
+    }
 
     /* Нижний край контента не должен прятаться под панелью, а уведомление —
        ложиться на неё. */

@@ -3,6 +3,12 @@
 # Core
 lighter-sdk>=1.1.8
 fastapi
+# starlette импортируется напрямую (app.py берёт из неё HTTPException,
+# run_in_threadpool — семь модулей), а не только через fastapi. Без этой строки
+# пакет приходил бы транзитом, и его смена или исчезновение уронила бы импорт в
+# проде без какого-либо сигнала у нас: нижняя граница — та же, что требует
+# fastapi 0.143 (starlette>=0.46.0).
+starlette>=0.46.0
 pydantic
 pydantic-settings
 uvicorn

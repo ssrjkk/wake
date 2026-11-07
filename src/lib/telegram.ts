@@ -68,9 +68,14 @@ export type TelegramSdk = {
     impactOccurred?: (style: "light" | "medium" | "heavy" | "rigid" | "soft") => void;
     notificationOccurred?: (kind: "error" | "success" | "warning") => void;
   };
-  onEvent?: (event: "backButtonClicked", handler: () => void) => void;
-  offEvent?: (event: "backButtonClicked", handler: () => void) => void;
+  // isActive — Bot API 8.0+: false, когда мини-апп свёрнут в чат. В более старых
+  // клиентах поля нет, и это значит «неизвестно», а не «неактивен».
+  isActive?: boolean;
+  onEvent?: (event: TelegramEvent, handler: () => void) => void;
+  offEvent?: (event: TelegramEvent, handler: () => void) => void;
 };
+
+export type TelegramEvent = "backButtonClicked" | "activated";
 
 declare global {
   interface Window {
@@ -89,6 +94,20 @@ const SDK_SRC = "https://telegram.org/js/telegram-web-app.js";
 
 export function isTelegramWebView(ua: string = typeof navigator === "undefined" ? "" : navigator.userAgent): boolean {
   return /telegram/i.test(ua);
+}
+
+/**
+ * Мини-апп свёрнут: человек ушёл в чат, а вебвью живо.
+ *
+ * document.hidden здесь не помогает: страница остаётся видимой для браузера,
+ * поэтому опрос в фоне идёт в пустоту. Telegram с Bot API 8.0 сам сообщает
+ * состояние полем isActive; на старых клиентах его нет — считаем апп активным,
+ * потому что «неизвестно» не повод гасить обновления.
+ */
+export function isTelegramInactive(
+  sdk: TelegramSdk | null | undefined = typeof window === "undefined" ? null : window.Telegram?.WebApp,
+): boolean {
+  return sdk?.isActive === false;
 }
 
 let sdkPromise: Promise<TelegramSdk | null> | null = null;

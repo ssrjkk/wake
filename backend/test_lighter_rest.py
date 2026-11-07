@@ -579,6 +579,63 @@ class TestPriceOracle(unittest.TestCase):
         ):
             lighter_rest.get_mark_price(1, "mainnet")
 
+    def test_broken_latest_candle_falls_back_to_the_last_readable_minute(self):
+        """Строка без close, с NaN или с неразборчивым t — формат чужого
+        ответа, а не цена. Ронять из-за неё резолюцию значит отложить выплаты
+        по рынку, а вернуть NaN нельзя: `nan > порог` — False при любом
+        компараторе, то есть рынок разрешился бы исходом, который никто не
+        выбирал."""
+        deadline_ms = 100 * MINUTE_MS
+        nan_close = candle(99 * MINUTE_MS, "1", "1", "1", "NaN", "1")
+        no_close = candle(99 * MINUTE_MS, "1", "1", "1", "1000", "1")
+        del no_close["c"]
+        bad_t = candle("not-a-timestamp", "1", "1", "1", "1100", "1")
+        for broken in (nan_close, no_close, bad_t):
+            with self.subTest(row=broken):
+                rows = [
+                    candle(98 * MINUTE_MS, "1", "1", "1", "900", "1"),
+                    broken,
+                ]
+                with patch("urllib.request.urlopen", Transport({"c": rows})):
+                    price = lighter_rest.get_price_at(1, deadline_ms / 1000, "mainnet")
+                self.assertEqual(price, 900.0, "последняя минута, у которой есть цена")
+
+    def test_unreadable_completed_minutes_raise_instead_of_inventing_a_price(self):
+        deadline_ms = 10 * MINUTE_MS
+        rows = [
+            candle(9 * MINUTE_MS, "1", "1", "1", "NaN", "1"),
+            candle(8 * MINUTE_MS, "1", "1", "1", "inf", "1"),
+            candle(7 * MINUTE_MS, "1", "1", "1", "0", "1"),
+            candle(6 * MINUTE_MS, "1", "1", "1", "-5", "1"),
+        ]
+        with (
+            patch("urllib.request.urlopen", Transport({"c": rows})),
+            self.assertRaises(RuntimeError),
+        ):
+            lighter_rest.get_price_at(1, deadline_ms / 1000, "mainnet")
+
+    def test_mark_price_refuses_a_close_that_is_not_a_price(self):
+        """Этим числом строится IOC-лимит реального ордера: NaN умер бы уже на
+        подписи, а ноль или минус сделали бы ордер неисполнимым."""
+        deadline_ms = 100 * MINUTE_MS
+        for bad in ("NaN", "inf", "0", "-1"):
+            with self.subTest(close=bad):
+                rows = [candle(deadline_ms, "1", "1", "1", bad, "1")]
+                with (
+                    patch("urllib.request.urlopen", Transport({"c": rows})),
+                    self.assertRaises(RuntimeError),
+                ):
+                    lighter_rest.get_mark_price(1, "mainnet")
+
+    def test_mark_price_without_a_close_is_runtime_error_not_key_error(self):
+        row = candle(100 * MINUTE_MS, "1", "1", "1", "1000", "1")
+        del row["c"]
+        with (
+            patch("urllib.request.urlopen", Transport({"c": [row]})),
+            self.assertRaises(RuntimeError),
+        ):
+            lighter_rest.get_mark_price(1, "mainnet")
+
 
 class TestFundingRateBoundary(unittest.TestCase):
     def setUp(self):

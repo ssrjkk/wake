@@ -1,9 +1,10 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { setNetwork, getNetwork, getMarkets, getMidPrices, getRecentTrades, isArcusPerp, isArcusOnline, type ArcusMarket } from './arcus'
+import { setNetwork, getNetwork, getMarkets, getMidPrices, getRecentTrades, isArcusPerp, isArcusOnline, arcusFundingHourly, arcusAnnualizedFunding, type ArcusMarket } from './arcus'
 
-// Фикстуры — форма живого ответа mainnet Arcus (замер 2026-10-24: 70 рынков,
-// status только "ONLINE"/"OFFLINE", type только "PERPETUAL"), а не пересказ
-// документации: именно на расхождении с документацией этот слой и ломался.
+// Фикстуры — форма живого ответа Arcus (замер 2026-11-03: mainnet 81 рынок,
+// testnet 79, status только "ONLINE"/"OFFLINE", type только "PERPETUAL",
+// quoteAsset только "USD"), а не пересказ документации: именно на расхождении
+// с документацией этот слой и ломался.
 const LIVE_MARKET: ArcusMarket = {
   marketDisplayName: 'BTC-USD',
   marketId: 1,
@@ -13,6 +14,10 @@ const LIVE_MARKET: ArcusMarket = {
   tickSize: '0.1',
   stepSize: '0.00000001',
   type: 'PERPETUAL',
+  category: 'CRYPTO',
+  fundingRate: '0.000040365030148886',
+  markPrice: '76394.2',
+  minOrderNotional: '5',
 }
 
 function fetchJson(data: unknown) {
@@ -44,6 +49,48 @@ describe('классификация рынков Arcus', () => {
     expect(isArcusPerp(LIVE_MARKET)).toBe(true)
     expect(isArcusPerp({ ...LIVE_MARKET, type: undefined, marketDisplayName: 'ETH-PERP' })).toBe(true)
     expect(isArcusPerp({ ...LIVE_MARKET, type: 'SPOT', marketDisplayName: 'ETH-USD' })).toBe(false)
+  })
+})
+
+describe('funding Arcus', () => {
+  // Крипта: база 0.01% за 8-часовой период = 0.0000125 в час, и живая ставка ETH
+  // именно такая. Годовая по конвенции 24 × 365 — 10.95 %, то, что называют
+  // документы; расхождение здесь значит, что мы перестали читать рынок.
+  it('крипту annualizes по 24 × 365', () => {
+    const eth = { ...LIVE_MARKET, fundingRate: '0.0000125' }
+    expect(arcusAnnualizedFunding(eth)).toBeCloseTo(0.1095, 6)
+  })
+
+  // RWA: база задаётся как (SOFR + 0.5 %) / 360 / 24, то есть год там 360 дней.
+  // Живой AMD отдаёт 0.000005138888888888 в час — это 4.44 % по 360-дневной
+  // конвенции и 4.50 % по крипто-конвенции: разница в полпроцента на рынке, где
+  // вся ставка меньше одного процента, — та величина, ради которой конвенции не
+  // сливают в одну.
+  it('RWA annualizes по 24 × 360, а не по крипто-конвенции', () => {
+    const amd = { ...LIVE_MARKET, marketDisplayName: 'AMD-USD', category: 'EQUITIES', fundingRate: '0.000005138888888888' }
+    const annual = arcusAnnualizedFunding(amd) ?? 0
+    expect(annual).toBeCloseTo(0.0444, 4)
+    expect(annual).toBeLessThan(0.000005138888888888 * 24 * 365)
+  })
+
+  it('почасовая ставка проходит без пересчёта', () => {
+    expect(arcusFundingHourly(LIVE_MARKET)).toBeCloseTo(0.000040365030148886, 12)
+  })
+
+  it('нулевая ставка — это ноль, а не отсутствие данных', () => {
+    // Живой F-USD (рынок выключен) отдаёт fundingRate "0"; молча превратить его
+    // в прочерк значит солгать про то, что рынок вообще что-то платит.
+    const zero = { ...LIVE_MARKET, fundingRate: '0' }
+    expect(arcusFundingHourly(zero)).toBe(0)
+    expect(arcusAnnualizedFunding(zero)).toBe(0)
+  })
+
+  it('пустое и нечисловое поле — прочерк, а не ноль', () => {
+    for (const bad of [undefined, '', '  ', 'not-a-rate']) {
+      const m = { ...LIVE_MARKET, fundingRate: bad }
+      expect(arcusFundingHourly(m)).toBeNull()
+      expect(arcusAnnualizedFunding(m)).toBeNull()
+    }
   })
 })
 

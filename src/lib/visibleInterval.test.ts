@@ -11,6 +11,29 @@ function setHidden(hidden: boolean) {
   });
 }
 
+// Мини-апп Telegram: страница «видима» для браузера, а человек уже в чате.
+// Состояние приходит только полем isActive и событием activated.
+function installTelegram(isActive: boolean) {
+  const handlers = new Map<string, () => void>();
+  const webApp = {
+    isActive,
+    onEvent: (event: string, handler: () => void) => {
+      handlers.set(event, handler);
+    },
+    offEvent: (event: string) => {
+      handlers.delete(event);
+    },
+  };
+  window.Telegram = { WebApp: webApp };
+  return {
+    activate() {
+      webApp.isActive = true;
+      handlers.get("activated")?.();
+    },
+    handlers,
+  };
+}
+
 describe("setIntervalWhenVisible", () => {
   beforeEach(() => {
     vi.useFakeTimers();
@@ -21,6 +44,7 @@ describe("setIntervalWhenVisible", () => {
     vi.clearAllTimers();
     vi.useRealTimers();
     delete (Document.prototype as unknown as { hidden?: unknown }).hidden;
+    delete (window as { Telegram?: unknown }).Telegram;
   });
 
   function visibilityChange() {
@@ -84,5 +108,35 @@ describe("setIntervalWhenVisible", () => {
     add.mockRestore();
     remove.mockRestore();
     expect(tick).not.toHaveBeenCalled();
+  });
+
+  it("не опрашивает свёрнутый мини-апп, хотя вкладка «видима»", () => {
+    // document.hidden в вебвью Telegram остаётся false, когда человек ушёл в
+    // чат: единственный признак — isActive из Bot API 8.0.
+    installTelegram(false);
+    const tick = vi.fn();
+    const stop = setIntervalWhenVisible(tick, 1000);
+    vi.advanceTimersByTime(10_000);
+    stop();
+    expect(tick).not.toHaveBeenCalled();
+  });
+
+  it("обновляет сразу при разворачивании мини-аппа", () => {
+    const telegram = installTelegram(false);
+    const tick = vi.fn();
+    const stop = setIntervalWhenVisible(tick, 5000);
+    vi.advanceTimersByTime(20_000);
+    expect(tick).not.toHaveBeenCalled();
+    telegram.activate();
+    stop();
+    expect(tick).toHaveBeenCalledTimes(1);
+  });
+
+  it("снимает подписку на activated вместе с интервалом", () => {
+    const telegram = installTelegram(true);
+    const stop = setIntervalWhenVisible(vi.fn(), 1000);
+    expect(telegram.handlers.has("activated"), "подписка создана").toBe(true);
+    stop();
+    expect(telegram.handlers.has("activated"), "подписка снята").toBe(false);
   });
 });

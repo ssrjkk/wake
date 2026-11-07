@@ -1,8 +1,4 @@
 dist/
-app/
 node_modules/
 *.md
-screenshots/
-vibe_images/
-.wrangler/
 .github/

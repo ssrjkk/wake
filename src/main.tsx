@@ -14,6 +14,11 @@ import { config } from "./wagmi";
 import App from "./App";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { LIGHTER_NETWORK } from "./lib/config";
+import { installPreloadRecovery } from "./lib/preload";
+
+// До первого рендера: ленивая панель, чьи файлы стёр новый деплой, обязана
+// перезайти сама, а не показывать полноэкранную ошибку (см. lib/preload.ts).
+installPreloadRecovery();
 
 // Initialize Sentry for error monitoring (optional — only if VITE_SENTRY_DSN is set)
 if (import.meta.env.VITE_SENTRY_DSN) {

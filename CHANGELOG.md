@@ -10,6 +10,56 @@ from the commit history rather than from a release.
 ## [Unreleased]
 
 ### Added
+- `backend/test_api_contract.py` — каждый путь, который фронтенд просит у
+  Wake-бэкенда и у сервиса подписи, обязан существовать в реестре маршрутов
+  той стороны. Класс ловли — вчерашний прода: Pages звал `/leaders/hydrated`,
+  задеплоенный Railway был старше этого маршрута, и ни один тест этого не
+  видел: юниты знают свои строки путей, e2e работает на заглушках, а смоук
+  бэкенда проверяет роуты, которые знает бэкенд, а не те, что просит фронтенд.
+  Сканер читает места вызова (`backendJson`, `${BACKEND_URL}`,
+  `${SIGNING_SERVICE_URL}`) разбором кавычек с балансом `${}` — наивный regex
+  съедал `${paused ? "resume" : "pause"}` и превращал сверку в сравнение
+  мусора. Реестр берётся из OpenAPI-схемы: в fastapi 0.143 включённые роутеры
+  лежат за объектами `_IncludedRouter` без `.path`, и сбор по `.routes` дал бы
+  две строки на сорок с лишним маршрутов — зелёный тест, сверяющий пустоту с
+  пустотой. Обе стороны обязаны быть непустыми.
+- `src/lib/tabs.test.ts` — последний непокрытый модуль (`tabs.ts`) оказался
+  местом, где ошибка молчит: вкладка в списке без ветки рендера в App.tsx —
+  это кнопка на пустой экран, а десятая вкладка физически остаётся без горячей
+  клавиши (обработчик знает 1..9). Тест сверяет список с App.tsx и с TAB_IDS в
+  deeplink.ts; мутация «добавить ledger» ловится обоими.
+- `starlette` объявлена в `backend/requirements.txt`: её импортируют семь
+  модулей (HTTPException в app.py, `run_in_threadpool` в роутерах и в
+  листенере), а приходила она только транзитом от fastapi — смена или
+  исчезновение пакета уронили бы импорт в проде, и смотреть в манифесте было
+  бы не на что. Нижняя граница — та же, что требует fastapi (0.46.0).
+- `backend/arcus_orders.py` — правила кодирования ордеров Arcus, вынесенные
+  отдельно от сети и ключей: цена и размер как целые числа тиков движка
+  (`tickSize`/`stepSize`, не-кратность — отказ, а не округление), канонический
+  payload для Ed25519 с зафиксированным порядком полей, `goodTilTime` в
+  микросекундах в теле и в наносекундах в подписи, защитная граница MARKET в
+  10 % от mark-цены, минимальный notion $5 с исключением для reduce-only и
+  запрет MARKET не-IOC. Ни сети, ни ключей здесь нет: модуль отвечает за то,
+  какие байты подписываются, — ошибка в этом слое стоит не отказа, а ордера с
+  другой ценой. 28 тестов и 430 подтестов на живых метаданных рынков (BTC-USD
+  tick 0.1 / step 1e-8, ETH-USD 0.01 / 1e-7, замер `/v1/markets` 2026-11-03) и
+  на seeded-случае; каждый гейт проверен мутацией — снятая проверка
+  положительности, `g` в микросекундах, `str()` вместо обычной десятичной
+  строки и переставленные поля дают красный.
+- Обзор читает funding Robinhood Chain, а не только mid-цены: `/v1/markets`
+  отдаёт почасовую ставку на каждый рынок, и панель показывает её и годовую.
+  Годовая считается по конвенции класса актива — 24 × 365 для крипты и 24 × 360
+  для RWA: база RWA задаётся как `(SOFR + 0.5%) / 360 / 24`, и умножение на 365
+  поднимало бы 4.44 % до 4.50 % ровно там, где вся ставка меньше одного
+  процента. Пять тестов на замеренных значениях (ETH `0.0000125`/ч → 10.95 %,
+  AMD `0.000005138888888888`/ч → 4.44 %), включая то, что `fundingRate: "0"` —
+  это ноль, а не отсутствие ставки, и что пустое поле не превращается в `0`.
+- `mirror_positions` and `leader_tracker_state` (migration 005). The mirrored size
+  was one number on `follows`, which is the wrong shape for a book that spans
+  markets; it now lives per (follow, market), and the old column is dropped after
+  a backfill from `mirror_log` rows whose `SUM(reduce_only ? -amount : amount)` is
+  positive. The listener's position state is persisted in the same migration, so
+  a restart continues from the last known positions instead of starting over.
 - `WAKE_SIGNING_ALLOWED_HOSTS` and the Host gate in `backend/signing_service.py`.
   `/place-order` has no authentication and cannot have any (a secret in a public
   browser bundle is not a secret), so the only boundary is the address it is
@@ -23,11 +73,22 @@ from the commit history rather than from a release.
   documented feature that rendered an empty page. The old smoke assertion
   `assertEqual(status_code, 200)` proved only that the route existed. Docs, ReDoc
   and `/openapi.json` now exist only when the flag is on.
+- `src/lib/preload.ts` — recovery from a chunk that a deploy has erased. A tab
+  left open across a deploy keeps the old hashed names, and the lazy panel behind
+  a tab click answered with `index.html` (the `_redirects` catch-all answers 200
+  `text/html`, so no 404 is ever seen) instead of a module; the whole screen turned
+  into the ErrorBoundary, and the only way out was the manual reload button.
+  `vite:preloadError` now reloads the page once, and a one-minute cooldown keeps a
+  broken deploy from reload-looping. Verified on the built bundle: with the
+  Terminal chunk renamed away, the first tab click reloaded the page and the
+  second stayed on the error screen; after restoring the file the panel rendered.
 - `src/lib/visibleInterval.ts` — `setIntervalWhenVisible`. Panels polled their
   providers on their own timers regardless of the tab being hidden (the trade feed
   every 4 s), and a Telegram Mini App webview stays alive in the background, so the
   requests went to numbers nobody was reading. The app shell already had this rule;
-  it is now one primitive with tests, used by all seven polling panels.
+  it is now one primitive with tests, used by all seven polling panels. "Hidden"
+  is two signals: `document.hidden` for the tab and `isActive` (Bot API 8.0+) for a
+  minimized Mini App; `activated` refreshes immediately, like `visibilitychange`.
 - `src/lib/series.ts` — return series aligned by candle hour instead of array
   index. `portfolio_risk._aligned_tails` truncates by common tail, which assumes
   index *i* means the same hour in every row; a market that dropped one pair, or a
@@ -430,6 +491,17 @@ from the commit history rather than from a release.
   a freshly opened list.
 
 ### Changed
+- The tab strip shows its own overflow: at 390 px three of the nine panels sat
+  past the edge with nothing to suggest the list continues, so the right end
+  read as the end. The edge fade appears only while the strip is wider than the
+  window (e2e asserts both widths), and the active tab still scrolls to centre.
+- The backend banner names the reason instead of guessing: the `/ready` check
+  list (`redis: fail`) or the transport wording reaches the notice, because
+  «unavailable» about a service that answers 503 with its check list is a guess,
+  and a panel below it can simultaneously show that same service's error.
+- The Funding row in both READMEs no longer quotes rate and perp counts: they
+  move with the market (735/214 when written, 732/213 three weeks later) and the
+  panel prints the live numbers itself.
 - Fonts come from the bundle instead of `fonts.googleapis.com`: Inter, JetBrains
   Mono and Azeret Mono are shipped by `@fontsource-variable`, imported in
   `src/main.tsx`, and the page makes no third-party font request. The link was
@@ -702,6 +774,19 @@ from the commit history rather than from a release.
   blue for both buy and sell; it now reads the way the Terminal order ticket does.
 
 ### Removed
+- Пять npm-зависимостей, которые не импортировал ни один файл:
+  `class-variance-authority`, `clsx`, `tailwind-merge`, `framer-motion` и
+  `@testing-library/user-event` — наследие библиотеки компонентов эпохи
+  shadcn, пережившее сами компоненты. `npm ci` стал легче на семь пакетов,
+  `npm audit --omit=dev` — по-прежнему ноль. `viem` и `@testing-library/dom`
+  остались намеренно: это peer-требования wagmi и jest-dom, а не мёртвый вес.
+- `mockups/wake-mockup.jsx` and `mockups/wake-web.jsx`: 1251 lines of invented
+  traders and PnL, imported by nothing, linted by nothing, while the README
+  states the screenshots are live captures «not mockups». A public repo
+  shipping fabricated numbers next to that sentence invites exactly the
+  misreading the sentence exists to prevent.
+- Root `screenshots/bot.png` and `screenshots/terminal.png`, unreferenced since
+  2026-10-07 and superseded by the per-panel set in `docs/screenshots/`.
 - `database.init_db()` and `database.is_connected()`. Neither had a caller: the
   schema comes from Alembic in production and from `testsupport.py`
   (`Base.metadata.create_all`) in tests, `/ready` runs a real `SELECT 1`, and
@@ -727,6 +812,95 @@ from the commit history rather than from a release.
   claim of an "optional KMS mode", which the removed file could not deliver.
 
 ### Fixed
+- Документы утверждали факты, которые уже устарели, и противоречили друг
+  другу. SECURITY.md (оба языка) описывал `WAKE_SESSION_TTL_DAYS` как
+  «1–180 дней, по умолчанию 30», тогда как config валидирует 1–30 и держит 7,
+  а список известных пробелов в README рядом говорил про «default is 7 days
+  with a hard ceiling of 30» — то есть пара файлов документировала два разных
+  срока жизни токена. Живое состояние прода тоже стало фактом в доке: строка
+  бэкенда в README описывала «/health отвечает ok, /ready отвечает 503
+  (database fail, redis fail)», а на следующий день сервис перестал быть
+  развёрнут вовсе (edge отвечает `Application not found`). Текст про uptime
+  убран, вместо него команда, которая отвечает на это сегодня:
+  `curl …/health` и `curl …/ready`.
+- Объёмы фикстур e2e были продублированы числами в README и CONTRIBUTING, и
+  эти числа разъехались: в доках 733 строки ставок и 70 рынков Arcus, в
+  `MEASURED` — уже 732 и 81. Значения теперь живут в одном месте, доки
+  ссылаются на него, а фикстуры пересняты сегодня (246 строк книги, 225
+  активных, 732 ставки, 81 рынок).
+- `.dockerignore` и `.railwayignore` перечисляли файлы, которых в репозитории
+  больше нет (`mockups/`, корневые `screenshots/`, `tailwind.config.js`,
+  `Procfile`, `runtime.txt`, `wrangler.toml`), `.gitignore` повторял `*.log`
+  отдельной строкой `cloudflared.log`, а `docs/` (1.3 МБ снимков) ехал в
+  контекст сборки бэкенда впустую.
+- Баннер печатал техническое `signal timed out`: `/ready` в `probeBackend`
+  читался прямым `fetch` и проходил мимо human-маппинга, который для остальных
+  путей существовал именно ради этой строки. Маппинг стал одной функцией на оба
+  пути, а бюджет опроса поднят с 5 с до 10 по замеру с живой страницы: у одного
+  origin браузер держит шесть соединений, опрос стоит в той же очереди, что
+  `/markets/overview` и `/predict/markets`, и второй `/ready` ждал 4.03 с там,
+  где сервис отвечал за 1.0 с — пять секунд мерили очередь сокетов и обвиняли
+  сервис.
+- Фикстура Arcus в e2e изобретала SPOT-рынки: `type` чередовался PERPETUAL /
+  SPOT, хотя живой `/v1/markets` (замер 2026-11-03) знает только PERPETUAL —
+  81 рынок из 81. Панель печатала колонку «Тип» по этому различию, и тесты
+  закрепляли то, чего площадка не отдаёт. Колонка стала «Классом»
+  (CRYPTO / EQUITIES / COMMODITIES / INDICES — полем, которое действительно
+  меняется), строка над таблицей описывает живые данные, а счётчики фикстур
+  пересняты (81 рынок Arcus, 732 строки funding-ставок).
+- Panels printed raw JSON whenever a backend answer was not the unified
+  envelope: `{"detail": "Not Found"}` from a service older than the error
+  format, and FastAPI's validation array, both reached the screen verbatim.
+  `detail` as a string or as `msg` items is now read into the message, and a
+  404/405 on a route this build knows is named as version skew — the live case
+  was Pages calling `/leaders/hydrated` against a Railway service deployed
+  before that route existed.
+- An unknown path answered FastAPI's default `{"detail": "Not Found"}` while
+  every other error used `{"error": {code, message}}`: the handler was registered
+  for `fastapi.HTTPException`, but routing raises Starlette's class, of which
+  FastAPI's is a subclass. Registered on the parent now, so 404 and 405 keep the
+  one format the frontend parses.
+- A restarted or redeployed leader listener mirrored the leader's whole portfolio
+  again: the first websocket snapshot was treated as "everything just opened",
+  and no state survived the restart. The first snapshot is a baseline now —
+  recorded in `leader_tracker_state` and never turned into orders — so a crash or
+  a deploy cannot double somebody else's position.
+- Closing a BTC position computed the follower's share from his BTC + ETH total,
+  because the mirror size was one column per follow. Sizes are per market now,
+  and `POST /simulate-mirror` reads the same per-market numbers as the live
+  engine.
+- The mirror order's IOC limit was built from the leader's `avg_entry_price`. For
+  a losing exit that price sits on the far side of the book — a long entered at
+  2000 with the market at 1500 is closed with a sell limit of 2000 — so the order
+  could never fill and the follower stayed in a position the leader had left. The
+  limit is the current mark price widened by 100 bps in the direction that keeps
+  the order marketable; the mark is read once per event in a threadpool, only when
+  live orders exist, instead of once per follower inside the event loop.
+- One malformed websocket message ended mirroring for every follower of the
+  leader (`KeyError`/`TypeError` straight out of the `async for`). Parsing
+  failures — an unknown snapshot shape, a non-numeric `portfolio_value` — are
+  logged and the connection stays up, and an exception while handling one
+  follower's order cannot stop the others. Tracker state is saved before the
+  events run, so a crash mid-way repeats from the old baseline instead of applying
+  a delta twice.
+- The price oracle could settle a market on a candle it could not read: a missing
+  `c` raised `KeyError` (a 500 above it) and `"NaN"` was returned as a price.
+  Malformed or non-finite rows are skipped in favour of the last readable closed
+  minute, and a series without one is a `RuntimeError`, not a number.
+  `get_mark_price` refuses a non-finite or non-positive close for the same reason
+  — that number becomes the price of a real order.
+- `float(10**400)` raised `OverflowError` past the finite checks in `quant.py`,
+  `risk_limits.py` and `LMSRMarket`: an integer too wide for float64 is a missing
+  value, and the boundary now answers "no data" instead of raising into a money
+  path. `LMSRMarket` also validates its inputs: `NaN <= 0` is False, so NaN passed
+  the liquidity check and came out of `price_yes()`.
+- Panels kept polling while the Telegram Mini App was minimized:
+  `document.hidden` stays false in the webview, so `setIntervalWhenVisible` only
+  ever saw a tab switch, and the trade feed asked Lighter for fresh trades every
+  4 s into a screen nobody had open. `isActive` (Bot API 8.0+) is now the second
+  signal, `activated` refreshes a panel immediately on return, and the app shell's
+  own 15 s market poll goes through the same helper instead of its private
+  `document.hidden` check.
 - Two concurrent `/place-order` requests with the same `client_order_index` both
   submitted. The idempotency cache was checked, then awaited `create_order`, then
   written — so the cache whose only job is "do not send twice" never saw the second

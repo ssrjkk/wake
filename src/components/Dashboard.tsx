@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { ArrowRight, BarChart3, Percent, RefreshCw, ShieldAlert, TriangleAlert, Users } from "lucide-react";
 import { getMarketOverview, type MarketOverview, type MarketOverviewRow, type OrderBook } from "../lib/lighter";
-import { getMarkets as getArcusMarkets, getMidPrices, isArcusOnline, isArcusPerp, type ArcusMarket } from "../lib/arcus";
+import { getMarkets as getArcusMarkets, getMidPrices, isArcusOnline, arcusFundingHourly, arcusAnnualizedFunding, type ArcusMarket } from "../lib/arcus";
 import { errorText } from "../lib/backend";
 import { getPredictMarkets, predictTimeLeft, type PredictMarket } from "../lib/predict";
 import { setIntervalWhenVisible } from "../lib/visibleInterval";
@@ -299,8 +299,9 @@ export default function Dashboard({ setTab, setAsset, markets }: DashboardProps)
           )}
         </div>
         <p style={{ fontSize: "var(--fs-data)", color: "var(--text-muted)", margin: "8px 0 0 0", maxWidth: "800px" }}>
-          Рынки из публичного API Arcus: тип PERP или SPOT указан в каждой строке. Mid-цены с{" "}
-          <code style={{ color: "var(--fg-2)", fontSize: "var(--fs-label)" }}>api.arcus.xyz/v1/mids</code> каждые 30 секунд; это середина котировок, не цена исполнения.
+          Рынки из публичного API Arcus — все perpetual (поле <code style={{ color: "var(--fg-2)", fontSize: "var(--fs-label)" }}>type</code> = PERPETUAL), класс актива: крипта, акции, сырьё или индекс. Mid-цены с{" "}
+          <code style={{ color: "var(--fg-2)", fontSize: "var(--fs-label)" }}>api.arcus.xyz/v1/mids</code> каждые 30 секунд; это середина котировок, не цена исполнения. Funding читается из ответа{" "}
+          <code style={{ color: "var(--fg-2)", fontSize: "var(--fs-label)" }}>v1/markets</code>, а не пересчитывается: начисление почасовое, годовая = ставка × 24 × 365 для крипты и × 24 × 360 для RWA.
         </p>
       </div>
 
@@ -322,13 +323,19 @@ export default function Dashboard({ setTab, setAsset, markets }: DashboardProps)
       ) : (
         <div className="terminal-panel">
           <div className="table-scroll">
-          <table className="data-table" style={{ minWidth: "700px" }} aria-label="Рынки Arcus">
+          <table className="data-table" style={{ minWidth: "860px" }} aria-label="Рынки Arcus">
             <thead>
               <tr>
                 <th scope="col">#</th>
                 <th scope="col" className="left">Актив</th>
-                <th scope="col" className="left">Тип</th>
+                <th scope="col" className="left">Класс</th>
                 <th scope="col" className="right">Mid-цена</th>
+                <th scope="col" className="right" title="Ставка funding за часовую эпоху, из ответа рынка">
+                  Funding, %/ч
+                </th>
+                <th scope="col" className="right" title="Крипта: ставка × 24 × 365; RWA: × 24 × 360 (год по конвенции SOFR)">
+                  Годовая
+                </th>
                 <th scope="col" className="right">Tick size</th>
                 <th scope="col" className="right">Step size</th>
                 <th scope="col" className="left">Статус</th>
@@ -339,6 +346,8 @@ export default function Dashboard({ setTab, setAsset, markets }: DashboardProps)
               {arcusRows.slice(0, 15).map((m, i) => {
                 const price = arcusPrices[m.marketDisplayName];
                 const online = isArcusOnline(m);
+                const hourly = arcusFundingHourly(m);
+                const annual = arcusAnnualizedFunding(m);
                 const onLighter = lighterSymbols.has(m.baseAsset.toUpperCase());
                 return (
                   <tr
@@ -359,10 +368,20 @@ export default function Dashboard({ setTab, setAsset, markets }: DashboardProps)
                       <div className="muted num">{m.baseAsset}/{m.quoteAsset}</div>
                     </td>
                     <td className="left">
-                      <span className="chip">{isArcusPerp(m) ? "PERP" : "SPOT"}</span>
+                      {m.category ? (
+                        <span className="chip">{m.category}</span>
+                      ) : (
+                        <span className="muted">нет класса</span>
+                      )}
                     </td>
                     <td className="right num" style={{ color: "var(--fg)", fontWeight: 500 }}>
                       {price ? fmtPrice(Number(price)) : "—"}
+                    </td>
+                    <td className="right num" style={{ color: "var(--fg-2)" }}>
+                      {hourly === null ? "—" : (hourly * 100).toFixed(4)}
+                    </td>
+                    <td className="right num" style={{ color: "var(--fg)", fontWeight: 500 }}>
+                      {annual === null ? "—" : `${(annual * 100).toFixed(1)}%`}
                     </td>
                     <td className="right num" style={{ color: "var(--fg-2)" }}>{m.tickSize}</td>
                     <td className="right num" style={{ color: "var(--fg-2)" }}>{m.stepSize}</td>

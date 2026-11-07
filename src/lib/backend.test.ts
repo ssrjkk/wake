@@ -166,11 +166,17 @@ describe('backendJson', () => {
     expect(fetchMock.mock.calls[1][0]).toBe(`${BACKEND_URL}/ready`)
   })
 
-  it('rejects a live backend whose dependencies are unavailable', async () => {
+  // Причина обязана доходить до баннера: «недоступен» про сервис, который отвечает
+  // 503 с перечнем проверок, — это не причина, а догадка.
+  it('names the failing readiness checks in the rejection', async () => {
     fetchMock
       .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ status: 'ok', network: 'mainnet', dry_run: true }) })
-      .mockResolvedValueOnce({ ok: false, status: 503, text: () => Promise.resolve('{"status":"not_ready","checks":{"database":"fail","redis":"fail"}}') })
-    await expect(probeBackend()).rejects.toThrow('not_ready')
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 503,
+        json: () => Promise.resolve({ status: 'not_ready', checks: { database: 'ok', redis: 'fail' } }),
+      })
+    await expect(probeBackend()).rejects.toThrow('Бэкенд Wake отвечает, но не готов — redis: fail')
   })
 
   it('does not accept a non-ready payload hidden behind HTTP 200', async () => {
@@ -178,6 +184,57 @@ describe('backendJson', () => {
       .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ status: 'ok', network: 'mainnet', dry_run: true }) })
       .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ status: 'not_ready' }) })
     await expect(probeBackend()).rejects.toThrow('не готов')
+  })
+
+  // Опрос идёт своим бюджетом (10 с), а не бюджетом рабочего запроса (15 с):
+  // он спрашивает про сервис, который может быть не поднят. Техническое
+  // "signal timed out" баннер печатать не должен вовсе — это ровно то
+  // сообщение, ради которого human-маппинг и существует.
+  it('names a /ready timeout in human words and with its own budget', async () => {
+    const timeout = new Error('signal timed out')
+    timeout.name = 'TimeoutError'
+    fetchMock
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ status: 'ok', network: 'mainnet', dry_run: true }) })
+      .mockRejectedValueOnce(timeout)
+    const message = await expectError(() => probeBackend())
+    expect(message).toContain('нет ответа за 10 с')
+    expect(message).not.toContain('signal timed out')
+    expect(message).not.toContain('15 с')
+  })
+
+  // Сервис старше сборки сайта отвечает на известный маршрут дефолтной фразой
+  // Starlette: человек видит «Not Found» и не понимает, что обновлять. Живой кейс:
+  // Pages с /leaders/hydrated против Railway без этого маршрута.
+  it('explains a 404 on a known route as a version skew, not as missing data', async () => {
+    fetchMock.mockResolvedValue({
+      ok: false,
+      status: 404,
+      text: () => Promise.resolve('{"detail":"Not Found"}'),
+    })
+    const message = await expectError(() => backendJson('/leaders/hydrated'))
+    expect(message).toContain('/leaders/hydrated')
+    expect(message).toContain('старше сборки сайта')
+    expect(message).not.toContain('{"detail"')
+  })
+
+  it('keeps a meaningful 404 detail from the backend', async () => {
+    fetchMock.mockResolvedValue({
+      ok: false,
+      status: 404,
+      text: () => Promise.resolve('{"detail":"нет ставок funding по символу QQ"}'),
+    })
+    await expect(expectError(() => backendJson('/funding/venues'))).resolves.toBe('нет ставок funding по символу QQ')
+  })
+
+  it('reads FastAPI validation details instead of printing the array', async () => {
+    fetchMock.mockResolvedValue({
+      ok: false,
+      status: 422,
+      text: () => Promise.resolve('{"detail":[{"msg":"Input should be a valid number","loc":["body","size"]}]}'),
+    })
+    const message = await expectError(() => backendJson('/portfolio/risk', { method: 'POST' }))
+    expect(message).toContain('Input should be a valid number')
+    expect(message).not.toContain('{"detail"')
   })
 })
 

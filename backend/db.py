@@ -20,26 +20,39 @@ mirror_log.
 """
 
 from datetime import UTC, datetime
+import json
 
 from sqlalchemy import func, select, update
 from sqlalchemy.dialects.postgresql import insert
 
 from database import async_session_factory
-from pg_models import Follow, Follower, Leader, MirrorLog
+from pg_models import (
+    Follow,
+    Follower,
+    Leader,
+    LeaderTrackerState,
+    MirrorLog,
+    MirrorPosition,
+)
 
 
 def _epoch(dt: datetime | None) -> float:
     return dt.timestamp() if dt else 0.0
 
 
-def _follow_dict(f: Follow, leader_handle: str | None = None) -> dict:
+def _follow_dict(
+    f: Follow, leader_handle: str | None = None, mirrored_size: float = 0.0
+) -> dict:
     row = {
         "id": f.id,
         "follower_id": f.follower_id,
         "leader_id": f.leader_id,
         "allocation_usd": f.allocation_usd,
         "max_leverage": f.max_leverage,
-        "current_mirrored_size": f.current_mirrored_size,
+        # Сумма по рынкам — только для отображения. Движку нужен размер в
+        # конкретном рынке (mirrored_sizes_for_leader): базовая единица BTC и
+        # базовая единица ETH не складываются ни в какую величину.
+        "current_mirrored_size": mirrored_size,
         "paused": 1 if f.paused else 0,
         "created_at": _epoch(f.created_at),
         "deleted_at": _epoch(f.deleted_at) if f.deleted_at else None,
@@ -47,6 +60,22 @@ def _follow_dict(f: Follow, leader_handle: str | None = None) -> dict:
     if leader_handle is not None:
         row["leader_handle"] = leader_handle
     return row
+
+
+def _mirrored_total():
+    """SUM(mirror_positions.size) по подписке — коррелированный подзапрос.
+
+    Не денормализованная колонка: два параллельных ордера по разным рынкам
+    одной подписки не сериализуются на общей строке follows, и «поддерживать
+    сумму в той же транзакции» значило бы оставить в базе число, которое
+    расходится с собственными строками mirror_positions. Считать при чтении
+    дороже на один подзапрос и никогда не врёт."""
+    return (
+        select(func.coalesce(func.sum(MirrorPosition.size), 0.0))
+        .where(MirrorPosition.follow_id == Follow.id)
+        .correlate(Follow)
+        .scalar_subquery()
+    )
 
 
 # ── Запись ───────────────────────────────────────────────────────────────────
@@ -150,25 +179,92 @@ async def set_paused(follow_id: str, paused: bool) -> None:
         await session.commit()
 
 
-async def add_mirrored_size(follow_id: str, delta: float) -> None:
-    """Прибавить дельту к зеркальному размеру — атомарно, в самой базе.
+async def add_mirrored_size(follow_id: str, market_id: int, delta: float) -> None:
+    """Прибавить дельту к зеркальному размеру В ЭТОМ РЫНКЕ — атомарно.
 
     Прежняя форма принимала ИТОГОВОЕ число, которое вызывающий вычитал из
     строки, прочитанной до исполнения ордера: два события лидера рядом
     давали два «итога» из одного и того же прочитанного значения, и второй
-    перезаписывал первый. Проигранный учёт здесь — это не округление: follows
-    отвечает движьку, сколько уже зеркальено, и расхождение с реальностью
-    остаётся навсегда, потому что читать ему больше не откуда."""
+    перезаписывал первый. Проигранный учёт здесь — это не округление: движок
+    отвечает сам себе, сколько уже зеркалено, и расхождение с реальностью
+    остаётся навсегда, потому что читать ему больше не откуда.
+
+    market_id — часть ключа, а не украшение: reduce на 0.5 BTC при позиции
+    0.5 BTC + 0.5 ETH раньше списывал дельту из общей суммы и оставлял ETH
+    «неучтённым», после чего его закрытие считалось нечем уменьшать."""
+    stmt = insert(MirrorPosition).values(
+        follow_id=follow_id,
+        market_id=market_id,
+        # GREATEST в Python-виде для вставки новой строки: reduce без открытой
+        # позиции — это ноль в этом рынке, а не отрицательная величина.
+        size=max(0.0, delta),
+        updated_at=datetime.now(UTC),
+    )
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["follow_id", "market_id"],
+        set_={
+            "size": func.greatest(MirrorPosition.size + delta, 0.0),
+            "updated_at": datetime.now(UTC),
+        },
+    )
     async with async_session_factory() as session:
-        await session.execute(
-            update(Follow)
-            .where(Follow.id == follow_id)
-            .values(
-                current_mirrored_size=func.greatest(
-                    Follow.current_mirrored_size + delta, 0.0
-                )
+        await session.execute(stmt)
+        await session.commit()
+
+
+async def mirrored_sizes_for_leader(leader_id: str) -> dict[str, dict[int, float]]:
+    """{follow_id: {market_id: size}} для всех подписок лидера одним запросом.
+
+    Движку нужен размер в КОНКРЕТНОМ рынке события: reduce считается от того,
+    сколько у подписчика открыто именно там, а не от суммы по портфелю."""
+    async with async_session_factory() as session:
+        rows = await session.execute(
+            select(
+                MirrorPosition.follow_id,
+                MirrorPosition.market_id,
+                MirrorPosition.size,
             )
+            .join(Follow, Follow.id == MirrorPosition.follow_id)
+            .where(Follow.leader_id == leader_id)
         )
+        sizes: dict[str, dict[int, float]] = {}
+        for follow_id, market_id, size in rows.all():
+            sizes.setdefault(follow_id, {})[market_id] = float(size)
+        return sizes
+
+
+async def load_tracker_state(leader_id: str) -> dict | None:
+    """Последнее состояние позиций лидера или None, если его никогда не было
+    (первый запуск). None — это «базой станет первый снапшот», а не ошибка."""
+    async with async_session_factory() as session:
+        row = await session.scalar(
+            select(LeaderTrackerState).where(LeaderTrackerState.leader_id == leader_id)
+        )
+        if row is None:
+            return None
+        return {"equity": row.equity, "positions": json.loads(row.positions)}
+
+
+async def save_tracker_state(
+    leader_id: str, equity: float | None, positions: dict
+) -> None:
+    """Сохранить базу для диффа после рестарта — upsert по лидеру."""
+    stmt = insert(LeaderTrackerState).values(
+        leader_id=leader_id,
+        equity=equity,
+        positions=json.dumps(positions),
+        updated_at=datetime.now(UTC),
+    )
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["leader_id"],
+        set_={
+            "equity": stmt.excluded.equity,
+            "positions": stmt.excluded.positions,
+            "updated_at": datetime.now(UTC),
+        },
+    )
+    async with async_session_factory() as session:
+        await session.execute(stmt)
         await session.commit()
 
 
@@ -224,7 +320,6 @@ async def active_follows_for_leader(leader_id: str) -> list[dict]:
                     Follow.follower_id,
                     Follow.allocation_usd,
                     Follow.max_leverage,
-                    Follow.current_mirrored_size,
                     Follower.lighter_account_index.label("follower_account_index"),
                 )
                 .join(Follower, Follower.id == Follow.follower_id)
@@ -245,8 +340,8 @@ async def follows_for_leader(leader_id: str) -> list[dict]:
     подписчиков и AUM."""
     async with async_session_factory() as session:
         rows = (
-            await session.scalars(
-                select(Follow)
+            await session.execute(
+                select(Follow, _mirrored_total())
                 .where(
                     Follow.leader_id == leader_id,
                     Follow.paused.is_(False),
@@ -255,7 +350,7 @@ async def follows_for_leader(leader_id: str) -> list[dict]:
                 .order_by(Follow.created_at.desc())
             )
         ).all()
-        return [_follow_dict(r) for r in rows]
+        return [_follow_dict(f, mirrored_size=total) for f, total in rows]
 
 
 async def leader_stats() -> dict[str, dict]:
@@ -290,13 +385,15 @@ async def follows_for_follower(follower_id: str) -> list[dict]:
     async with async_session_factory() as session:
         rows = (
             await session.execute(
-                select(Follow, Leader.handle)
+                select(Follow, Leader.handle, _mirrored_total())
                 .join(Leader, Leader.id == Follow.leader_id)
                 .where(Follow.follower_id == follower_id, Follow.deleted_at.is_(None))
                 .order_by(Follow.created_at.desc())
             )
         ).all()
-        return [_follow_dict(f, handle) for f, handle in rows]
+        return [
+            _follow_dict(f, handle, mirrored_size=total) for f, handle, total in rows
+        ]
 
 
 async def mirror_log_for_follower(follower_id: str, limit: int) -> list[dict]:
@@ -436,14 +533,16 @@ async def owned_follow(follow_id: str, follower_id: str) -> dict | None:
     """Подписка, только если она принадлежит этому подписчику и не отменена —
     проверка владения на уровне запроса, а не в вызывающем коде."""
     async with async_session_factory() as session:
-        row = await session.scalar(
-            select(Follow).where(
-                Follow.id == follow_id,
-                Follow.follower_id == follower_id,
-                Follow.deleted_at.is_(None),
+        row = (
+            await session.execute(
+                select(Follow, _mirrored_total()).where(
+                    Follow.id == follow_id,
+                    Follow.follower_id == follower_id,
+                    Follow.deleted_at.is_(None),
+                )
             )
-        )
-        return _follow_dict(row) if row else None
+        ).first()
+        return _follow_dict(row[0], mirrored_size=row[1]) if row else None
 
 
 async def delete_follow(follow_id: str, follower_id: str) -> bool:

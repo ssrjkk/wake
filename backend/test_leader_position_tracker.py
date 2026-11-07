@@ -75,31 +75,27 @@ def user_stats_msg(portfolio_value: str) -> dict:
     }
 
 
-class TestNoEquityYet(unittest.TestCase):
-    def test_increase_without_known_equity_is_withheld(self):
-        t = LeaderPositionTracker()
-        events = t.apply_position_update(position_msg(0, "0.5", 1, "100000"))
-        self.assertEqual(
-            events, [], "без известного equity приращение не должно эмиттиться"
-        )
-        # но состояние всё равно обновилось внутри
-        self.assertEqual(t.positions[0]["size"], 0.5)
+class TestFirstSnapshotIsBaseline(unittest.TestCase):
+    """Первый снапшот — база, а не сделка.
 
+    Lighter присылает полный снапшот позиций при подписке. Процесс, которому он
+    достался первым, не знает, когда эти позиции появились: лидер мог держать
+    их месяцами. Прежняя реализация считала первый снапшот «открытием всего
+    портфеля», и каждый рестарт листенера (деплой, падение) зеркалил портфель
+    лидера заново поверх уже открытых позиций подписчиков — удваивая чужую
+    экспозицию без единой сделки лидера.
+    """
 
-class TestBasicFlow(unittest.TestCase):
-    def test_first_position_after_equity_known_emits_increase(self):
+    def test_first_snapshot_with_equity_known_emits_nothing(self):
         t = LeaderPositionTracker()
         t.apply_user_stats(user_stats_msg("50000"))
         events = t.apply_position_update(position_msg(0, "0.5", 1, "100000"))
 
-        self.assertEqual(len(events), 1)
-        e = events[0]
-        self.assertEqual(e["side"], "long")
-        self.assertTrue(e["is_increase"])
-        self.assertAlmostEqual(e["size_delta"], 0.5)
-        self.assertEqual(e["leader_equity_usd"], 50000.0)
+        self.assertEqual(events, [], "база не может быть открытием позиции")
+        self.assertEqual(t.positions[0]["size"], 0.5)
+        self.assertTrue(t.seeded)
 
-    def test_further_increase_computes_correct_delta(self):
+    def test_increase_after_baseline_is_the_delta(self):
         t = LeaderPositionTracker()
         t.apply_user_stats(user_stats_msg("50000"))
         t.apply_position_update(position_msg(0, "0.5", 1, "100000"))
@@ -109,10 +105,38 @@ class TestBasicFlow(unittest.TestCase):
         self.assertAlmostEqual(events[0]["size_delta"], 0.3, places=6)
         self.assertTrue(events[0]["is_increase"])
 
-    def test_partial_decrease_emits_reduce_with_correct_position_before(self):
+    def test_first_snapshot_without_positions_still_seeds(self):
         t = LeaderPositionTracker()
         t.apply_user_stats(user_stats_msg("50000"))
-        t.apply_position_update(position_msg(0, "0.5", 1, "100000"))
+        self.assertEqual(t.apply_position_update(snapshot({})), [])
+        events = t.apply_position_update(
+            snapshot({"8": {"sign": 1, "position": "0.2", "avg_entry_price": "2100"}})
+        )
+        self.assertEqual(len(events), 1)
+        self.assertTrue(events[0]["is_increase"], "позиция после базы — открытие")
+        self.assertEqual(events[0]["size_delta"], 0.2)
+
+
+class TestNoEquityYet(unittest.TestCase):
+    def test_increase_without_known_equity_is_withheld_but_state_moves(self):
+        t = LeaderPositionTracker()
+        t.apply_position_update(position_msg(0, "0.5", 1, "100000"))  # база
+        events = t.apply_position_update(position_msg(0, "0.8", 1, "100000"))
+        self.assertEqual(
+            events, [], "без известного equity приращение не должно эмиттиться"
+        )
+        # состояние обновилось: следующая дельта считается от 0.8, а не от 0.5
+        self.assertEqual(t.positions[0]["size"], 0.8)
+
+
+class TestBasicFlow(unittest.TestCase):
+    def seed(self, t, size: str = "0.5"):
+        t.apply_user_stats(user_stats_msg("50000"))
+        t.apply_position_update(position_msg(0, size, 1, "100000"))
+
+    def test_partial_decrease_emits_reduce_with_correct_position_before(self):
+        t = LeaderPositionTracker()
+        self.seed(t)
         events = t.apply_position_update(position_msg(0, "0.2", 1, "100000"))
 
         self.assertEqual(len(events), 1)
@@ -126,8 +150,7 @@ class TestBasicFlow(unittest.TestCase):
 
     def test_full_close_to_zero(self):
         t = LeaderPositionTracker()
-        t.apply_user_stats(user_stats_msg("50000"))
-        t.apply_position_update(position_msg(0, "0.5", 1, "100000"))
+        self.seed(t)
         events = t.apply_position_update(position_msg(0, "0", 1, "100000"))
 
         self.assertEqual(len(events), 1)
@@ -136,8 +159,7 @@ class TestBasicFlow(unittest.TestCase):
 
     def test_no_change_emits_nothing(self):
         t = LeaderPositionTracker()
-        t.apply_user_stats(user_stats_msg("50000"))
-        t.apply_position_update(position_msg(0, "0.5", 1, "100000"))
+        self.seed(t)
         events = t.apply_position_update(position_msg(0, "0.5", 1, "100000"))
         self.assertEqual(events, [])
 
@@ -181,7 +203,7 @@ class TestReversal(unittest.TestCase):
 
 
 class TestMultipleMarketsIndependent(unittest.TestCase):
-    def test_two_markets_tracked_independently(self):
+    def test_first_snapshot_with_two_markets_is_baseline(self):
         t = LeaderPositionTracker()
         t.apply_user_stats(user_stats_msg("50000"))
         msg = {
@@ -191,10 +213,31 @@ class TestMultipleMarketsIndependent(unittest.TestCase):
             },
             "type": "update/account_all_positions",
         }
-        events = t.apply_position_update(msg)
-        self.assertEqual(len(events), 2)
-        markets = {e["market_id"] for e in events}
-        self.assertEqual(markets, {0, 1})
+        self.assertEqual(t.apply_position_update(msg), [])
+        self.assertEqual(sorted(t.positions), [0, 1])
+
+    def test_each_market_diffs_against_its_own_state(self):
+        t = LeaderPositionTracker()
+        t.apply_user_stats(user_stats_msg("50000"))
+        t.apply_position_update(
+            snapshot(
+                {
+                    "0": {"sign": 1, "position": "0.5", "avg_entry_price": "100000"},
+                    "1": {"sign": 1, "position": "2.0", "avg_entry_price": "3500"},
+                }
+            )
+        )
+        events = t.apply_position_update(
+            snapshot(
+                {
+                    "0": {"sign": 1, "position": "0.5", "avg_entry_price": "100000"},
+                    "1": {"sign": 1, "position": "3.0", "avg_entry_price": "3550"},
+                }
+            )
+        )
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["market_id"], 1)
+        self.assertAlmostEqual(events[0]["size_delta"], 1.0)
 
 
 class TestMarketDisappearsFromSnapshot(unittest.TestCase):
@@ -272,6 +315,82 @@ class TestMarketDisappearsFromSnapshot(unittest.TestCase):
         )
         self.assertEqual([e["market_id"] for e in events], [0])
         self.assertEqual(sorted(t.positions), [1])
+
+
+class TestRestartStateRestore(unittest.TestCase):
+    """Состояние переживает рестарт: иначе потерянное закрытие не эмитится никогда.
+
+    Первый снапшот после деплоя сравнивается не с пустотой, а с последним
+    известным состоянием лидера. Без этого закрытие, сделанное пока процесс
+    лежал, выглядело бы как «позиций нет» при пустой базе — событий ноль, и
+    подписчик остаётся в рынке, из которого лидер вышел.
+    """
+
+    def state(self):
+        return {
+            "equity": 50000.0,
+            "positions": {"8": {"size": 0.5, "sign": 1, "price": 2000.0}},
+        }
+
+    def test_unchanged_snapshot_after_restore_emits_nothing(self):
+        t = LeaderPositionTracker()
+        t.restore(self.state())
+        events = t.apply_position_update(
+            snapshot({"8": {"sign": 1, "position": "0.5", "avg_entry_price": "2000"}})
+        )
+        self.assertEqual(events, [], "позиция уже была — это не сделка")
+
+    def test_close_during_downtime_is_emitted_after_restore(self):
+        t = LeaderPositionTracker()
+        t.restore(self.state())
+        events = t.apply_position_update(snapshot({}))
+        self.assertEqual(len(events), 1)
+        e = events[0]
+        self.assertFalse(e["is_increase"])
+        self.assertAlmostEqual(e["size_delta"], 0.5)
+        self.assertAlmostEqual(e["leader_position_before"], 0.5)
+        self.assertEqual(e["price"], 2000.0)
+
+    def test_snapshot_round_trips_through_json_shapes(self):
+        t = LeaderPositionTracker()
+        t.apply_user_stats(user_stats_msg("50000"))
+        t.apply_position_update(
+            snapshot(
+                {
+                    "0": {"sign": -1, "position": "2.0", "avg_entry_price": "3500"},
+                    "1": {"sign": 1, "position": "0.5", "avg_entry_price": "100000"},
+                }
+            )
+        )
+        copy = LeaderPositionTracker()
+        copy.restore(t.snapshot())
+        self.assertEqual(copy.equity, t.equity)
+        self.assertEqual(copy.positions, t.positions)
+
+    def test_broken_state_is_rejected_not_absorbed(self):
+        cases = [
+            {"equity": float("nan"), "positions": {}},
+            {"equity": 1.0, "positions": "нет"},
+            {
+                "equity": 1.0,
+                "positions": {"8": {"size": float("inf"), "sign": 1, "price": 1.0}},
+            },
+            {"equity": 1.0, "positions": {"8": {"size": 0.5, "sign": 0, "price": 1.0}}},
+            {"equity": 1.0, "positions": {"8": {"size": 0.5, "sign": 1, "price": 0.0}}},
+        ]
+        for state in cases:
+            with self.subTest(state=state):
+                t = LeaderPositionTracker()
+                with self.assertRaises(ValueError):
+                    t.restore(state)
+                self.assertFalse(t.seeded, "битое состояние не делает трекер готовым")
+
+    def test_malformed_snapshot_is_rejected_whole(self):
+        t = LeaderPositionTracker()
+        with self.assertRaises(ValueError):
+            t.apply_position_update(position_msg(0, "nan", 1, "100000"))
+        with self.assertRaises(ValueError):
+            t.apply_position_update(position_msg(0, "0.5", 0, "100000"))
 
 
 if __name__ == "__main__":
