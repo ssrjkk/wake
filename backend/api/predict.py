@@ -116,10 +116,17 @@ class ResolvePriceRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+# Колонки строки predict_markets, которые не читает ни один клиент: резервы пула
+# нужны здесь же, до превращения в цены, а created_at рынка не показывает никто
+# (витрина сортируется по дедлайну). Наружу уходит карточка, а не дамп таблицы.
+_NOT_PUBLIC = ("q_yes", "q_no", "created_at")
+
+
 def _with_prices(row: dict, stats: dict) -> dict:
     amm = LMSRMarket(b=row["b"], q_yes=row["q_yes"], q_no=row["q_no"])
     s = stats.get(row["id"], {})
-    return row | {
+    public = {key: value for key, value in row.items() if key not in _NOT_PUBLIC}
+    return public | {
         "price_yes": amm.price_yes(),
         "price_no": amm.price_no(),
         "max_subsidy": amm.max_subsidy(),

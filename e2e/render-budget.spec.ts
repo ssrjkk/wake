@@ -279,8 +279,8 @@ test.describe("бюджеты рендера на живом объёме дан
     const total = Math.min(MEASURED.pickerCeiling, MEASURED.orderBookRows);
     const g = await windowGeometry(page, ".picker-list", ".picker-row");
 
-    expect(g.rows).toBeLessThan(total, "в DOM обязано жить окно, а не список");
-    expect(g.pitch.max - g.pitch.min).toBeLessThan(0.5, `шаг строки гуляет: ${JSON.stringify(g.pitch)}`);
+    expect(g.rows, "в DOM обязано жить окно, а не список").toBeLessThan(total);
+    expect(g.pitch.max - g.pitch.min, `шаг строки гуляет: ${JSON.stringify(g.pitch)}`).toBeLessThan(0.5);
     const pitch = g.pitch.min;
     // Диапазон скролла = count × шаг, с запасом на заголовок и заглушки. Если
     // заглушка снова сожмётся — этот assert красный, а не «ну чуть короче».
@@ -319,8 +319,8 @@ test.describe("бюджеты рендера на живом объёме дан
     const total = MEASURED.mirrorLogCeiling;
     const g = await windowGeometry(page, ".log-scroll", ".log-row");
 
-    expect(g.rows).toBeLessThan(total, "журнал обязан рендериться окном");
-    expect(g.pitch.max - g.pitch.min).toBeLessThan(0.5, `шаг строки гуляет: ${JSON.stringify(g.pitch)}`);
+    expect(g.rows, "журнал обязан рендериться окном").toBeLessThan(total);
+    expect(g.pitch.max - g.pitch.min, `шаг строки гуляет: ${JSON.stringify(g.pitch)}`).toBeLessThan(0.5);
     expect(g.scrollHeight).toBeGreaterThanOrEqual(total * g.pitch.min * 0.98);
     expect(g.tailVisible, "последняя строка журнала досматривается").toBe(true);
   });

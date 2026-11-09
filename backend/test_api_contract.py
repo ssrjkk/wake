@@ -1,8 +1,11 @@
 """Контракт фронтенда и бэкенда: каждый путь, который сайт зовёт, существует.
 
-Вторая половина файла — тот же принцип на другом конце интерфейса: список
-вкладок сверяется с ветками рендера в App.tsx, с диапазоном горячих клавиш и с
-валидацией `?tab=` в deeplink.ts.
+Треть файла — список вкладок против веток рендера в App.tsx, диапазона горячих
+клавиш, валидации `?tab=` в deeplink.ts и того списка, которым ходят браузерные
+гейты. Четвёртая — утверждения документов, которые код может опровергнуть: поле
+схемы, формат ошибки, цифра маршрутов, число тестов и число панелей.
+Поля ответов этого же контракта сверяет test_field_contract.py — там, где путь
+нашёл ответ, но не посмотрел, что внутри.
 
 python3 -m unittest test_api_contract -v
 
@@ -18,9 +21,11 @@ python3 -m unittest test_api_contract -v
 сверяется: фронтенд задаёт его параметром вызова, и путь, совпавший с чужим
 методом, всё равно виден в `test_api_smoke.py`, где каждый роут прогоняется.
 
-Тест не требует базы и сети: читаются только исходники и реестры маршрутов.
+Тест не требует базы и сети: читаются только исходники, конфиги и реестры
+маршрутов.
 """
 
+import json
 import re
 import unittest
 from pathlib import Path
@@ -243,7 +248,10 @@ class TestTabRegistry(unittest.TestCase):
     Здесь же живёт и проверка deeplink: ссылка из бота приходит как `?tab=…`, и
     валидация обязана принимать ровно те значения, которые знает навигация, —
     иначе бот отдаёт ссылку на раздел, которого оболочка не знает, и человек
-    видит пустой экран вместо нужной панели.
+    видит пустой экран вместо нужной панели. Третий слой — браузерные гейты:
+    они обходят интерфейс по подписям, переписанным в `e2e/design-audit.ts`, и
+    если этот список отстанет, новая панель никогда не будет измерена, а прогон
+    не заметит.
     """
 
     ROOT = Path(__file__).resolve().parent.parent / "src"
@@ -251,10 +259,18 @@ class TestTabRegistry(unittest.TestCase):
     def _text(self, relative: str) -> str:
         return (self.ROOT / relative).read_text(encoding="utf-8")
 
+    def _repo_text(self, relative: str) -> str:
+        return (self.ROOT.parent / relative).read_text(encoding="utf-8")
+
     def _tab_ids(self) -> list:
         text = self._text("lib/tabs.ts")
         block = text[text.index("export const TABS") :]
         return re.findall(r'\{\s*id:\s*"([a-z]+)"', block)
+
+    def _tab_labels(self) -> list:
+        text = self._text("lib/tabs.ts")
+        block = text[text.index("export const TABS") :]
+        return re.findall(r'\{\s*id:\s*"[a-z]+",\s*label:\s*"([^"]+)"', block)
 
     def test_ids_are_unique_and_fit_the_hotkey_range(self):
         ids = self._tab_ids()
@@ -271,6 +287,52 @@ class TestTabRegistry(unittest.TestCase):
             missing,
             [],
             f"вкладки без ветки рендера: {missing} — кнопка переключит экран в пустоту",
+        )
+
+    def test_e2e_walks_the_same_tabs_the_app_renders(self):
+        """`e2e/design-audit.ts` обходит вкладки по подписям, и спеки кликают
+        именно по этому списку. Список, отставший от `tabs.ts`, означает
+        панель, которую никогда не проверяли, — прогон остаётся зелёным и
+        ничего не замечает. Поэтому подписи сверяются с реестром, а вторая
+        копия списка запрещена во всех файлах сразу: она появляется ровно
+        тогда, когда новый спек начинает кликать по вкладкам, и живёт до
+        первого переименования раздела.
+        """
+        ids = self._tab_ids()
+        labels = self._tab_labels()
+        self.assertEqual(len(labels), len(ids), "метка какой-то вкладки не разобралась")
+
+        audit = self._repo_text("e2e/design-audit.ts")
+        block = re.search(r"export const TABS\s*=\s*\[(.*?)\]", audit, re.S)
+        self.assertIsNotNone(block, "список вкладок в e2e/design-audit.ts не найден")
+        self.assertEqual(
+            re.findall(r'"([^"]+)"', block.group(1)),
+            labels,
+            "гейт обходит не те вкладки, которые показывает навигация",
+        )
+
+        e2e = (self.ROOT.parent / "e2e").resolve()
+        users = []
+        for path in sorted(e2e.glob("*.ts")):
+            if path.name == "design-audit.ts":
+                continue
+            text = path.read_text(encoding="utf-8")
+            if re.search(r"\bTABS\b", text) is None:
+                continue
+            users.append(path.name)
+            self.assertNotIn(
+                "const TABS",
+                text,
+                f"у {path.name} собственный список вкладок — он отстанет от tabs.ts молча",
+            )
+            self.assertIsNotNone(
+                re.search(r'from\s+["\']\./design-audit["\']', text),
+                f"{path.name} пользуется списком, который больше не берётся из общего реестра",
+            )
+        self.assertGreaterEqual(
+            len(users),
+            4,
+            "список вкладок больше не кому обходить — гейт сверяет пустоту",
         )
 
     def test_hotkey_ceiling_matches_the_number_of_tabs(self):
@@ -293,6 +355,157 @@ class TestTabRegistry(unittest.TestCase):
             deeplink,
             r"TAB_IDS as readonly string\[\]\)\.includes\(",
             "валидация ?tab= перестала использовать TAB_IDS",
+        )
+
+
+class TestDocsClaims(unittest.TestCase):
+    """Утверждения документов, которые код может опровергнуть.
+
+    README и SECURITY.md описывают не только замысел, но и поверхности: схему
+    credentials в OpenAPI, формат ошибок, цену записи. Первая же цифра, которую
+    док пересказывает из живых данных, устаревает в том же коммите, что её
+    изменил, — в README стоило «38 путей» против 43 в openapi(), и проверить
+    это глазами невозможно: обе строки выглядят правдоподобно.
+
+    Поэтому здесь три запрета на счётчики — маршруты, размер набора тестов и
+    число панелей — и отдельная сверка того, что док утверждает про содержимое
+    схемы. Все три запрещены по одной причине: страница не пересобирает ни
+    реестр роутов, ни набор, ни `tabs.ts`, чтобы узнать их размер, — и ровно
+    поэтому в доке жил текст «704 теста», когда дерево собирало 729, и «38
+    путей» против 43 в openapi(), и «девять разделов» там, где число вкладок
+    держит горячие клавиши 1..9.
+    """
+
+    DOC_NAMES = (
+        "README.md",
+        "README.ru.md",
+        "CONTRIBUTING.md",
+        "SECURITY.md",
+        "docs/RAILWAY_DEPLOY.md",
+    )
+    # Зеркальные формы («routes: 43», «тестов — 704») запрещаются так же, как
+    # прямые: у числа, записанного после слова, та же судьба. Разделитель
+    # обязателен — без него под запрет попала бы проза про коды ответов
+    # («route 403», «endpoints = 401» уже про HTTP, а не про размер реестра).
+    COUNT_SHAPE = re.compile(
+        r"\b\d{1,4}\s*(?:paths?|путей|routes?|маршрутов|endpoints?|эндпоинтов)\b"
+        r"|\b(?:paths?|routes?|endpoints?|маршрут(?:ы|а|ов|е|ах)?|эндпоинт(?:ы|а|ов|е|ах)?)"
+        r"\s*[:=–—]\s*\d{1,4}\b",
+        re.I,
+    )
+    TEST_COUNT_SHAPE = re.compile(
+        r"\d+\s*(?:tests?\b|test\s+files?\b|specs?\b|passed\b|skipped\b"
+        r"|тест(?:ы|ов|а|е)?\b|спецификаци\w*\b|спек\w*\b|прошли\b"
+        r"|пропущен\w*\b|файлов\b|файл(?:ы|а|ов|ах)?\b)"
+        r"|\b(?:tests?|specs?|files?|passed\b|skipped\b|тест(?:ы|ов|а|е|ах)?"
+        r"|спецификаци\w*|файл(?:ы|а|ов|е|ах)?|прошли|пропущен\w*)"
+        r"\s*[:=–—]\s*\d{1,4}\b",
+        re.I,
+    )
+    # Число панелей принадлежит `src/lib/tabs.ts`, а не документу: строка
+    # «девять разделов встали нижней панелью» описывала live-реестр и
+    # постарела бы в тот же день, когда десятая вкладка осталась бы без
+    # горячей клавиши. Литерой («nine», «девять») под запрет не берём — проза
+    # вроде «two tabs» считает открытые вкладки браузера, а не размер
+    # интерфейса, и ловить её означало бы научить гейт врать. Цифра же перед
+    # таким словом — всегда счётчик, и её ловить можно.
+    TAB_COUNT_SHAPE = re.compile(
+        r"\b\d{1,2}\s*(?:tabs?|panels?|sections?|views?|screens?"
+        r"|вклад(?:ки|ок|ам|ах)?|панел(?:и|ей|ам|ях)?|раздел(?:ы|ов|ам|ах)?)\b"
+        r"|\b(?:tabs?|panels?|sections?|views?|screens?"
+        r"|вклад(?:ки|ок|ам|ах)?|панел(?:и|ей|ам|ях)?|раздел(?:ы|ов|ам|ах)?)"
+        r"\s*[:=–—]\s*\d{1,2}\b",
+        re.I,
+    )
+
+    def _docs(self):
+        root = Path(__file__).resolve().parent.parent
+        for name in self.DOC_NAMES:
+            path = root / name
+            if path.exists():
+                yield name, path.read_text(encoding="utf-8")
+
+    def _quotes(self, shape):
+        quoted = []
+        for name, text in self._docs():
+            for line_no, line in enumerate(text.splitlines(), start=1):
+                for found in shape.finditer(line):
+                    quoted.append(f"{name}:{line_no}: {found.group(0)!r}")
+        return quoted
+
+    def test_no_document_counts_the_routes(self):
+        self.assertEqual(
+            self._quotes(self.COUNT_SHAPE),
+            [],
+            "число маршрутов в доке устаревает с каждым роутером — описывать поверхность, а не счёт",
+        )
+
+    def test_no_document_counts_its_tests(self):
+        """«704 теста (703 прошли)» переживает один коммит и врёт в следующих
+        десяти: док не пересобирает набор, поэтому счётчик здесь — это
+        обещание, которое никто не обновляет. Прогон печатает своё число, и
+        читать надо его."""
+        self.assertEqual(
+            self._quotes(self.TEST_COUNT_SHAPE),
+            [],
+            "число тестов в доке устаревает с каждым добавленным тестом — "
+            "описывать, что покрыто, а не сколько",
+        )
+
+    def test_no_document_counts_the_panels(self):
+        self.assertEqual(
+            self._quotes(self.TAB_COUNT_SHAPE),
+            [],
+            "число панелей в доке устаревает с каждой добавленной вкладкой — "
+            "описывать навигацию, а не считать её",
+        )
+
+    def test_openapi_declares_both_credential_types(self):
+        """Доки говорят, что эндпоинты сами объявляют, какие credentials нужны.
+
+        Проверяется не наличие слова в тексте, а содержимое схемы: имя заголовка
+        куратора и тип bearer. Иначе «видно без чтения исходников» — это
+        обещание, которое никто не держит."""
+        schemes = (
+            wake_app.app.openapi().get("components", {}).get("securitySchemes", {})
+        )
+        self.assertIn("HTTPBearer", schemes, "сессонный bearer не объявлен в OpenAPI")
+        self.assertEqual(schemes["HTTPBearer"]["type"], "http")
+        self.assertEqual(schemes["HTTPBearer"]["scheme"], "bearer")
+        self.assertIn("APIKeyHeader", schemes, "X-Curator-Token не объявлен в OpenAPI")
+        self.assertEqual(schemes["APIKeyHeader"]["in"], "header")
+        self.assertEqual(schemes["APIKeyHeader"]["name"], "X-Curator-Token")
+
+    # Формат ошибки — {error: {code, message}} — SECURITY.md тоже обещает, но
+    # проверяется он живыми запросами в test_api_smoke.py (класс
+    # TestFailureResponseContract): поиск по исходнику app.py остаётся зелёным
+    # и при сломанном конверте, потому что строка в тексте — не ответ.
+
+
+class TestTypecheckScope(unittest.TestCase):
+    """`npx tsc --noEmit` обязан видеть не только `src/`.
+
+    Пока `e2e/` вне `include`, типы браузерных гейтов не проверяет никто: в
+    render-budget.spec.ts четыре раза стоял текст ассерта вторым аргументом
+    матчера, которого у матчера нет, — сообщения не печатались ровно там, где
+    они нужны. Ошибка всплыла в ту секунду, когда каталог попал в `include`, и
+    этот тест нужен затем, чтобы обратно он оттуда не уходил молча: под
+    предлогом «сборка падает» конфиг откатывают, а вместе с ним пропадает
+    единственная проверка типов для 2 435 строк браузерных проверок (замер
+    `wc -l e2e/*.ts` 2026-11-09).
+    """
+
+    def test_e2e_is_covered_by_the_typecheck(self):
+        cfg = json.loads(
+            (Path(__file__).resolve().parent.parent / "tsconfig.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertIn(
+            "e2e",
+            cfg.get("include", []),
+            "браузерные гейты не проходят проверку типов — их ошибки видны только "
+            "внутри трёхминутного прогона, если прогон вообще до них дойдёт",
         )
 
 

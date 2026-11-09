@@ -59,13 +59,31 @@ SOURCE_SUFFIXES = {
     ".sql",
     ".html",
 }
-SKIP_DIRS = {
-    "node_modules",
+# Каталог вывода инструментов не исходник, и вести его список руками нельзя: он
+# расходится с `.gitignore` молча. Так и вышло — `test-results/` игнорируется
+# git'ом, но не был пропущен здесь, и гейт упал на `error-context.md`, который
+# Playwright пишет сам после падения браузера: в файле с русским названием теста
+# нашлась латинская буква рядом с кириллицей. Проверять нужно исходники, а не
+# то, что дерево показало после прогона, поэтому список читается из `.gitignore`.
+DIR_LINE = re.compile(r"/?([A-Za-z0-9_.-]+)/$")
+
+
+def _ignored_dirs() -> set:
+    """Строки `.gitignore`, которые описывают каталог целиком (`node_modules/`)."""
+    try:
+        lines = (ROOT / ".gitignore").read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return set()
+    return {match.group(1) for line in lines if (match := DIR_LINE.match(line.strip()))}
+
+
+# .git — служебный каталог git, его в `.gitignore` нет по определению. .venv,
+# allure-results и visualizationOutputDirectory — вывод инструментов, который
+# появляется локально или в CI и не обязан быть в `.gitignore` этого проекта.
+SKIP_DIRS = _ignored_dirs() | {
     ".git",
-    "dist",
     ".venv",
     "allure-results",
-    "__pycache__",
     "visualizationOutputDirectory",
 }
 
@@ -142,6 +160,42 @@ class TestSourceHygiene(unittest.TestCase):
             for number in _lines_with(path, TRAILING_WS):
                 bad.append(f"{path.relative_to(ROOT)}:{number}")
         self.assertEqual(bad, [], "хвостовые пробелы дают шум в diff")
+
+    def test_generated_directories_are_outside_the_scan(self):
+        """Граница сканера приходит из `.gitignore`, а не из памяти автора теста.
+
+        Пока список ведётся руками, проверки выше зависят от того, что успело
+        лежать в дереве после чужого прогона: упавший Playwright пишет
+        `test-results/<русское имя теста>/error-context.md` со слепком DOM, и
+        `test_no_latin_inside_cyrillic_words` падает на разметке страницы,
+        которой он не касается. Разбор `.gitignore` обязан видеть те каталоги,
+        которые git и так прячет, — иначе граница расходится с репозиторием.
+        """
+        ignored = _ignored_dirs()
+        self.assertTrue(
+            ignored, ".gitignore не разобрался — сканер идёт по всему дереву"
+        )
+        for name in (
+            "node_modules",
+            "dist",
+            "test-results",
+            "playwright-report",
+            "blob-report",
+            "coverage",
+            "htmlcov",
+            "__pycache__",
+            ".pytest_cache",
+            ".ruff_cache",
+            ".wrangler",
+        ):
+            self.assertIn(
+                name, ignored, f"`.gitignore` прячет {name}/, а разбор его не видит"
+            )
+            self.assertIn(
+                name,
+                SKIP_DIRS,
+                f"{name}/ игнорируется git'ом, но сканер в него заходит",
+            )
 
     def test_readme_pair_exists(self):
         """Документация двуязычная по договору: английская основная, русская

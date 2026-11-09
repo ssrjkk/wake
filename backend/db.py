@@ -55,7 +55,8 @@ def _follow_dict(
         "current_mirrored_size": mirrored_size,
         "paused": 1 if f.paused else 0,
         "created_at": _epoch(f.created_at),
-        "deleted_at": _epoch(f.deleted_at) if f.deleted_at else None,
+        # deleted_at здесь не отдаётся: все три читателя _follow_dict фильтруют
+        # строки с deleted_at IS NULL, поэтому ключ был бы null в каждом ответе.
     }
     if leader_handle is not None:
         row["leader_handle"] = leader_handle

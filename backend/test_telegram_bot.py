@@ -1108,19 +1108,39 @@ class TestProfileTexts(unittest.TestCase):
 
     def test_register_profile_survives_a_refused_write(self):
         """Тексты витрины не торговый путь: отказ Bot API не имеет права ронять
-        старт бота."""
+        старт бота.
+
+        Раньше этот тест только звал функцию и молчал, если та не подняла
+        исключение, — то есть ловил падение процесса, но не ловил главное:
+        череду, остановленную первым отказом. Имя могло поставиться, описание —
+        нет, и в Telegram осталось бы прошлое, набранное руками у @BotFather,
+        а лог бы об этом сообщил только ему.
+        """
 
         class Refusing:
+            def __init__(self):
+                self.calls = []
+
             async def set_my_name(self, name):
+                self.calls.append("имя")
                 raise RuntimeError("unauthorized")
 
             async def set_my_short_description(self, text):
-                raise RuntimeError("unauthorized")
+                self.calls.append("краткое описание")
 
             async def set_my_description(self, text):
-                raise RuntimeError("unauthorized")
+                self.calls.append("описание")
 
-        asyncio.run(tb.register_profile(Refusing()))
+        bot = Refusing()
+        with self.assertLogs("telegram_bot", level="WARNING") as captured:
+            asyncio.run(tb.register_profile(bot))
+        # все три шага попробованы, хотя первый отказал
+        self.assertEqual(bot.calls, ["имя", "краткое описание", "описание"])
+        # и про отказ сказано по имени шага, а не «что-то не так»
+        self.assertTrue(
+            any("имя" in line and "unauthorized" in line for line in captured.output),
+            captured.output,
+        )
 
 
 class TestHelpSections(unittest.TestCase):
@@ -1152,10 +1172,38 @@ class TestHelpSections(unittest.TestCase):
 
     def test_group_menu_survives_a_refused_write(self):
         class Refusing:
+            def __init__(self):
+                self.sent = None
+
             async def set_my_commands(self, commands, scope=None):
+                self.sent = [c.command for c in commands]
                 raise RuntimeError("unauthorized")
 
-        asyncio.run(tb.register_group_menu(Refusing()))
+        bot = Refusing()
+        with self.assertLogs("telegram_bot", level="WARNING") as captured:
+            asyncio.run(tb.register_group_menu(bot))
+        self.assertEqual(bot.sent, list(tb.GROUP_COMMANDS))
+        self.assertTrue(
+            any("группах" in line for line in captured.output), captured.output
+        )
+
+    def test_group_menu_excludes_the_private_commands(self):
+        """Docstring обещает: Predict и справка живут вне группового меню, потому
+        что рынок предсказаний — разговор с собственным аккаунтом. Обещание
+        раньше нигде не проверялось, а держится оно на пересечении двух кортежей,
+        которые правятся в разных местах файла."""
+        sent = []
+
+        class Recorder:
+            async def set_my_commands(self, commands, scope=None):
+                sent.extend(c.command for c in commands)
+
+        asyncio.run(tb.register_group_menu(Recorder()))
+        self.assertEqual(sent, list(tb.GROUP_COMMANDS))
+        for excluded in ("predict", "help"):
+            self.assertNotIn(excluded, sent, f"{excluded} не должен попасть в группы")
+        # и наоборот: ни одной команды, на которую бот не отвечает
+        self.assertTrue(set(sent) <= {c.command for c in tb.BOT_COMMANDS}, sent)
 
 
 class TestTelegramLineWidth(unittest.TestCase):

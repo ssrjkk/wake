@@ -2761,15 +2761,13 @@ class TestPredictMarketBoundary(HttpCase):
         self.assertIn("=>", r.json()["error"]["message"])
 
 
-class TestLeaderHydration(HttpCase):
-    """GET /leaders/hydrated — карточка лидера собирается на сервере.
+class CopyTradingSeeding(HttpCase):
+    """Посев копи-трейда: публикация лидера, подписка и снимок счёта Lighter.
 
-    Фронт собирал её сам: по запросу статистики подписки и по запросу счёта
-    Lighter на каждую строку, то есть два round-trip'а на карточку (замер
-    e2e/render-budget.spec.ts: 40 лидеров = 80 запросов на один экран). Здесь
-    проверяются две вещи, без которых замена была бы честной только на словах:
-    агрегат считает те же фильтры, что и поштучный список, и счета читаются
-    ОДНИМ пакетным вызовом, а не циклом."""
+    Три шага живут миксином, а не телами тестов, потому что они нужны двум
+    файлам: смоку, который проверяет, что гидратация считает, и сверке полей
+    ответа (test_field_contract.py), которой нужен просто ненулевой посев.
+    Тестовых методов здесь нет, поэтому коллекторы этот класс не собирают."""
 
     async def publish(self, wallet_id: int, handle: str) -> tuple[dict, str]:
         headers, _ = await self.sign_in_wallet(wallet_id)
@@ -2821,6 +2819,17 @@ class TestLeaderHydration(HttpCase):
         lighter_rest.get_account_snapshots = snapshots
         self.addCleanup(setattr, lighter_rest, "get_account_snapshots", original)
         return calls
+
+
+class TestLeaderHydration(CopyTradingSeeding):
+    """GET /leaders/hydrated — карточка лидера собирается на сервере.
+
+    Фронт собирал её сам: по запросу статистики подписки и по запросу счёта
+    Lighter на каждую строку, то есть два round-trip'а на карточку (замер
+    e2e/render-budget.spec.ts: 40 лидеров = 80 запросов на один экран). Здесь
+    проверяются две вещи, без которых замена была бы честной только на словах:
+    агрегат считает те же фильтры, что и поштучный список, и счета читаются
+    ОДНИМ пакетным вызовом, а не циклом."""
 
     async def test_hydrated_carries_stats_and_account_in_one_request(self):
         _, leader_id = await self.publish(901, "@hydr")

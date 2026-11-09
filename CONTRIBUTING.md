@@ -86,12 +86,14 @@ alembic check
 
 ## Tests
 
-**Backend** — one command, 704 tests (703 passed, 1 skipped), against a real PostgreSQL:
+**Backend** — one command, against a real PostgreSQL:
 
 ```bash
 cd backend
 python -m pytest . -q
 ```
+
+The run prints its own counts, and this page deliberately does not restate them: a number written down here goes stale in the very commit that changes the suite.
 
 That is exactly what CI runs. The suite is written as `unittest.TestCase` classes, so `python -m unittest discover` collects the same tests — `test_db.py`, `test_predict_db.py`, `test_predict_integration.py` and `test_audit_log.py` included.
 
@@ -107,11 +109,11 @@ Four rules the suite enforces on itself (the first three come from `backend/test
 ```bash
 npm ci
 npm run lint                      # ESLint over src/, e2e/ and the config files
-npx tsc --noEmit
-npm run test:run                  # vitest: 288 tests in 22 files
+npx tsc --noEmit                  # src/ and e2e/ — the browser gates are code too
+npm run test:run                  # vitest against src/
 node scripts/brand-assets.mjs       # re-render public/og.png and apple-touch-icon.png
 npm run build
-PW_PORT=5178 npx playwright test  # 72 tests; first run needs `npx playwright install chromium`
+PW_PORT=5178 npx playwright test  # browser scenarios; first run needs `npx playwright install chromium`
 ```
 
 `src/components/theme.gate.test.ts` keeps the panel honest about its own style:
@@ -394,22 +396,24 @@ alembic upgrade head
 alembic check
 ```
 
-`alembic check` завершается с ошибкой, если модели и миграции расходятся. В CI это отдельный шаг, рядом с `alembic upgrade head` на базе, до которой никто не дотрагивался, — так дрейф валит пайплайн, а не всплывает в проде на первом запросе, которому не хватило колонки. Новый коммит миграций добавлять не переписывая слитый.
+`alembic check` завершается с ошибкой, если модели и миграции расходятся. В CI это отдельный шаг, рядом с `alembic upgrade head` на базе, до которой никто не дотрагивался, — так дрейф валит пайплайн, а не всплывает в проде на первом запросе, которому не хватило колонки. Новый коммит миграций добавляют, не переписывая уже слитый.
 
 `backend/alembic/env.py` берёт URL из `config.DATABASE_URL`, а не читает `os.environ`: миграции и приложение всегда обращаются в одну и ту же базу, в том числе когда значение пришло из `.env`.
 
 ## Тесты
 
-**Бэкенд** — одна команда, 704 теста (703 прошли, 1 пропущен), против настоящего PostgreSQL:
+**Бэкенд** — одна команда, против настоящего PostgreSQL:
 
 ```bash
 cd backend
 python -m pytest . -q
 ```
 
-Ровно это запускает CI. Suite написан классами `unittest.TestCase`, поэтому `python -m unittest discover` собирает те же тесты — включая `test_db.py`, `test_predict_db.py`, `test_predict_integration.py` и `test_audit_log.py`.
+Счётчик печатает сам прогон, и эта страница его намеренно не пересказывает: цифра, записанная сюда, устаревает в том же коммите, который меняет набор.
 
-Четыре правила, которые suite соблюдает к самому себе (первые три — из `backend/testsupport.py`, четвёртое — из `test_properties.py`):
+Ровно это запускает CI. Набор написан классами `unittest.TestCase`, поэтому `python -m unittest discover` собирает те же тесты — включая `test_db.py`, `test_predict_db.py`, `test_predict_integration.py` и `test_audit_log.py`.
+
+Четыре правила, которые набор соблюдает к самому себе (первые три — из `backend/testsupport.py`, четвёртое — из `test_properties.py`):
 
 - Тесты идут в настоящую базу. `db.py`, `predict_db.py` и `audit_log.py` пишут PostgreSQL-специфичный SQL — `ON CONFLICT` с указанием индекса, `FOR UPDATE`, `TIMESTAMPTZ`, `jsonb`, — и на SQLite большая часть таких запросов просто не исполняется: подстава была бы зелёной над сломанным продакшн-запросом.
 - `WAKE_TEST_DATABASE_URL` обязателен, и база должна оканчиваться на `_test`: перед каждым тестом таблицы очищаются TRUNCATE, так что случайный запуск pytest не должен иметь возможности стереть рабочую базу.
@@ -421,11 +425,11 @@ python -m pytest . -q
 ```bash
 npm ci
 npm run lint                      # ESLint по src/, e2e/ и конфигам
-npx tsc --noEmit
-npm run test:run                  # vitest: 288 тестов в 22 файлах
+npx tsc --noEmit                  # src/ и e2e/ — браузерные гейты тоже код
+npm run test:run                  # vitest по src/
 node scripts/brand-assets.mjs       # перерендерить public/og.png и apple-touch-icon.png
 npm run build
-PW_PORT=5178 npx playwright test  # 72 теста; первый прогон требует `npx playwright install chromium`
+PW_PORT=5178 npx playwright test  # браузерные сценарии; первый прогон требует `npx playwright install chromium`
 ```
 
 `src/components/theme.gate.test.ts` следит за стилем самой панели: ни градиентов,
@@ -544,7 +548,7 @@ CI запускает `npm run test:run -- --coverage` и `npm run test:e2e`. E2
 
 Playwright поднимает собственный dev-сервер с явно пустыми `VITE_TELEGRAM_BOT_NAME` и `VITE_WALLETCONNECT_PROJECT_ID`. Локальный `.env` больше не пропускает тесты и не меняет сценарий входа. Настроенный Telegram-виджет покрыт unit-тестами; e2e проверяет фокус с клавиатуры, Escape, навигацию по вкладкам и отсутствие переполнения на мобильном экране. `e2e/miniapp.spec.ts` гоняет ту же страницу против заглушки `window.Telegram.WebApp` с телеграмовским user agent: что страница вызывает `ready`/`expand` по порядку, красит окно токенами темы, переносит выемки экрана в CSS и закрывает верхнюю панель по стрелке «назад».
 
-`PW_PORT` существует потому, что suite поднимает свой dev-сервер; ставьте его, когда 5173 занят.
+`PW_PORT` существует потому, что набор поднимает свой dev-сервер; поставьте его, когда 5173 занят.
 
 ## Зависимости
 
@@ -599,7 +603,7 @@ CI использует `pip-audit --strict` с точечными исключ�
 
 - Исправления багов с тестом, который их воспроизводит.
 - Правки документации: README описывает работающую систему, поэтому устаревшая фраза — это баг.
-- Покрытие тестами мест, до которых suite доходит случайно.
+- Покрытие тестами мест, до которых набор доходит случайно.
 - Оптимизации, у которых есть число до и после.
 - Улучшения UI и UX.
 

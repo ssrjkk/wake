@@ -327,7 +327,7 @@ export async function auditDesign(page: Page, minTarget = 24, root?: string): Pr
   try {
     return await page.evaluate(auditInBrowser, { minTarget, root: root ?? null });
   } finally {
-    await tag.evaluate((el) => el.remove());
+    await tag.evaluate((el) => el.parentNode?.removeChild(el));
   }
 }
 

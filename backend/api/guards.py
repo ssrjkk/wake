@@ -22,8 +22,8 @@ from config import CURATOR_TOKEN
 _bearer = HTTPBearer(auto_error=False)
 # Схема вместо чтения Request.headers: тогда /docs и /openapi.json показывают,
 # что операторские эндпоинты требуют заголовок. auto_error=False — отсутствие
-# разберёт require_curator, чтобы ответ остался нашим {error: {code: …}}, а не
-# сторонним «Not authenticated».
+# заголовка разберёт require_curator, чтобы ответ остался нашим {error: {code: …}},
+# а не сторонним «Not authenticated».
 _curator = APIKeyHeader(
     name="X-Curator-Token",
     auto_error=False,

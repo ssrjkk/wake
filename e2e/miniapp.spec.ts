@@ -6,6 +6,7 @@
 // Внешний трафик глушится, как и в остальном e2e: ассерты только по тому, что
 // страница обязана сделать сама.
 import { test, expect } from "@playwright/test";
+import { TABS } from "./design-audit";
 
 const TG_UA =
   "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) Telegram/iPhone 11.2.5";
@@ -135,7 +136,7 @@ test.describe("окно мини-аппа", () => {
 test.describe("навигация на телефоне", () => {
   test.use({ viewport: { width: 390, height: 844 } });
 
-  test("девять разделов живут внизу экрана и переключаются", async ({ page }) => {
+  test("разделы живут внизу экрана и каждый переключается", async ({ page }) => {
     await page.goto("/?tab=terminal");
     const nav = page.getByRole("navigation");
     await expect(nav).toHaveCSS("position", "fixed");
@@ -144,8 +145,16 @@ test.describe("навигация на телефоне", () => {
     expect(box).not.toBeNull();
     expect(box!.y + box!.height).toBeGreaterThan(844 - 100);
 
-    await nav.getByRole("button", { name: "Predict" }).click();
-    await expect(nav.getByRole("button", { name: "Predict" })).toHaveAttribute("aria-current", "page");
+    // Список берётся из того же реестра, что и остальной e2e: проверка одной
+    // вкладки под заголовком «разделы переключаются» оставляла бы восемь
+    // непроверенными, а нижняя панель в мини-аппе — другой разметка, чем
+    // лента на обычном телефоне.
+    await expect(nav.getByRole("button")).toHaveCount(TABS.length);
+    for (const label of TABS) {
+      const button = nav.getByRole("button", { name: label });
+      await button.click();
+      await expect(button).toHaveAttribute("aria-current", "page");
+    }
   });
 
   test("контент не прячется под панелью", async ({ page }) => {

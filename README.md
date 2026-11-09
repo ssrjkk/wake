@@ -28,7 +28,7 @@ Captured from this build with live data (2026-11-03 for the Overview panel, 2026
 | ![Predict](docs/screenshots/predict-1440.png) | **Predict** — LMSR price and event markets, quoting and claims; the shot shows the list gate (backend) and the sign-in gate (positions and payouts). |
 | ![Agent](docs/screenshots/agent-1440.png) | **Агент** — per-market decision with per-market win-rate memory, gated on trial or Pro; the empty state names the endpoint, the curator header and the table the rows live in. |
 | ![Risk](docs/screenshots/risk-1440.png) | **Risk** — basket exposure and hedge sizing on Lighter's single margin, correlations from hourly candles. |
-| ![Terminal at 390](docs/screenshots/terminal-390.png) | **Терминал на 390 px** — the same desk stacked, with the nine sections as a bottom bar under the thumb; no tab overflows horizontally. |
+| ![Terminal at 390](docs/screenshots/terminal-390.png) | **Terminal at 390 px** — the same desk stacked, with its sections moved into a bottom bar under the thumb; when the tabs don't fit, the bar scrolls sideways with an edge fade, and the document itself never scrolls horizontally. |
 | ![Telegram bot](docs/screenshots/bot-cards.png) | **@waketrade_bot** — the HTML cards `backend/telegram_bot.py` sends, rendered in a browser: the `/start` welcome with the live liquidity ranking as buttons, ranking with ticker buttons and pagination, price card with the hourly sparkline, funding ranking, `/spread` across venues. |
 
 ## What each panel does
@@ -82,7 +82,7 @@ alembic upgrade head      # schema comes from migrations, never from the app
 uvicorn app:app --reload --port 8000
 ```
 
-The API documentation is off by default: this app answers with `Content-Security-Policy: default-src 'self'`, and Swagger UI loads a CDN script plus an inline tag, so `/docs` would render an empty page. Set `WAKE_ENABLE_DOCS=true` to get `/docs`, `/redoc` and the machine-readable schema at `/openapi.json` (38 paths, bearer token and curator header marked). Run it from `backend/` — `config.py` reads `.env` relative to the working directory, so starting from the repo root silently runs with a different configuration.
+The API documentation is off by default: this app answers with `Content-Security-Policy: default-src 'self'`, and Swagger UI loads a CDN script plus an inline tag, so `/docs` would render an empty page. Set `WAKE_ENABLE_DOCS=true` to get `/docs`, `/redoc` and the machine-readable schema at `/openapi.json`. Endpoints that need credentials declare them there — `HTTPBearer` for the session token, `APIKeyHeader` for `X-Curator-Token` — so the operator surface is findable without reading the source. The path count is not quoted here on purpose: it changes with every router, and a doc that restates it is wrong within a week. Run it from `backend/` — `config.py` reads `.env` relative to the working directory, so starting from the repo root silently runs with a different configuration.
 
 ### Copy trading without a seed script
 
@@ -228,11 +228,11 @@ Price markets close themselves at the deadline only while this process runs; oth
 # backend — run from backend/; needs a scratch PostgreSQL database
 createdb wake_test
 export WAKE_TEST_DATABASE_URL=postgresql+asyncpg://wake:wake@localhost:5432/wake_test
-python -m unittest discover        # 704 tests, all through discovery
+python -m unittest discover        # the whole suite, all through discovery
 python -m pytest -q                # the same set under pytest (+ Allure in CI)
 
 # frontend
-npx tsc --noEmit
+npx tsc --noEmit                 # src/ and e2e/ — the browser gates are code too
 npx vitest run
 npm run build
 

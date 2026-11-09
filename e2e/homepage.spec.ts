@@ -3,8 +3,7 @@
 // силами — навигация, окно входа, честное состояние «данных нет». Проверять здесь
 // курсы или PnL было бы самообманом: в CI эти числа неоткуда взять.
 import { test, expect, type Page } from "@playwright/test";
-
-const TABS = ["Обзор", "Терминал", "Discover", "Портфель", "Earn", "Predict", "Агент", "Risk", "Funding"];
+import { TABS } from "./design-audit";
 
 function nav(page: Page) {
   return page.getByRole("navigation");
