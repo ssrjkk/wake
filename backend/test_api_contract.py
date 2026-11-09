@@ -509,5 +509,204 @@ class TestTypecheckScope(unittest.TestCase):
         )
 
 
+class TestFrontendEnvKnobs(unittest.TestCase):
+    """Три реестра одной настройки фронтенда: код, тип и `.env.example`.
+
+    Бэкенд свою пару уже сверяет (`test_config.TestEnvExample`), а фронтенд —
+    нет, хотя переменные у него ровно того же сорта: имя читает сборка, а не
+    запуск. Переименовали `VITE_SIGNING_SERVICE_URL` в коде — пример продолжает
+    советовать старое имя, локальная сборка остаётся без подписи, и ни один
+    гейт не красный. Добавили переменную в пример («вот настройка, включите») —
+    а `src/` её не читает никогда, и человек жмёт выключатель без проводки.
+    Третьим списком стоит `src/vite-env.d.ts`: он же — единственное место, где
+    имя имеет тип, и он же молча отстаёт, пока компилятор не заставят
+    отказывать неизвестным именам.
+
+    Последний тест про резерв `BACKEND_URL`: сборка без `VITE_*` обязана уходить
+    на настоящий сервис. Резерв в `localhost:8000` выглядит безобидно ровно до
+    того момента, когда бандл без env-переменных уезжает на хостинг и вся
+    страница живёт на адресе машины разработчика.
+    """
+
+    ROOT = Path(__file__).resolve().parent.parent
+    KNOB_IN_CODE = re.compile(r"import\.meta\.env\.(VITE_[A-Z0-9_]+)\b")
+    KNOB_IN_TEXT = re.compile(r"\b(VITE_[A-Z0-9_]+)\b")
+
+    def _code_knobs(self) -> set:
+        names = set()
+        for path in sorted((self.ROOT / "src").rglob("*.ts*")):
+            if ".test." in path.name:
+                continue
+            names.update(
+                self.KNOB_IN_CODE.findall(
+                    path.read_text(encoding="utf-8", errors="replace")
+                )
+            )
+        return names
+
+    def _example_text(self) -> str:
+        return (self.ROOT / ".env.example").read_text(encoding="utf-8")
+
+    def _declared_knobs(self) -> set:
+        text = (self.ROOT / "src" / "vite-env.d.ts").read_text(encoding="utf-8")
+        return set(re.findall(r"readonly\s+(VITE_[A-Z0-9_]+)\??:", text))
+
+    def _example_knobs(self) -> set:
+        names = set()
+        for line in self._example_text().splitlines():
+            stripped = line.strip()
+            if stripped.startswith("#"):
+                continue
+            match = re.match(r"^(VITE_[A-Z0-9_]+)=", stripped)
+            if match:
+                names.add(match.group(1))
+        return names
+
+    def test_the_scanners_found_the_knobs_they_claim_to_cover(self):
+        """Позитивный контроль: сверка списков не должна выродиться в пустоту.
+
+        Оба набора получаются разбором, и сломанный разбор даёт пустое множество
+        — тогда первые два теста сравнивают два нуля и зелёны навсегда.
+        """
+        code = self._code_knobs()
+        example = self._example_knobs()
+        self.assertGreaterEqual(
+            len(code),
+            4,
+            f"`src/` не читает почти ничего ({sorted(code)}) — регулярка разбора сломана",
+        )
+        self.assertGreaterEqual(
+            len(example),
+            4,
+            f"в `.env.example` не разобралось ни одной переменной ({sorted(example)}) — формат строк поменялся",
+        )
+
+    def test_every_knob_the_app_reads_is_in_the_example(self):
+        missing = sorted(self._code_knobs() - self._example_knobs())
+        self.assertEqual(
+            missing,
+            [],
+            f"код читает, а пример не объясняет: {missing} — локальный запуск гадает по исходникам",
+        )
+
+    def test_no_knob_is_advertised_that_the_app_ignores(self):
+        extra = sorted(self._example_knobs() - self._code_knobs())
+        self.assertEqual(
+            extra,
+            [],
+            f"пример советует переменную, которую `src/` не читает: {extra} — это выключатель без проводки",
+        )
+
+    def test_declared_env_type_lists_exactly_the_read_knobs(self):
+        """`src/vite-env.d.ts` — третья копия того же списка.
+
+        Одно направление здесь уже сторожит компилятор: с `strictImportMetaEnv`
+        (следующий тест) чтение необъявленного `VITE_*` даёт TS2339 на
+        `npx tsc --noEmit`. Компилятору не видно двух других: объявленное имя,
+        которое никто не читает, — это тип, обещающий настройки, которых нет, и
+        `.env.example` для него чужой файл. Поэтому сверка полная, в обе стороны.
+        """
+        code = self._code_knobs()
+        declared = self._declared_knobs()
+        self.assertEqual(
+            sorted(code - declared),
+            [],
+            "читается кодом, но не объявлено в `vite-env.d.ts`",
+        )
+        self.assertEqual(
+            sorted(declared - code),
+            [],
+            "объявлено в `vite-env.d.ts`, но не читается никем — тип обещает настройку, которой нет",
+        )
+
+    def test_env_type_is_strict_about_unknown_keys(self):
+        """`strictImportMetaEnv` обязан остаться включённым.
+
+        Без него `ImportMetaEnv` дополняется `Record<string, any>` (см.
+        `node_modules/vite/types/importMeta.d.ts`), и опечатка в имени
+        переменной — `VITE_SIGNING_URL` вместо `VITE_SIGNING_SERVICE_URL` —
+        компилируется в `any`, а на рантайме становится `undefined`: сборка
+        красная быть не может, и локальная сборка молча теряет сервис подписи.
+        Флаг убирают ровно по той же причине, по которой убирают `e2e` из
+        `tsconfig`: «мешает сборке». Здесь он ничего не ломает — все шесть
+        имён объявлены, — и ловит только то, чего быть не должно.
+        """
+        text = (self.ROOT / "src" / "vite-env.d.ts").read_text(encoding="utf-8")
+        self.assertIsNotNone(
+            re.search(r"(?m)^\s*strictImportMetaEnv\??\s*:", text),
+            "в `vite-env.d.ts` нет активного участника `strictImportMetaEnv` — "
+            "неизвестное имя переменной компилируется как any",
+        )
+
+    def test_docs_name_only_knobs_that_exist(self):
+        real = self._code_knobs() | self._example_knobs()
+        offenders = []
+        for name in TestDocsClaims.DOC_NAMES:
+            text = (self.ROOT / name).read_text(encoding="utf-8")
+            offenders += [
+                f"{name}: {found}"
+                for found in sorted(set(self.KNOB_IN_TEXT.findall(text)) - real)
+            ]
+        self.assertEqual(
+            offenders,
+            [],
+            f"доки обещают настройку, которой нет: {offenders}",
+        )
+
+    def test_backend_url_fallback_is_a_deployed_service(self):
+        text = (self.ROOT / "src" / "lib" / "config.ts").read_text(encoding="utf-8")
+        match = re.search(
+            r"BACKEND_URL\s*=\s*import\.meta\.env\.VITE_BACKEND_URL\s*\|\|\s*[\"']([^\"']+)",
+            text,
+        )
+        self.assertIsNotNone(
+            match,
+            "резерв BACKEND_URL больше не литерал сразу после VITE_BACKEND_URL — проверять нечего",
+        )
+        fallback = match.group(1)
+        self.assertTrue(
+            fallback.startswith("https://") and "localhost" not in fallback,
+            f"сборка без VITE_BACKEND_URL уйдёт на {fallback!r} — бандл обязан "
+            "говорить с развёрнутым сервисом",
+        )
+
+    def test_example_names_the_network_the_code_defaults_to(self):
+        """Заголовок `.env.example` перечисляет дефолты — они обязаны совпасть.
+
+        Сеть в этом перечислении единственная, где док называет значение словом,
+        а не адресом: «mainnet Lighter». Переключить дефолт в `config.ts` и
+        оставить эту строку — значит отправить человека на тестнет с котировками
+        мейннета, и обе стороны будут выглядеть корректно.
+        """
+        code = (self.ROOT / "src" / "lib" / "config.ts").read_text(encoding="utf-8")
+        match = re.search(
+            r"LIGHTER_NETWORK[^=]*=\s*import\.meta\.env\.VITE_LIGHTER_NETWORK\s*\|\|\s*[\"']([a-z]+)",
+            code,
+        )
+        self.assertIsNotNone(
+            match, "дефолт сети больше не литерал после VITE_LIGHTER_NETWORK"
+        )
+        default = match.group(1)
+        # Заголовок — всё до первой строки присваивания. Делить по «VITE_» нельзя:
+        # первая строка примера пишет «Vite читает VITE_* переменные», и от
+        # заголовка осталась бы половина фразы про Vite.
+        first_assignment = re.search(r"(?m)^VITE_[A-Z0-9_]+=", self._example_text())
+        self.assertIsNotNone(
+            first_assignment,
+            "в `.env.example` не осталось ни одной строки присваивания",
+        )
+        header = self._example_text()[: first_assignment.start()]
+        named = set(re.findall(r"\b(?:mainnet|testnet)\b", header))
+        self.assertTrue(
+            named,
+            "в заголовке `.env.example` не осталось ни одного имени сети — сверять не с чем",
+        )
+        self.assertEqual(
+            named,
+            {default},
+            f"пример перечисляет {sorted(named)}, а `config.ts` по умолчанию {default!r}",
+        )
+
+
 if __name__ == "__main__":
     unittest.main()

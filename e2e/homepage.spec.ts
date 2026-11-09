@@ -94,11 +94,40 @@ test.describe("Оболочка приложения", () => {
 
   // Девять панелей не влезают в 390 px: без затемнения края правый конец ленты
   // выглядит концом списка, и три вкладки остаются ненайденными. Подсказка
-  // обязана исчезать там, где лента влезает целиком, иначе она врёт про скролл.
+  // обязана исчезать там, где лента влезает целиком, иначе она врёт про скролл —
+  // и по тому краю, за который лента уже не уезжает: на левом конце подсказка
+  // слева обещает начало, которое и так видно, а на правом затемнение ложится
+  // поверх последнего раздела и закрывает его.
   test("край ленты вкладок подсказывает про скролл только когда он есть", async ({ page }) => {
+    const opacity = (edge: "before" | "after") =>
+      nav(page).evaluate(
+        (element, edge) => getComputedStyle(element, `::${edge}`).opacity,
+        edge,
+      );
+
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto("/");
     await expect(nav(page)).toHaveClass(/tabbar-overflow/);
+    await expect.poll(() => opacity("before")).toBe("0");
+    await expect.poll(() => opacity("after")).toBe("1");
+
+    await nav(page).evaluate((element) => {
+      element.scrollLeft = element.scrollWidth;
+    });
+    await expect.poll(() => opacity("before")).toBe("1");
+    await expect.poll(() => opacity("after")).toBe("0");
+
+    // Переход по хоткею на последнюю панель обязан дать ту же картину, что и
+    // ручная прокрутка: активная вкладка центрируется, и до правого края
+    // оставшийся зазор не должен подсвечиваться подсказкой.
+    await page.keyboard.press("Alt+9");
+    await expect(nav(page).getByRole("button", { name: TABS[TABS.length - 1], exact: true })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+    await expect.poll(() => opacity("before")).toBe("1");
+    await expect.poll(() => opacity("after")).toBe("0");
+
     await page.setViewportSize({ width: 1440, height: 900 });
     await expect(nav(page)).not.toHaveClass(/tabbar-overflow/);
   });

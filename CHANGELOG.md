@@ -12,11 +12,43 @@ measured number goes stale while the text around it still looks fine.
 ## [Unreleased]
 
 ### Added
+- Подсказка края ленты вкладок теперь числовая в `e2e/homepage.spec.ts`: на
+  390 px замеряется `getComputedStyle(nav, "::before"|"::after").opacity` в трёх
+  положениях ленты — левый край, правый край и переход по Alt+9 на последнюю
+  панель, — и на 1440 px подтверждается, что класса переполнения нет вовсе.
+  Мутациями подтверждено 5 из 5: всегда видимое затемнение, правая или левая
+  половина признака, сведённая к одному `overflow`, и удалённый scroll-слушатель
+  (без него подсказка реагирует только на поворот окна и остаётся враньём после
+  прокрутки) — каждый вариант красный, после прогона оба тронутых файла байт в
+  байт исходные.
+- `TestFrontendEnvKnobs` в `backend/test_api_contract.py` — корневой
+  `.env.example`, `src/` и `src/vite-env.d.ts` сверяются как три списка одного
+  и того же, а доки — с ними всеми. Фронтенд был единственной стороной настройки
+  без такой пары: у бэкенда она живёт в `test_config.TestEnvExample`, а имена
+  `VITE_*` читает сборка, а не запуск, — то есть расхождение вообще не имеет
+  момента, когда оно проявится само. Переименование переменной в коде оставляло
+  пример советовать старое имя, и локальная сборка молча лишалась сервиса
+  подписи; переменная, добавленная в пример, выглядела как выключатель, которого
+  в `src/` никогда не было. В той же правке в `src/vite-env.d.ts` включён
+  `strictImportMetaEnv`: без него `ImportMetaEnv` дополняется `Record<string, any>`
+  (проверено в `node_modules/vite/types/importMeta.d.ts`), и опечатка в имени
+  компилируется как `any` — замер на пробном файле: с флагом
+  `import.meta.env.VITE_PROBE_KNOB` даёт `TS2339`, без флага — зелёный `tsc`.
+  Отдельно проверяется резерв `BACKEND_URL` (сборка без `VITE_*` обязана уходить
+  на развёрнутый сервис, а не на `localhost`) и слово сети в заголовке примера —
+  оно единственное в перечислении дефолтов названо словом, а не адресом.
+  Мутациями подтверждено 13 из 13: переименование в коде, закомментированная и
+  выдуманная строки примера, выдуманное имя в README, уехавший на `localhost`
+  резерв, переворот дефолтной сети, стёртое из заголовка имя сети,
+  закомментированный флаг, лишнее и пропущенное имя в типе, и два анти-вырождения (сломанный разбор
+  кода и сломанный разбор примера дают пустые списки, и без позитивного контроля
+  первые тесты сравнивали бы два нуля). После прогона все пять тронутых файлов
+  байт в байт исходные.
 - `test_generated_directories_are_outside_the_scan` в `backend/test_hygiene.py`
   — границы сканера проверяются сами. Класс ловил подмены письменности по всему
   дереву, а список пропускаемых каталогов был написан руками и разошёлся с
   `.gitignore`: `test-results/` игнорируется git'ом, но не пропускался, и
-    `test_no_latin_inside_cyrillic_words` упал на `error-context.md`, который
+  `test_no_latin_inside_cyrillic_words` упал на `error-context.md`, который
   Playwright пишет сам после падения браузера, — то есть на слепке DOM чужой
   разметки. Тест сверяет разбор с тем, что git прячет по определению
   (`node_modules`, `dist`, `test-results`, `playwright-report`, `blob-report`,
@@ -608,7 +640,15 @@ measured number goes stale while the text around it still looks fine.
 - The tab strip shows its own overflow: at 390 px three of the nine panels sat
   past the edge with nothing to suggest the list continues, so the right end
   read as the end. The edge fade appears only while the strip is wider than the
-  window (e2e asserts both widths), and the active tab still scrolls to centre.
+  window, and only on the edge that can still move — at the left end a fade on
+  the left promises a start that is already on screen, and at the right end it
+  dims the last tab. e2e measures the fade opacity in both positions plus the
+  Alt+9 jump, and asserts both widths.
+- `docs/screenshots/terminal-390.png` re-captured from this build (2026-11-09):
+  the old frame clipped the strip with no fade at all and showed a banner
+  wording that no longer exists. The new one is a live Chromium capture at
+  390×844 — measured `scrollWidth` 605 against `clientWidth` 390 at
+  `scrollLeft` 0, so the hint sits on the right edge only.
 - The backend banner names the reason instead of guessing: the `/ready` check
   list (`redis: fail`) or the transport wording reaches the notice, because
   «unavailable» about a service that answers 503 with its check list is a guess,
@@ -926,6 +966,13 @@ measured number goes stale while the text around it still looks fine.
   claim of an "optional KMS mode", which the removed file could not deliver.
 
 ### Fixed
+- Лента вкладок на узком окне подсказывала прокрутку с обоих краёв сразу. Класс
+  `tabbar-overflow` ставился по факту переполнения (лента шире окна), и оба
+  затемнения горели всегда: на левом конце ленты «там есть» обещало начало,
+  которое и так видно, а на правом затемнение ложилось поверх последнего
+  раздела — ровно того, куда приводит переход по Alt+9. Признак считается по
+  фактическому `scrollLeft` и обновляется scroll-событием ленты, поэтому
+  подсказка живёт только на том крае, за который лента ещё уезжает.
 - `e2e/miniapp.spec.ts` проверял нижнюю панель на телефоне одним кликом, пока
   заголовок теста обещал, что разделы внизу экрана переключаются. Теперь тест
   берёт `TABS` из общего реестра, требует, чтобы кнопок в навигации было ровно

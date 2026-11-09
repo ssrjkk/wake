@@ -189,6 +189,10 @@ export default function App() {
   const [backendReason, setBackendReason] = useState("");
   // Лента вкладок шире окна: краю нужна подсказка, что список продолжается.
   const [navOverflow, setNavOverflow] = useState(false);
+  // И по какому именно краю: на левом конце ленты подсказка слева обещает
+  // начало, которое уже на экране, а на правом затемнение ложится поверх
+  // последнего раздела.
+  const [navScroll, setNavScroll] = useState({ left: false, right: false });
   const [miniAppBusy, setMiniAppBusy] = useState(() => isTelegramWebView());
   const [walletBusy, setWalletBusy] = useState(false);
   const [leaderId, setLeaderId] = useState<string | null>(null);
@@ -386,17 +390,31 @@ export default function App() {
     );
   }, [tab]);
 
-  // Затемнение краёв ленты — только когда лента действительно не влезает: на
-  // широком окне девять подписей видны целиком, и подсказка про скролл врала бы.
+  // Затемнение краёв ленты — только там, где ленту ещё можно крутить: на
+  // широком окне девять подписей видны целиком, и подсказка про скролл врала бы,
+  // а на левом конце узкой ленты врала бы одна её половина. Считается по
+  // фактическому scrollLeft, поэтому и поворот окна (ResizeObserver), и переход
+  // на вкладку, которую центрирует эффект выше (scroll-событие), обновляют
+  // подсказку сами.
   useEffect(() => {
     const bar = navRef.current;
     if (!bar) return;
-    const update = () =>
-      setNavOverflow(bar.scrollWidth > bar.clientWidth + 1);
+    const update = () => {
+      const overflow = bar.scrollWidth > bar.clientWidth + 1;
+      setNavOverflow(overflow);
+      setNavScroll({
+        left: overflow && bar.scrollLeft > 1,
+        right: overflow && bar.scrollLeft + bar.clientWidth < bar.scrollWidth - 1,
+      });
+    };
     update();
     const observer = new ResizeObserver(update);
     observer.observe(bar);
-    return () => observer.disconnect();
+    bar.addEventListener("scroll", update, { passive: true });
+    return () => {
+      observer.disconnect();
+      bar.removeEventListener("scroll", update);
+    };
   }, []);
 
   function switchNetwork(next: LighterNetwork) {
@@ -1217,7 +1235,9 @@ export default function App() {
 
             <nav
               ref={navRef}
-              className={`tabbar scrollbar-hide${navOverflow ? " tabbar-overflow" : ""}`}
+              className={`tabbar scrollbar-hide${navOverflow ? " tabbar-overflow" : ""}${
+                navScroll.left ? " nav-scroll-left" : ""
+              }${navScroll.right ? " nav-scroll-right" : ""}`}
               aria-label="Основная навигация"
             >
               {TABS.map((t) => (

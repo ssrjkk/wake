@@ -1,5 +1,14 @@
 /// <reference types="vite/client" />
 
+// Без этого флага `ImportMetaEnv` дополняется индексным типом `Record<string, any>`
+// (см. node_modules/vite/types/importMeta.d.ts), и опечатка в имени переменной
+// компилируется: `VITE_SIGNING_URL` вместо `VITE_SIGNING_SERVICE_URL` даёт `any`
+// и `undefined` на рантайме, а не ошибку типов. С флагом любое имя вне списка
+// ниже краснеет на `npx tsc --noEmit`, который CI и так гоняет.
+interface ViteTypeOptions {
+  strictImportMetaEnv: unknown;
+}
+
 interface ImportMetaEnv {
   readonly VITE_BACKEND_URL?: string;
   readonly VITE_SIGNING_SERVICE_URL?: string;
