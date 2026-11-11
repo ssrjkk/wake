@@ -953,17 +953,57 @@ class TestGateEnvIsQuotedFromCi(unittest.TestCase):
 
 # Формы строки подключения, в которых база называется `wake`. Первая — та, что
 # заметна глазами; остальные обходили страж, пока он сверял текст после
-# последнего слэша: параметр `?sslmode=require` приклеивается к имени, хвостовой
-# слэш оставляет имя пустым, а пустой путь без имени базы означает для asyncpg
-# «возьми имя пользователя». Последняя форма — готовый продакшный URL от
-# управляемого постгреса, где пользователя зовут не `wake`.
+# последнего слэша: параметр `?sslmode=require` приклеивается к имени, пустой
+# путь без имени базы означает для asyncpg «возьми имя пользователя», а
+# percent-написание страж читал буквально и не узнавал продакшн в имени,
+# которое драйвер раскодирует перед открытием базы.
 PROD_NAME_FORMS = (
     "postgresql+asyncpg://wake:wake@localhost:5432/wake",
     "postgresql+asyncpg://wake:wake@localhost:5432/wake?sslmode=require",
-    "postgresql+asyncpg://wake:wake@localhost:5432/wake/",
-    "postgresql+asyncpg://wake:wake@localhost:5432/wake//",
     "postgresql+asyncpg://wake:wake@localhost:5432/",
     "postgresql://dbuser:pw@example.host:5432/wake?sslmode=require",
+    # Percent-форма: драйвер раскодирует имя до того, как открыть базу, и
+    # получает `wake` — страж, сверяющий текст как есть, читал «%77ake».
+    "postgresql+asyncpg://wake:wake@localhost:5432/%77ake",
+    "postgresql+asyncpg://wake:wake@localhost:5432/%77%61%6B%65",
+    "postgresql+asyncpg://wake:wake@localhost:5432/%77ake?sslmode=require",
+    # То же имя в userinfo при пустом пути: базу драйвер берёт из пользователя.
+    "postgresql+asyncpg://%77ake:pw@localhost:5432/",
+)
+
+# Формы, в которых драйвер открывает НЕ продакшн, и что именно он называет.
+# Значения сняты с диалекта, а не из головы: «wake/x_test» и «/wake» — имена,
+# которых нет ни в одном пересказе правила, и сверять разбор с догадкой
+# автора — значит закрепить именно её (замер — в TestDriverIsTheOwner из
+# test_db_url.py).
+OTHER_NAME_FORMS = (
+    ("postgresql+asyncpg://wake:wake@localhost:5432/wake/x_test", "wake/x_test"),
+    ("postgresql+asyncpg://wake:wake@localhost:5432//wake", "/wake"),
+    ("postgresql+asyncpg://wake:wake@localhost:5432/%2Fwake", "/wake"),
+    ("postgresql+asyncpg://wake:wake@localhost:5432/wake%5Ftest", "wake_test"),
+    ("postgresql+asyncpg://wake:wake@localhost:5432/wake%2F", "wake/"),
+    ("postgresql+asyncpg://wake:wake@localhost:5432/%25wake", "%wake"),
+    # Хвостовой слэш — символ имени, а не оформление URL: базы `wake/` нет, и
+    # прогон в неё упирается в «база не найдена», а не в миграцию продакшна.
+    # Старый страж срезал один хвостовой слэш и читал здесь `wake` — отказ
+    # полезный, но по неверной причине, и на `wake//` он повторял его тем же
+    # способом, хотя драйвер открыл бы базу `wake//`. Перебор отказа — не
+    # безопасность: под него нечего подстроить, а живой прогон он только
+    # останавливает.
+    ("postgresql+asyncpg://wake:wake@localhost:5432/wake/", "wake/"),
+    ("postgresql+asyncpg://wake:wake@localhost:5432/wake//", "wake//"),
+    ("postgresql+asyncpg://wake:wake@localhost:5432/wake_test/", "wake_test/"),
+    # Якорь диалект от имени не отделяет: режет строку только по первому `?`.
+    ("postgresql+asyncpg://wake:wake@localhost:5432/wake#frag", "wake#frag"),
+    ("postgresql+asyncpg://wake:wake@localhost:5432/wake?a=1#frag", "wake"),
+    ("postgresql+asyncpg://tester:pw@localhost:5432/", "tester"),
+    ("postgresql+asyncpg://u:p%40x@localhost:5432/", "u"),
+    # Ни пути, ни пользователя: имени нет, и пустая строка — честный ответ.
+    ("postgresql+asyncpg://localhost:5432/", ""),
+    # Кривые написания раскодированию не поддаются — обе реализации оставляют
+    # их как есть, и «wake» среди них оказаться не может.
+    ("postgresql+asyncpg://wake:wake@localhost:5432/%ZZwake", "%ZZwake"),
+    ("postgresql+asyncpg://wake:wake@localhost:5432/wake%", "wake%"),
 )
 
 # Формы, из которых проб живости достаёт хост и порт: (URL, порт по умолчанию,
@@ -1131,6 +1171,76 @@ class TestDatabaseNameGuard(unittest.TestCase):
         )
         self.assertEqual(proc.returncode, 2, proc.stdout + proc.stderr)
         self.assertIn("--check-env", proc.stdout, "подсказка не называет новый режим")
+
+
+class TestBothParsersNameTheSameDatabase(unittest.TestCase):
+    """`_db_name` из gate.sh и `database_name` из db_url.py называют базу
+    одно и то же на всех написаниях из общей таблицы.
+
+    Повод: правило живёт в двух реализациях — bash не вызывает python, python
+    не вызывает bash, — и расходятся они молча. Замер 2026-11-12 добавил в
+    разбор percent-раскодирование: без него строка `/%77ake` обошла бы запрет
+    продакшна с обеих сторон, а `.../%77ake:p@host/` открыл бы базу `wake` там,
+    где обе проверки читали «%77ake». Оставить раскодирование в одной из двух
+    реализаций значило бы получить пару, которая на живых строках отвечает
+    по-разному, — и это ровно та тишина, из-за которой таблицы сверяются.
+
+    Функция извлекается из скрипта и исполняется оболочкой, а не пересказывается
+    регуляркой: пересказ ловит только те написания, о которых подумал автор
+    пересказа.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        text = GATE_FILE.read_text(encoding="utf-8")
+        cls.names = ("_unquote", "_db_name")
+        cls.bodies = {name: shell_function(text, name) for name in cls.names}
+        cls.source = "\n".join(cls.bodies[name] for name in cls.names)
+
+    def _call(self, url: str) -> str:
+        if not shutil.which("bash"):
+            self.fail("без bash разбор строки подключения нечем проверить")
+        proc = subprocess.run(
+            ["bash", "-c", f'{self.source}\n_db_name "$0"', url],
+            cwd=ROOT,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+        )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        self.assertEqual(proc.stderr, "", f"разбор жалобно молчит на {url}")
+        return proc.stdout.strip()
+
+    def test_function_bodies_are_found(self):
+        for name in self.names:
+            with self.subTest(name=name):
+                self.assertTrue(
+                    self.bodies[name].startswith(f"{name}() {{"),
+                    f"разбор не нашёл {name} в gate.sh: функция переименована "
+                    "или перенесена, и сравнение двух реализаций ничего не сверяет",
+                )
+
+    def test_production_forms_are_named_wake_by_both(self):
+        for url in PROD_NAME_FORMS:
+            with self.subTest(url=url):
+                self.assertEqual(self._call(url), "wake")
+                self.assertEqual(database_name(url), "wake")
+
+    def test_other_forms_are_named_alike(self):
+        for url, name in OTHER_NAME_FORMS:
+            with self.subTest(url=url):
+                self.assertEqual(self._call(url), name)
+                self.assertEqual(database_name(url), name)
+
+    def test_percent_form_is_not_a_rarity_in_the_table(self):
+        """Ветвление `_unquote` должно доставаться таблицей, а не одним
+        написанием: иначе сводная проверка имён проверяет один слэш."""
+        encoded = [url for url in PROD_NAME_FORMS if "%" in url] + [
+            url for url, _ in OTHER_NAME_FORMS if "%" in url
+        ]
+        self.assertGreaterEqual(
+            len(encoded), 5, f"форм с percent-именами осталось {len(encoded)}"
+        )
 
 
 class TestEndpointIsNamedForTheProbe(unittest.TestCase):

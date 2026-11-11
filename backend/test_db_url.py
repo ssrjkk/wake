@@ -5,9 +5,18 @@
 строках вида `.../wake_test?sslmode=require`, `.../wake/` и `...@host/` это
 не имя базы, а хвост строки. Первая форма — обычный вид строки от managed
 Postgres, последние две — путь к базе `wake`, то есть к продакшну.
+
+Значения в таблице — не рассуждение о том, «как вообще-то парсят URL», а срез
+с того же диалекта, которым приложение открывается: `TestDriverIsTheOwner`
+прогоняет каждую строку через `create_connect_args`. Расхождение между «как мы
+читаем имя» и «какую базу реально открывают» — дыра в запрете продакшна, а не
+косметика, и заметит её тест, а не прогон alembic.
 """
 
 import unittest
+
+from sqlalchemy.dialects.postgresql.asyncpg import PGDialect_asyncpg
+from sqlalchemy.engine.url import make_url
 
 from db_url import database_name
 
@@ -26,24 +35,45 @@ MEASURED = (
         "postgresql+asyncpg://u:p@h.example:5432/wake_test?ssl=require&opt=1",
         "wake_test",
     ),
-    # Якорь — не часть адреса.
-    ("postgresql+asyncpg://wake:wake@localhost:5432/wake#frag", "wake"),
-    # Хвостовые слэши.
-    ("postgresql+asyncpg://wake:wake@localhost:5432/wake_test/", "wake_test"),
-    ("postgresql+asyncpg://wake:wake@localhost:5432/wake_test//", "wake_test"),
+    # Якорь диалект от имени не отделяет: режет он строку только по первому `?`.
+    ("postgresql+asyncpg://wake:wake@localhost:5432/wake#frag", "wake#frag"),
+    ("postgresql+asyncpg://wake:wake@localhost:5432/wake?a=1#frag", "wake"),
+    # Хвостовые слэши: снимается один ведущий, остальные остаются в имени.
+    ("postgresql+asyncpg://wake:wake@localhost:5432/wake_test/", "wake_test/"),
+    ("postgresql+asyncpg://wake:wake@localhost:5432/wake_test//", "wake_test//"),
+    ("postgresql+asyncpg://wake:wake@localhost:5432//wake_test", "/wake_test"),
+    # Второй сегмент пути — не схема и не каталог: он часть имени базы.
+    ("postgresql+asyncpg://wake:wake@localhost:5432/wake/x_test", "wake/x_test"),
     # Пути нет вовсе — asyncpg откроет базу с именем пользователя.
     ("postgresql+asyncpg://wake:wake@localhost:5432/", "wake"),
     ("postgresql+asyncpg://wake:wake@localhost:5432", "wake"),
     ("postgresql+asyncpg://tester:pw@localhost:5432/", "tester"),
-    # Хост, кончающийся на `_test`, именем базы не становится: старый разбор
-    # видел в этой строке «host_test» и пропускал проверку суффикса, тогда как
-    # драйвер открывал там базу пользователя.
+    # Хост, кончающийся на `_test`, именем базы не становится: наивный «последний
+    # отрезок после слэша» выдаёт здесь `u:p@replica_host_test:5432`, то есть
+    # userinfo вместе с портом, а драйвер открывает базу пользователя `u`. Без
+    # порта в наивном разборе появлялся бы суффикс `_test` — проверка, которой
+    # ничего не было видно в самой строке подключения.
     ("postgresql://u:p@replica_host_test:5432/", "u"),
     # IPv6-литерал: скобки относятся к хосту, а не к имени базы.
     ("postgresql+asyncpg://wake:wake@[::1]:5432/wake_test", "wake_test"),
     # Схемы без драйвера разбираются так же — config переписывает их до
     # подключения, а запрет имени работает на строке оператора.
     ("postgres://wake:wake@localhost:5432/wake", "wake"),
+    # Password с кодированным `@`: userinfo кончается последним `@`.
+    ("postgresql+asyncpg://u:p%40x@localhost:5432/", "u"),
+    # Percent-форма — часть имени: драйвер раскодирует её до того, как открыть
+    # базу, поэтому `/%77ake` и `%77ake` в userinfo — это база `wake`, а сверка
+    # текста как есть читала из них строку «не про продакшн».
+    ("postgresql+asyncpg://wake:wake@localhost:5432/%77ake", "wake"),
+    ("postgresql+asyncpg://wake:wake@localhost:5432/%77%61%6B%65", "wake"),
+    ("postgresql+asyncpg://%77ake:pw@localhost:5432/", "wake"),
+    ("postgresql+asyncpg://wake:wake@localhost:5432/wake%5Ftest", "wake_test"),
+    # `%2F` раскодируется внутри уже взятого имени и не начинает новый путь.
+    ("postgresql+asyncpg://wake:wake@localhost:5432/wake%2Fx_test", "wake/x_test"),
+    ("postgresql+asyncpg://wake:wake@localhost:5432/%2Fwake", "/wake"),
+    # Написание, которое раскодировать нельзя, остаётся как есть.
+    ("postgresql+asyncpg://wake:wake@localhost:5432/%ZZwake", "%ZZwake"),
+    ("postgresql+asyncpg://wake:wake@localhost:5432/wake%", "wake%"),
     # Ни пути, ни пользователя: имени базы в строке нет, и пустая строка не
     # должна читаться как «подходит».
     ("postgresql+asyncpg://localhost:5432/", ""),
@@ -53,6 +83,12 @@ MEASURED = (
 def _naive_tail(url: str) -> str:
     """Как разбирали имя до замера: последний отрезок после слэша."""
     return url.rstrip("/").split("/")[-1]
+
+
+def _driver_name(url: str) -> str:
+    """Имя, которое диалект отдаст драйверу; пустой путь — имя пользователя."""
+    _, params = PGDialect_asyncpg().create_connect_args(make_url(url))
+    return params.get("database") or params.get("user") or ""
 
 
 class TestDatabaseName(unittest.TestCase):
