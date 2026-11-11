@@ -7,15 +7,22 @@
 Запуск: python -m unittest test_leader_listener -v
 """
 
+import json
+import sys
+import types
 import unittest
 import uuid
+from unittest import mock
 
 import testsupport
+import audit_log as al
 import db
 import leader_listener
 import lighter_rest
 from leader_position_tracker import LeaderPositionTracker
+from quant import scale_to_int
 from mirror_engine import (
+    MAX_SLIPPAGE_BPS,
     MarketConstraints,
     MirrorOrder,
     Side,
@@ -134,7 +141,7 @@ class TestBuildConstraints(unittest.TestCase):
 
     Форма полей взята из живого orderBooks mainnet (замер 2026-10-23): размеры
     приходят СТРОКАМИ ("min_base_amount": "0.70"), decimals — числами, и оба
-    decimals есть у 246 из 246 строк книги."""
+    decimals есть у всех строк книги, сколько бы их ни вернула площадка."""
 
     def test_per_market_values_keyed_by_market_id(self):
         books = [
@@ -430,6 +437,331 @@ class TestHandleLeaderEvent(ListenerDbCase):
         self.assertEqual(rows[0]["status"], "skipped")
         self.assertEqual(rows[0]["reason"], "margin_unverified")
         self.assertEqual(rows[0]["base_amount"], 0)
+
+
+def _fake_lighter(result=None, raises=None):
+    """Модуль-замена `lighter`.
+
+    Листенер импортирует его локально — в момент исполнения, а не на импорте
+    файла, — и берёт ровно `SignerClient` с тремя константами. Возврат —
+    (модуль, список созданных клиентов): список и есть доказательство того, до
+    сети ли дошло, закрыт ли клиент и что именно ушло в `create_order`.
+    Настоящий SDK здесь не нужен ни на одном из проверяемых путей."""
+    clients: list = []
+
+    class SignerClient:
+        ORDER_TYPE_MARKET = 1
+        ORDER_TIME_IN_FORCE_IMMEDIATE_OR_CANCEL = 2
+        DEFAULT_IOC_EXPIRY = 3
+
+        def __init__(self, **kwargs):
+            self.init = kwargs
+            self.calls: list[dict] = []
+            self.closed = False
+            clients.append(self)
+
+        async def create_order(self, **kwargs):
+            self.calls.append(kwargs)
+            if raises is not None:
+                raise raises
+            return result if result is not None else ({"tx": 1}, "0xtx-ok", None)
+
+        async def close(self):
+            self.closed = True
+
+    return types.SimpleNamespace(SignerClient=SignerClient), clients
+
+
+class _KeyStore:
+    """Замена EncryptedKeyStore: листенеру нужен только `get_key`."""
+
+    def __init__(self, keys: dict[str, dict] | None = None):
+        self.keys = keys or {}
+
+    def get_key(self, follower_id):
+        return self.keys.get(follower_id)
+
+
+KEY = {"api_key_index": 3, "private_key": "0xpriv"}
+
+
+class TestKeyStoreAccess(unittest.TestCase):
+    """`_key_store()` — место, где конфигурация процесса встречается с живым
+    стримом. Её зовёт цикл вебсокета, и исключение здесь равносильно обрыву
+    стрима: из-за одной опечатки в env зеркалирования лишились бы ВСЕ подписчики
+    лидера. Контракт — `None`, а не `raise`.
+
+    В `TestLiveExecution` `_key_store` подменён целиком, поэтому замена
+    `return None` на `raise` проходила весь гейт зелёным: проверять надо саму
+    функцию, а не её вызывающий код."""
+
+    def test_store_that_cannot_open_gives_none(self):
+        class _NoMasterKey:
+            def __init__(self, *args, **kwargs):
+                raise RuntimeError("WAKE_MASTER_KEY не задан")
+
+        self.addCleanup(
+            _patch_module(leader_listener, "EncryptedKeyStore", _NoMasterKey)
+        )
+        self.assertIsNone(leader_listener._key_store())
+
+    def test_store_that_opens_is_passed_through(self):
+        store = _KeyStore()
+        self.addCleanup(
+            _patch_module(leader_listener, "EncryptedKeyStore", lambda *a, **k: store)
+        )
+        self.assertIs(leader_listener._key_store(), store)
+
+
+class TestLiveExecution(ListenerDbCase):
+    """Живое исполнение: DRY_RUN выключен, и все пять исходов одного ордера.
+
+    Выше листенер проверен на dry_run и на skip — то есть на путях, где до
+    денег не доходит. Между тем `handle_leader_event` проводит ещё пять, и каждый
+    из них был написан под конкретную аварию: недоступное хранилище ключей
+    (отказ по всем подписчикам, но НЕ исключение — исключение рвёт вебсокет и
+    снимает зеркалирование со всего лидера), ключа нет на конкретного подписчика
+    (плюс строка в audit_log: отказ читать чужой key store должен быть виден),
+    сеть упала до ответа Lighter (один ордер не роняет цикл, клиент обязан
+    закрыться в `finally`), площадка отклонила ордер (размер позиции подписчика
+    НЕ двигается: записав закрытие, которого не было, листенер навсегда
+    разъедется с реальностью на аккаунте), и успех (`sent`, tx_hash и сдвиг
+    mirror_positions на base_amount со знаком reduce).
+
+    Ни один из этих путей нельзя проверить подменой ответа Lighter выше по
+    стеку: решение «двигать учёт или нет» принимается в самом цикле, и
+    проверяется оно поэтому здесь, на вызовах `db`."""
+
+    # Mark-цена намеренно ОТЛИЧАЕТСЯ от цены события: иначе тест не отличает
+    # «взять рынок» от «взять средну входа лидера», а это ровно тот дефект, из-за
+    # которого IOC-лимит не исполнялся. Различимость сторожит не этот комментарий,
+    # а проверка в `live` — она же не даст fixture схлопнуться обратно.
+    MARK = 1900.0
+
+    def market(self):
+        return MarketConstraints(
+            min_base_amount=0.001, size_decimals=3, price_decimals=2
+        )
+
+    async def live(self, event, *, store, result=None, raises=None, mark=MARK):
+        """Событие при выключенном dry_run: подставные `lighter`, хранилище
+        ключей и mark-цена вместо сети, всё остальное — настоящий код.
+
+        `mark=None` — рынок без ответа (свечей нет), отдельная ветка в
+        `handle_leader_event`.
+
+        Различимость цен проверяется здесь, а не в отдельном тесте: ожидание
+        цены выводилось из `MARK`, и подмена `MARK` на цену события оставляла
+        всю группу зелёной, хотя ровно эта пара «рынок против события» и есть
+        проверяемый дефект. Хелпер не даёт fixture тихо стать неразличимой."""
+        if mark is not None and abs(mark - event["price"]) <= (
+            event["price"] * MAX_SLIPPAGE_BPS / 10_000
+        ):
+            raise AssertionError(
+                f"mark={mark} и цена события {event['price']} различаются не "
+                "сильнее запаса проскальзывания — тест не отличит цену рынка от "
+                "цены лидера; разведи их (MARK = 1900.0 при цене 2000.0)"
+            )
+        module, clients = _fake_lighter(result=result, raises=raises)
+        self.addCleanup(_patch_module(leader_listener, "DRY_RUN", False))
+        self.addCleanup(_patch_module(leader_listener, "_key_store", lambda: store))
+
+        def get_mark_price(market_id, network=None):
+            if mark is None:
+                raise RuntimeError("нет свечей")
+            return mark
+
+        self.addCleanup(_patch_module(lighter_rest, "get_mark_price", get_mark_price))
+        with mock.patch.dict(sys.modules, {"lighter": module}):
+            await leader_listener.handle_leader_event(
+                self.leader_id, event, self.market()
+            )
+        return clients
+
+    async def mirrored(self, follow_id: str, market_id: int = 8):
+        sizes = await db.mirrored_sizes_for_leader(self.leader_id)
+        return sizes.get(follow_id, {}).get(market_id, 0.0)
+
+    async def test_keystore_unavailable_is_a_row_not_an_exception(self):
+        follower_id = await self.add_follower(1000.0)
+        clients = await self.live(raw_event(), store=None)
+
+        rows = await self.mirror_log(follower_id)
+        self.assertEqual(
+            [(r["status"], r["reason"]) for r in rows],
+            [("failed", "keystore_unavailable")],
+        )
+        self.assertEqual(clients, [], "до Lighter не должно дойти ни запроса")
+
+    async def test_missing_key_fails_the_order_and_is_audited(self):
+        follower_id = await self.add_follower(1000.0)
+        clients = await self.live(raw_event(), store=_KeyStore())
+
+        rows = await self.mirror_log(follower_id)
+        self.assertEqual(
+            [(r["status"], r["reason"]) for r in rows], [("failed", "no_key")]
+        )
+        self.assertEqual(clients, [])
+        audit = await al.recent_actions(
+            actor=f"follower:{follower_id}", action="key_access_denied"
+        )
+        self.assertEqual(len(audit), 1)
+        self.assertEqual(audit[0]["success"], 0, "отказ обязан быть записан отказом")
+        self.assertEqual(audit[0]["resource"], f"follower:{follower_id}")
+        self.assertEqual(json.loads(audit[0]["details"])["market_id"], 8)
+
+    async def test_network_failure_is_logged_and_the_client_closed(self):
+        follower_id = await self.add_follower(1000.0)
+        clients = await self.live(
+            raw_event(),
+            store=_KeyStore({follower_id: KEY}),
+            raises=ConnectionError("stream down"),
+        )
+
+        rows = await self.mirror_log(follower_id)
+        self.assertEqual(rows[0]["status"], "failed")
+        self.assertEqual(rows[0]["reason"], "execute_error: stream down")
+        self.assertEqual(len(clients), 1)
+        self.assertTrue(clients[0].closed, "клиент закрывается и на отказе сети")
+        self.assertEqual(await self.mirrored(self.follow_ids[follower_id]), 0.0)
+
+    async def test_rejected_order_does_not_move_the_recorded_position(self):
+        follower_id = await self.add_follower(1000.0, mirrored={8: 0.9})
+        err = {"message": "insufficient margin"}
+        clients = await self.live(
+            raw_event(),
+            store=_KeyStore({follower_id: KEY}),
+            result=({"tx": 0}, "0xtx-no", err),
+        )
+
+        rows = await self.mirror_log(follower_id)
+        self.assertEqual(rows[0]["status"], "failed")
+        self.assertEqual(rows[0]["reason"], str(err))
+        self.assertEqual(rows[0]["tx_hash"], "0xtx-no")
+        self.assertEqual(
+            await self.mirrored(self.follow_ids[follower_id]),
+            0.9,
+            "ордера нет — учёт подписчика не меняется",
+        )
+        self.assertTrue(clients[0].closed)
+
+    def limit(self, is_buy: bool) -> int:
+        """Ожидаемая цена IOC-лимита: рынок с запасом на проскальзывание, в тиках
+        рынка. Выведена из `MAX_SLIPPAGE_BPS`, а не вызовом
+        `marketable_limit_price`, — иначе правка самой функции стала бы правкой
+        ожидания и проверка перестала бы что-либо значить."""
+        slip = MAX_SLIPPAGE_BPS / 10_000
+        return scale_to_int(self.MARK * (1 + slip if is_buy else 1 - slip), 2)
+
+    async def test_success_records_the_hash_and_moves_the_size(self):
+        follower_id = await self.add_follower(1000.0)
+        clients = await self.live(raw_event(), store=_KeyStore({follower_id: KEY}))
+
+        rows = await self.mirror_log(follower_id)
+        self.assertEqual(rows[0]["status"], "sent")
+        self.assertEqual(rows[0]["tx_hash"], "0xtx-ok")
+        self.assertIsNone(rows[0]["reason"])
+        self.assertAlmostEqual(
+            await self.mirrored(self.follow_ids[follower_id]), rows[0]["base_amount"]
+        )
+        client = clients[0]
+        self.assertEqual(client.init["api_private_keys"], {3: "0xpriv"})
+        self.assertEqual(client.init["account_index"], 900)
+        call = client.calls[0]
+        # Ожидание выведено из той же строки журнала, что и план: 10 здесь было бы
+        # числом из головы, а сверка с base_amount держит масштаб одним фактом.
+        self.assertEqual(call["base_amount"], scale_to_int(rows[0]["base_amount"], 3))
+        self.assertEqual(call["market_index"], 8)
+        self.assertFalse(call["is_ask"], "открытие лонга — это buy")
+        self.assertFalse(call["reduce_only"])
+        self.assertEqual(call["order_type"], client.ORDER_TYPE_MARKET)
+        self.assertEqual(
+            call["time_in_force"], client.ORDER_TIME_IN_FORCE_IMMEDIATE_OR_CANCEL
+        )
+        self.assertEqual(
+            call["price"],
+            self.limit(True),
+            "цена = mark + запас MAX_SLIPPAGE_BPS, а не цена события и не сам "
+            "mark без запаса; различимость этих двух держит проверка в `live`",
+        )
+        self.assertNotIn(
+            "account_index", call, "index уходит в конструктор, а не в create_order"
+        )
+        self.assertTrue(client.closed)
+
+    async def test_close_is_priced_below_market_in_the_sent_order(self):
+        """Закрытие лонга уходит sell-лимитом НИЖЕ рынка — ровно тем ордером,
+        который раньше не исполнялся никогда: от цены входа лидера sell стоял
+        выше книги, подписчик оставался в позиции, из которой лидер вышел."""
+        follower_id = await self.add_follower(1000.0, mirrored={8: 0.5})
+        clients = await self.live(
+            raw_event(is_increase=False, size_delta=0.4, leader_position_before=0.5),
+            store=_KeyStore({follower_id: KEY}),
+        )
+
+        call = clients[0].calls[0]
+        self.assertTrue(call["is_ask"])
+        self.assertEqual(call["price"], self.limit(False))
+
+    async def test_order_without_a_market_price_falls_back_to_event_price(self):
+        """Ветки `mark is None` без теста не существует: листенер обязан остаться
+        исполнимым, а не бросить исключение в цикл вебсокета, и цена тогда
+        берётся из события как есть, без запаса."""
+        follower_id = await self.add_follower(1000.0)
+        event = raw_event()
+        clients = await self.live(event, store=_KeyStore({follower_id: KEY}), mark=None)
+
+        rows = await self.mirror_log(follower_id)
+        self.assertEqual(rows[0]["status"], "sent", "нет рынка — ордер всё равно идёт")
+        self.assertEqual(
+            clients[0].calls[0]["price"],
+            scale_to_int(event["price"], 2),
+            "без рынка запас брать не от чего — цена события как есть",
+        )
+
+    async def test_two_live_orders_never_share_a_client_order_index(self):
+        """client_order_index — по нему ордер ищется в Lighter. `time-ms % 1e6`
+        из прошлой реализации сталкивался на горизонте часа, и два разных
+        замысла становились неразличимы: ни сверка, ни отмена по индексу не
+        знают, который из них какой. Здесь два подписчика на
+        одно событие: индексы разные, клиенты закрыты, и каждый индекс остаётся
+        под границей 2**31, которую задал `build_order_args`."""
+        first = await self.add_follower(1000.0)
+        second = await self.add_follower(2000.0)
+        clients = await self.live(
+            raw_event(), store=_KeyStore({first: KEY, second: KEY})
+        )
+
+        indexes = [
+            call["client_order_index"] for client in clients for call in client.calls
+        ]
+        self.assertEqual(len(indexes), 2, "по ордеру на каждого подписчика")
+        self.assertEqual(len(set(indexes)), 2, f"индексы совпали: {indexes}")
+        self.assertTrue(
+            all(client.closed for client in clients),
+            "SignerClient создаётся на ордер — и на ордер обязан закрываться",
+        )
+        for index in indexes:
+            self.assertTrue(0 <= index < 2**31, f"{index} вышел за 31 бит")
+
+    async def test_reduce_decreases_the_recorded_position(self):
+        follower_id = await self.add_follower(1000.0, mirrored={8: 0.9})
+        clients = await self.live(
+            raw_event(is_increase=False, size_delta=0.4, leader_position_before=0.5),
+            store=_KeyStore({follower_id: KEY}),
+        )
+
+        rows = await self.mirror_log(follower_id)
+        self.assertEqual(rows[0]["status"], "sent")
+        self.assertEqual(rows[0]["reduce_only"], 1)
+        self.assertAlmostEqual(
+            await self.mirrored(self.follow_ids[follower_id]),
+            0.9 - rows[0]["base_amount"],
+            "закрытие вычитает размер, а не прибавляет",
+        )
+        call = clients[0].calls[0]
+        self.assertTrue(call["reduce_only"])
+        self.assertTrue(call["is_ask"], "закрытие лонга — это sell")
 
 
 class TestOrderLimitPrice(unittest.IsolatedAsyncioTestCase):

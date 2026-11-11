@@ -206,10 +206,82 @@ class TestListParsing(unittest.TestCase):
 
 DEFAULT_CLAIM = re.compile(r"дефолт(?: в коде)?\s*—\s*(\S+)", re.I)
 TRIM = ".,;:"
+# Ячейка «Default» таблицы: одиночный скаляр в кавычках, голое число/слово либо
+# пустое значение, названное по-разному в двух версиях страницы.
+EMPTY_WORDS = ("empty", "пусто")
+BARE_VALUE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.:+-]*")
+NAME_IN_CELL = re.compile(r"`([A-Z][A-Z0-9_]*)`")
+# Строка таблицы настроек отличается от любой другой тем, что её первая ячейка
+# состоит только из имён переменных — целиком, а не «имя и ещё слово».
+NAME_CELL = re.compile(r"`[A-Z][A-Z0-9_]*`(?:\s*/\s*`[A-Z][A-Z0-9_]*`)*")
+# Дефолт фронта — литерал после `||` в src/lib/config.ts.
+FRONTEND_FALLBACK = re.compile(
+    r'import\.meta\.env\.(VITE_[A-Z0-9_]+)\s*\|\|\s*"([^"]*)"'
+)
 
 
-def _env_example():
-    """backend/.env.example -> {имя: (значение, комментарий, блок)}.
+def _readme_rows(path: Path) -> list:
+    """Строки таблиц настроек README: (имена, ячейка дефолта, что влияет).
+
+    Раздел и порядок заголовков не используются: таблицу описывает форма первой
+    ячейки, поэтому переименование «Configuration» или вставка новой таблицы между
+    двумя не переключают проверку на чужие строки."""
+    text = path.read_text(encoding="utf-8").replace("\r\n", "\n")
+    rows = []
+    for line in text.split("\n"):
+        line = line.strip()
+        if not (line.startswith("|") and line.endswith("|")):
+            continue
+        cells = [cell.strip() for cell in line.strip("|").split("|")]
+        if len(cells) != 3 or not NAME_CELL.fullmatch(cells[0]):
+            continue
+        rows.append((NAME_IN_CELL.findall(cells[0]), cells[1], cells[2]))
+    return rows
+
+
+def _is_frontend(names: list) -> bool:
+    """К какому процессу относится строка — по префиксу имён: VITE_* читает
+    сборка, остальное читают процессы бэкенда, и проверяются они по своим
+    env-примерам."""
+    return all(name.startswith("VITE_") for name in names)
+
+
+def _values(cell: str) -> list:
+    """Значения ячейки «Default» как список скаляров; проза — None на своём месте.
+
+    Одиночное значение в кавычках не режется по слэшам: в URL их больше, чем имён
+    в строке, и `postgresql+asyncpg://…` распадалось бы в четыре ячейки. Два
+    значения через слэш пишутся только голо — так же, как их names в первой
+    ячейке."""
+    if cell.startswith("`") and cell.endswith("`") and cell.count("`") == 2:
+        return [cell[1:-1]]
+    values = []
+    for part in (raw.strip() for raw in cell.split("/")):
+        if part.lower() in EMPTY_WORDS:
+            values.append("")
+        elif BARE_VALUE.fullmatch(part):
+            values.append(part)
+        else:
+            values.append(None)
+    return values
+
+
+def _cells(cell: str) -> list:
+    """Ячейка в форме, общей для двух языков: регистр скаляра снят, проза
+    осталась None — сверять нужно смысл строки, а не то, как он набран."""
+    return [None if value is None else value.lower() for value in _values(cell)]
+
+
+def _code_default(default) -> str:
+    """Дефолт поля в той форме, в какой его пишет таблица: bool — true/false,
+    остальное — str, потому что `True` в README никто не печатает."""
+    if isinstance(default, bool):
+        return str(default).lower()
+    return str(default)
+
+
+def _env_example(path: Path = ENV_EXAMPLE):
+    """env-пример -> {имя: (значение, комментарий, блок)}.
 
     Комментарий — ровно те строки, что стоят непосредственно перед переменной:
     ими проверяются названные дефолты, иначе блок из трёх переменных приписал бы
@@ -222,7 +294,7 @@ def _env_example():
     CRLF нормализуется здесь, а не в assert: на Windows checkout отдаёт файл с
     CRLF, и проверка той же строки обязана проходить и на Linux-прогоне CI.
     """
-    text = ENV_EXAMPLE.read_text(encoding="utf-8").replace("\r\n", "\n")
+    text = path.read_text(encoding="utf-8").replace("\r\n", "\n")
     entries, comment, section = {}, [], ""
     for line in text.split("\n"):
         if line.startswith("#"):
@@ -395,6 +467,249 @@ class TestEnvExample(unittest.TestCase):
                 block.lower(),
                 f"{key}: переменная без дефолта и без слова «обязательны» в комментарии",
             )
+
+
+class TestReadmeConfigTable(unittest.TestCase):
+    """Таблицы настроек в README — вторая копия дефолтов, и она не сверялась.
+
+    `backend/.env.example` проверен этим файлом выше, `vite-env.d.ts` и
+    `src/lib/config.ts` — гейтом контракта. README остаётся единственной
+    инструкцией для того, кто разворачивает Wake по документу, а не по исходникам
+    дефолтов, и живой пример у него уже был: `WAKE_SIGNING_SERVICE_URL` и
+    `WAKE_LOG_LEVEL` читаются кодом, выставляются якорем в docker-compose и не
+    были названы ни в одной из двух версий страницы — до той проверки, что их
+    нашла. Молчала она потому, что числа и строки таблицы сверялись глазами:
+    в README живут те же 7 дней сессии, тот же `(1–30)` и тот же набор уровней,
+    что в валидаторах, и перестареть они могут в том же коммите, в котором их
+    изменили, — обе строки выглядят правдоподобно.
+
+    Отсюда четыре обещания: переменная из таблицы существует в соответствующем
+    env-примере (то есть читается кодом), названный дефолт равен дефолту из кода
+    (`Settings` для бэкенда, `|| "…"` в `src/lib/config.ts` для фронта),
+    русская таблица называет тот же набор и с теми же значениями, и то, что
+    оператор обязан настроить, из таблицы не исчезает.
+    """
+
+    ROOT = BACKEND.parent
+    CONFIG_TS = ROOT / "src" / "lib" / "config.ts"
+    README_NAMES = ("README.md", "README.ru.md")
+    # Диапазон в третьей колонке пишется через тире (обычное или en), и это
+    # единственный способ, каким таблица обещает границы валидатора.
+    RANGE = re.compile(r"\((\d+)\s*[–-]\s*(\d+)\)")
+    # Обязаны быть в таблице те, без чего деплой небезопасен или нерабочий:
+    # два переключателя живой торговли, секрет сессии и мастер-ключ (у обоих нет
+    # дефолта, и молчание о них читается как «ничего настраивать не надо»), адрес
+    # и список хостов сервиса подписи, прокси (иначе весь прод в одном rate-limit
+    # bucket), база с Redis и CORS. Список рукописный намеренно: выводиться он
+    # может только из самого README, и проверка тогда пропускала бы именно то,
+    # зачем написана, — исчезнувшую из страницы строку.
+    MUST_BE_DOCUMENTED = (
+        "WAKE_DATABASE_URL",
+        "WAKE_REDIS_URL",
+        "WAKE_DRY_RUN",
+        "WAKE_MAINNET_LIVE",
+        "WAKE_SESSION_SECRET",
+        "WAKE_MASTER_KEY",
+        "WAKE_CORS_ORIGINS",
+        "WAKE_TRUSTED_PROXY_IPS",
+        "WAKE_SIGNING_SERVICE_URL",
+        "WAKE_SIGNING_ALLOWED_HOSTS",
+    )
+
+    @classmethod
+    def setUpClass(cls):
+        cls.rows = {name: _readme_rows(cls.ROOT / name) for name in cls.README_NAMES}
+        cls.env_backend = set(_env_example())
+        cls.env_frontend = set(_env_example(cls.ROOT / ".env.example"))
+        cls.frontend_defaults = dict(
+            match.groups()
+            for match in FRONTEND_FALLBACK.finditer(
+                cls.CONFIG_TS.read_text(encoding="utf-8")
+            )
+        )
+
+    def _defaults(self):
+        """Имя -> дефолт из кода в той форме, в какой его пишет таблица."""
+        return {
+            name.upper(): _code_default(spec.default)
+            for name, spec in Settings.model_fields.items()
+        }
+
+    def test_readme_names_a_variable_the_code_reads(self):
+        """Переменная таблицы обязана быть в env-примере своего процесса: он сам
+        сверен с исходниками выше, и через него таблица получает связь с кодом."""
+        problems = []
+        for path, rows in sorted(self.rows.items()):
+            for names, _default, _gates in rows:
+                registry = (
+                    self.env_frontend if _is_frontend(names) else self.env_backend
+                )
+                problems += [
+                    f"{path}: {name} — в таблице есть, в env-примере его нет"
+                    for name in names
+                    if name not in registry
+                ]
+        self.assertEqual(problems, [])
+
+    def test_readme_defaults_are_the_code_defaults(self):
+        """Каждая ячейка «Default» сверяется со значением из кода.
+
+        Форма ячейки задаёт строгость: `значение` в кавычках, голое число или
+        слово сравниваются буквально, «empty/пусто» — с пустой строкой, проза
+        («Railway URL») проверяется только на то, что дефолт в коде действительно
+        есть и он не пустой: иначе страница описывает значение, которого нет.
+        Строка с двумя именами обязана иметь два значения через слэш, и
+        сравниваются они по порядку — переставленные 40 и 20 были бы зелёными
+        при сверке множествами."""
+        defaults = {**self._defaults(), **self.frontend_defaults}
+        problems, checked = [], 0
+        for path, rows in sorted(self.rows.items()):
+            for names, cell, _gates in rows:
+                parts = _values(cell)
+                if len(parts) != len(names):
+                    problems.append(
+                        f"{path}: {names}: значений {len(parts)}, имён {len(names)}"
+                    )
+                    continue
+                for name, part in zip(names, parts):
+                    if part is None:
+                        if name not in defaults or defaults[name] == "":
+                            problems.append(
+                                f"{path}: {name}: в таблице {cell!r}, "
+                                "в коде дефолта нет"
+                            )
+                        continue
+                    if name not in defaults:
+                        if part != "":
+                            problems.append(
+                                f"{path}: {name}: обязательная переменная "
+                                f"описана дефолтом {part!r}"
+                            )
+                        continue
+                    self.assertEqual(
+                        part,
+                        defaults[name],
+                        f"{path}: {name}: в таблице {part!r}, в коде {defaults[name]!r}",
+                    )
+                    checked += 1
+        self.assertEqual(problems, [])
+        self.assertGreaterEqual(checked, 20, "сверка не проверила ни одного дефолта")
+
+    def test_both_languages_name_the_same_variables(self):
+        """Русская таблица — не сокращение английской: одно имя, пропущенное
+        в одном из двух файлов, значит, что кто-то прочитал не ту версию."""
+        en, ru = (
+            {name for names, _d, _g in self.rows[path] for name in names}
+            for path in self.README_NAMES
+        )
+        self.assertEqual(sorted(en - ru), [], f"только в README.md: {sorted(en - ru)}")
+        self.assertEqual(
+            sorted(ru - en), [], f"только в README.ru.md: {sorted(ru - en)}"
+        )
+        by_name = {
+            path: {
+                name: cell for names, cell, _gates in self.rows[path] for name in names
+            }
+            for path in self.README_NAMES
+        }
+        for name in sorted(en & ru):
+            english, russian = by_name["README.md"][name], by_name["README.ru.md"][name]
+            self.assertEqual(
+                _cells(english),
+                _cells(russian),
+                f"{name}: README.md говорит {english!r}, README.ru.md — {russian!r}",
+            )
+
+    def test_safety_switches_stay_in_the_table(self):
+        """Переменные, без которых деплой небезопасен или не поднимается, не
+        имеют права исчезнуть со страницы — см. причину списка в классе."""
+        listed = {name for names, _d, _g in self.rows["README.md"] for name in names}
+        self.assertEqual(
+            sorted(set(self.MUST_BE_DOCUMENTED) - listed),
+            [],
+            "исчезли из таблицы README",
+        )
+
+    def test_ranges_and_lists_are_the_ones_the_validator_accepts(self):
+        """Третья колонка обещает не только назначение переменной: в ней живут
+        диапазон срока сессии и набор уровней логов, и оба проверяются тем же
+        валидатором, что и формулировки `.env.example`."""
+        levels = []
+        for path in self.README_NAMES:
+            rows = {
+                names[0]: (cell, gates)
+                for names, cell, gates in self.rows[path]
+                if len(names) == 1
+            }
+            ttl = rows["WAKE_SESSION_TTL_DAYS"]
+            match = self.RANGE.search(ttl[1])
+            self.assertIsNotNone(
+                match, f"{path}: в строке WAKE_SESSION_TTL_DAYS нет диапазона"
+            )
+            low, high = int(match[1]), int(match[2])
+            for accepted in (low, high):
+                build(wake_session_ttl_days=accepted)
+            for rejected in (low - 1, high + 1):
+                with self.assertRaises(ValidationError, msg=f"{path}: {rejected}"):
+                    build(wake_session_ttl_days=rejected)
+            levels.append(
+                {
+                    match.group(1)
+                    for match in re.finditer(
+                        r"`([A-Z]{3,})`", rows["WAKE_LOG_LEVEL"][1]
+                    )
+                }
+            )
+            accepted = set()
+            for candidate in ("CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG"):
+                try:
+                    build(wake_log_level=candidate)
+                except ValidationError:
+                    continue
+                accepted.add(candidate)
+            self.assertEqual(
+                levels[-1],
+                accepted,
+                f"{path}: таблица называет уровни {sorted(levels[-1])}, "
+                f"валидатор принимает {sorted(accepted)}",
+            )
+        self.assertEqual(
+            levels[0],
+            levels[1],
+            "набор уровней разнится в двух версиях страницы",
+        )
+
+    def test_the_gate_is_not_blind(self):
+        """Разбор, который ничего не нашёл, сделал бы верхние проверки зелёными
+        навсегда: таблица имеет право потерять строку только вместе с этим
+        провалом. Пороги — измеренная полнота этой таблицы, а живое число, до
+        которого дорос разбор, печатается в сообщении: пол поднимают от замера,
+        а не по памяти строки в docstring."""
+        for path, rows in sorted(self.rows.items()):
+            backend = [row for row in rows if not _is_frontend(row[0])]
+            frontend = [row for row in rows if _is_frontend(row[0])]
+            names_backend = len({name for row in backend for name in row[0]})
+            names_frontend = len({name for row in frontend for name in row[0]})
+            self.assertGreaterEqual(
+                names_backend,
+                19,
+                f"{path}: бэкенд-таблица разобрана не вся ({names_backend} имён)",
+            )
+            self.assertGreaterEqual(
+                names_frontend,
+                6,
+                f"{path}: фронтенд-таблица разобрана не вся ({names_frontend} имён)",
+            )
+        defaults = len(self._defaults())
+        self.assertGreaterEqual(
+            defaults, 20, f"Settings не разобран — сверять не с чем ({defaults} дефолтов)"
+        )
+        frontend_defaults = len(self.frontend_defaults)
+        self.assertGreaterEqual(
+            frontend_defaults,
+            4,
+            f"config.ts не разобран ({frontend_defaults} дефолтов)",
+        )
 
 
 if __name__ == "__main__":

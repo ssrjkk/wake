@@ -9,8 +9,8 @@ import { fmtPrice, fmtPct, fmtUsdCompact } from "./utils";
 import { Skeleton } from "./ui";
 import type { Tab } from "./types";
 
-// Бэкенд кэширует обзор на 60 секунд (backend/cache.py), поэтому крутить чаще —
-// это не «свежее», а пустые запросы.
+// Бэкенд кэширует обзор под ttl своего @cached (backend/lighter_rest.py),
+// поэтому крутить чаще — это не «свежее», а пустые запросы.
 const REFRESH_MS = 60_000;
 const SHOWN_BY_DEFAULT = 10;
 
@@ -29,8 +29,8 @@ export default function Dashboard({ setTab, setAsset, markets }: DashboardProps)
   const [arcusError, setArcusError] = useState<string | null>(null);
   // null — это «ещё не загрузилось», [] — «загрузилось и рынков правда нет».
   // Одно состояние на оба случая печатало бы «Открытых рынков нет» до первого
-  // ответа бэкенда, а /markets/overview стоит дорого (18 свечных запросов) и не
-  // успевает до отрисовки.
+  // ответа бэкенда, а /markets/overview стоит дорого (по свечному запросу на
+  // рынок) и не успевает до отрисовки.
   const [predict, setPredict] = useState<PredictMarket[] | null>(null);
   // Ошибка Predict — отдельным состоянием: «рынков нет» и «бэкенд не ответил» —
   // это разные вещи, и показывать первое вместо второго значит прятать поломку.

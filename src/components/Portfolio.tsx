@@ -56,8 +56,9 @@ export default function Portfolio({ following, followsError, setTab, togglePause
   // вебвью не делала ничего. В state держится вся строка, чтобы в диалоге
   // было видно, от кого именно человек отписывается.
   const [unfollowTarget, setUnfollowTarget] = useState<Following | null>(null);
-  // Журнал рендерится окном: 200 строк (потолок /mirror-log) mounted целиком
-  // делали страницу 10 317 px и 2 348 узлов (замер e2e/render-budget.spec.ts).
+  // Журнал рендерится окном: mounted целиком он растит страницу вместо
+  // скролла внутри панели. Где проходит граница «слишком», решает прогон
+  // e2e/render-budget.spec.ts, а не число в этом комментарии.
   // Шаг строки = height из .log-row, менять вместе.
   const { attach: attachLog, ...logWindow } = useRowWindow<HTMLDivElement>(
     mirrorLog?.length ?? 0,
@@ -115,8 +116,10 @@ export default function Portfolio({ following, followsError, setTab, togglePause
   const unrealized = openPositions.reduce((s, p) => s + p.unrealizedPnl, 0);
 
   // Book читается один раз на рендер, а не по две тысячи поисков: журнал
-  // отдаёт до 200 строк, рынков в книге 246, и прежний markets.find на каждую
-  // ячейку символа и decimals давал ~80 000 сравнений на перерисовку панели.
+  // отдаёт строку на каждое решение движка (лимит запроса и его потолок —
+  // в роуте /mirror-log), книга — сотни рынков, и прежний markets.find на
+  // каждую ячейку символа и decimals давал десятки тысяч сравнений на
+  // перерисовку панели.
   const marketById = useMemo(
     () => new Map(markets.map((m) => [m.market_id, m])),
     [markets]

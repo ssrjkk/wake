@@ -42,6 +42,11 @@ interface TerminalProps {
 const TICKER_ROWS = 12;
 const TICKER_TTL_MS = 60_000;
 
+/* Сколько часовых свечей берёт график. Подпись над графиком обязана печатать
+   это же число: вписанное рядом вторым экземпляром оно расходится с запросом
+   молча — запрос правят, подпись остаётся. */
+const CANDLE_COUNT = 48;
+
 /* Ось цен. Ширина подписи = знаков × ширина цифры, поэтому box оси
    считается из измеренного размера подписи, а не зашит в 72 px: на базовой
    шкале 72 хватало, на удвоенной та же строка выползла за правый край
@@ -167,7 +172,7 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
     const id = marketId;
     let live = true;
     function load() {
-      getCandles(id, "1h", 48)
+      getCandles(id, "1h", CANDLE_COUNT)
         .then((data) => {
           if (!live) return;
           const priceNow = data[data.length - 1]?.c;
@@ -261,7 +266,7 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
   const lastCandle = candles[candles.length - 1];
   const price = lastCandle?.c ?? null;
   /* Окно изменения — те же последние 24 часовые свечи, что и подписи «Макс/Мин
-     24ч» ниже, а не весь ряд: 48 свечей это двое суток, и «+8,4% / 24ч» при
+     24ч» ниже, а не весь ряд: весь часовый ряд — это двое суток, и «+8,4% / 24ч» при
      настоящем суточном ходе в 3% — это не округление, а другая цифра. На новом
      рынке свечей меньше 24, и подпись адаптируется по фактическому числу. */
   const windowStart = candles[Math.max(0, candles.length - 24)];
@@ -314,7 +319,7 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
   }, [candles]);
 
   /* Лента тиков: величина часа относительно максимального хода в окне. Берётся
-     из тех же 48 свечей, что и график, — отдельных запросов лента не делает.
+     из тех же свечей, что и график, — отдельных запросов лента не делает.
      Степень 0.7, а не линейная доля: один час с ходом в 3% на линейной шкале
      прижимает остальные к нулю, и «как шёл день» перестаёт читаться; в чистом
      квадрате наоборот — тихие часы кричат так же, как громкие. */
@@ -540,7 +545,7 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
           {/* Эталон размера подписи: по нему считается box оси (см. axisFontPx). */}
           <span ref={measureAxisProbe} className="axis-probe" aria-hidden="true">0</span>
           <div className="panel-caption">
-            <span className="label">Свечи 1ч · 48 шт · Lighter</span>
+            <span className="label">Свечи 1ч · {CANDLE_COUNT} шт · Lighter</span>
             <span className="num muted">обновлено {stamp(lastCandlesUpdate)}</span>
           </div>
 

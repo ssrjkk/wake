@@ -31,13 +31,13 @@ export const MEASURED = {
   overviewRows: 18,
   /** GET https://api.arcus.xyz/v1/markets. */
   arcusMarkets: 81,
-  /** Terminal.tsx: getCandles(id, "1h", 48) — 48 свечей на график. */
+  /** Terminal.tsx: CANDLE_COUNT — столько часовых свечей берёт график. */
   candles: 48,
   /** Terminal.tsx: getRecentTrades(marketId, N) — лента сделок. */
   trades: 20,
   /** backend/api/copy_trading.py: limit=Query(50, ge=1, le=200) — потолок журнала. */
   mirrorLogCeiling: 200,
-  /** App.tsx: .slice(0, 200) в окне выбора рынка. */
+  /** App.tsx: PICKER_LIMIT — потолок списка в окне выбора рынка. */
   pickerCeiling: 200,
 } as const;
 
@@ -103,8 +103,12 @@ function orderBookRow(i: number) {
     end_timestamp: 0,
     open_interest: stress ? "987654321.5526728" : "5.526728",
     open_interest_limit: "4401807821498",
-    // У 16 из 226 активных рынков ключа нет — это замер, и фронт обязан его
-    // отсутствие пережить (lib/lighter.ts: openInterestUsd).
+    // Каждая 14-я строка выходит без ключа: отсутствие open_interest_usd —
+    // живой случай (фронт обязан его пережить, lib/lighter.ts:
+    // openInterestUsd), а не копия рынка день в день. Доля здесь больше
+    // живой, и это намеренно: фикстура подбрасывает ветку чаще, чем она
+    // встречается в ответе. Сколько именно строк без ключа, задаёт делитель
+    // ниже, а не проза, — поэтому нигде не пересказывается.
     ...(i % 14 === 0 ? {} : { open_interest_usd: stress ? "999999999999.537360" : "90472.537360" }),
     outcome: 0,
     operator_account_index: 1,
@@ -123,7 +127,9 @@ function fundingRows() {
   for (let i = 0; i < MEASURED.orderBookActive; i++) {
     rows.push({ market_id: i + 1, exchange: "lighter", symbol: wideSymbol(i), rate: stress ? (i % 2 ? 0.42 : -0.37) : (i % 40) / 10000 });
   }
-  // Остальное — референсные площадки: 733 = 226 lighter + 507 референсов.
+  // Остальное — референсные площадки: строка на каждую пару (рынок, площадка),
+  // поэтому доля lighter-строк равна orderBookActive, а конец списка
+  // считается из MEASURED, а не из числа, написанного здесь.
   for (let i = 0; i < MEASURED.fundingRows - MEASURED.orderBookActive; i++) {
     rows.push({
       market_id: (i % MEASURED.orderBookActive) + 1,

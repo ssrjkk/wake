@@ -5,8 +5,9 @@ requests/httpx, чтобы это можно было гонять где уго
 автоматической резолюции price-рынков (predict_resolution.py принимает готовое
 число, эта функция — то, что его реально достаёт).
 
-Кэширование: orderBooks и funding rates кэшируются на 30-60 секунд, чтобы
-не нагружать API и ускорить ответы. Кэш — процессный (backend/cache.py), и это
+Кэширование: orderBooks и funding rates кэшируются, ttl у каждого @cached свой,
+чтобы не нагружать API и ускорить ответы. Кэш — процессный (backend/cache.py),
+и это
 решение, а не временная мера: вынос ключей в Redis добавил бы сетевой запрос и
 сериализацию нескольких сотен строк на каждое попадание.
 """
@@ -119,7 +120,7 @@ def _get(url: str) -> dict:
 def get_order_books(network: str = LIGHTER_NETWORK) -> list:
     """Список всех рынков с их параметрами (min_base_amount, supported_size_decimals и т.д.).
     Нужен для динамического получения constraints в leader_listener.py.
-    Кэшируется на 30 секунд — список рынков не меняется часто."""
+    Кэшируется под ttl этого @cached — список рынков не меняется часто."""
     url = f"{_base(network)}/orderBooks?filter=all"
     data = _get(url)
     return data.get("order_books") or []
@@ -291,7 +292,7 @@ def get_mark_price(market_id: int, network: str = LIGHTER_NETWORK) -> float:
 @cached("funding_rates", ttl=60)
 def get_funding_rates(network: str = LIGHTER_NETWORK) -> list:
     """Все ставки funding разом. Фильтр market_id в query Lighter игнорирует —
-    ответ всегда полный (~700 строк: 4 площадки × ~200 рынков), поэтому
+    ответ всегда полный, по строке на активный перп каждой площадки, поэтому
     дёргать этот запрос на каждый рынок бессмысленно."""
     data = _get(f"{_base(network)}/funding-rates")
     return data.get("funding_rates") or data.get("rates") or []
@@ -492,8 +493,8 @@ def get_funding_rate(market_id: int, network: str = LIGHTER_NETWORK) -> dict:
 # Именованная вселенная для рейтингов «что ликвиднее». Это не «топ по обороту со
 # всей книги»: цены и оборота в orderBooks нет (замерено 2026-10-03 — там есть
 # open_interest в БАЗОВЫХ единицах, а он несопоставим между BTC и LIT), поэтому
-# ранжирование возможно только по свечам, а свечей на 211 активных перпов —
-# 211 запросов. Каждый символ ниже проверен как активный перп mainnet; TON и
+# ранжирование возможно только по свечам, а это запрос к Lighter на каждый
+# активный перп. Каждый символ ниже проверен как активный перп mainnet; TON и
 # MATIC среди них отсутствуют, и в списке их нет осознанно, а не по забывчивости.
 MAJOR_PERPS = (
     "BTC",
@@ -567,8 +568,8 @@ def get_market_overview(
             continue
         known.append((symbol, market_id))
 
-    # 18 свечных запросов подряд — это 18 × сетевой RTT (на mainnet ~6с за
-    # запрос, суммарно холодный ответ растягивался на ~2 минуты). Свечи разных
+    # Свечные запросы идут подряд — это сетевой RTT на каждый рынок (на mainnet
+    # ~6с за запрос, суммарно холодный ответ растягивался на ~2 минуты). Свечи разных
     # рынков не зависят друг от друга, поэтому параллелим; ThreadPoolExecutor
     # вместо async, потому что _get — блокирующий urllib, а функция синхронная.
     #

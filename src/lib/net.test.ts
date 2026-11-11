@@ -80,8 +80,8 @@ describe('timedFetch', () => {
 
 describe('константы таймаутов', () => {
   it('бэкенд ждёт дольше публичного REST, и оба значения человеческие', () => {
-    // /markets/overview на бэкенде — это 18 свечных запросов на сервере, а не
-    // один RTT; обрывать его раньше публичной котировки значило бы врать про
+    // /markets/overview на бэкенде — это свечной запрос на каждый рынок обзора, а
+    // не один RTT; обрывать его раньше публичной котировки значило бы врать про
     // «бэкенд не отвечает».
     expect(BACKEND_TIMEOUT_MS).toBeGreaterThan(PUBLIC_TIMEOUT_MS)
     expect(PUBLIC_TIMEOUT_MS).toBeGreaterThanOrEqual(5_000)

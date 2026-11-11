@@ -174,13 +174,13 @@ same paragraph. The data behind those panels comes from
 numbers and the `curl` commands that produced them live in `MEASURED` at the top
 of that file, and this document deliberately does not copy them: the volumes move
 with the market, and a fourth copy of a number diverges from the first within a
-couple of weeks (the docs said 733 funding rows and 70 Arcus markets while the
-fixtures already measured 732 and 81). A budget test on invented volumes either
+couple of weeks (the docs still quoted the old funding and Arcus volumes while
+`MEASURED` had already been re-measured). A budget test on invented volumes either
 misses the real slowdown or fails without cause.
 
 `e2e/render-budget.spec.ts` then puts numbers on what those volumes cost: nodes
-per panel, page height, mounted rows in the market picker (windowed, not all
-246), whether the copy journal scrolls inside its own region instead of growing
+per panel, page height, mounted rows in the market picker (windowed, not the
+whole book), whether the copy journal scrolls inside its own region instead of growing
 a 10 317 px page, and how many requests a leader list costs (one hydrated
 endpoint, not two requests per card). Thresholds are the measured values with
 headroom: they may go down, and the test is written to fail if they go up.
@@ -190,13 +190,13 @@ of a windowed row (50 px in the picker, 40 px in the journal), the scroll range
 the window promises (`scrollHeight ≥ count × pitch`), that mounted rows cover the
 viewport at mid-scroll, and that scrolling to the end paints the fixture's last
 row — named by symbol rather than as «some row». Those four assertions are what
-caught a collapsed spacer: the picker kept 200 markets in `padBottom` styled at
-9 200 px, `flex-shrink` compressed it to zero, and 180 markets could not be
-reached with the mouse at all.
+caught a collapsed spacer: the picker's bottom spacer was a plain `div` in a
+flex column, `flex-shrink` crushed its 9 200 px to nothing, and all but the
+first screenful of markets could not be reached with the mouse at all.
 
 The gate then asks whether the window is operable without a mouse. From search,
 `ArrowDown` enters the first row; `ArrowUp`/`ArrowDown`, `PageUp`/`PageDown`,
-`Home` and `End` move through all 200 capped rows, scrolling the window before
+`Home` and `End` move through every capped row, scrolling the window before
 focusing a row that is not mounted yet, and `Enter` selects the focused market.
 The same list is measured through `390 → 1440 → 390` resize and after a deep
 scroll is narrowed by a filter: rows must still cover the viewport, the row count
@@ -491,13 +491,13 @@ Sans — за 265 px в абзаце шириной 262 px, а `.14em` дово�
 `e2e/fixtures.ts`, а объёмы в нём — замеры живых ответов; сами числа и `curl`-команды,
 которые их дали, лежат в `MEASURED` в начале этого файла, и этот документ их
 сознательно не копирует: объёмы двигаются вместе с рынком, и четвёртая копия числа
-разъезжается с первой за пару недель (в доках значилось 733 строки ставок и 70
-рынков Arcus, когда в фикстурах уже было 732 и 81). Бюджет на выдуманном объёме
+разъезжается с первой за пару недель (в доках значились прежние строки ставок
+и прежние рынки Arcus, когда `MEASURED` уже перемерили). Бюджет на выдуманном объёме
 либо не замечает настоящую просадку, либо краснеет без причины.
 
 `e2e/render-budget.spec.ts` ставит числа на то, сколько этот объём стоит: узлов
-на панель, высота страницы, сколько строк окна рынка живёт в DOM (окно, а не все
-246), скроллится ли журнал копи-движка внутри своей области вместо страницы в
+на панель, высота страницы, сколько строк окна рынка живёт в DOM (окно, а не
+весь список), скроллится ли журнал копи-движка внутри своей области вместо страницы в
 10 317 px и сколько запросов стоит список лидеров (один гидратированный эндпоинт
 вместо двух на карточку). Пороги — замер с запасом: они могут только уменьшаться,
 и тест написан так, чтобы рост его валил.
@@ -509,12 +509,12 @@ Sans — за 265 px в абзаце шириной 262 px, а `.14em` дово�
 последней строки фикстуры — по имени тикера, а не до «какой-то строки». Именно
 эти четыре проверки поймали схлопнутую заглушку: у окна рынка нижняя заглушка
 была обычным `div` внутри flex-колонки, `flex-shrink` сжал её 9 200 px до нуля,
-`scrollHeight` стал 804 вместо 10 004, и 180 из 200 рынков нельзя было открыть
-мышью — их находил только поиск.
+`scrollHeight` стал 804 вместо 10 004, и за пределами первого экрана рынок
+нельзя было открыть мышью — его находил только поиск.
 
 Дальше та же проверка спрашивает, доступен ли список без мыши. `ArrowDown` из
 поиска переходит в первую строку; стрелки, `PageUp`/`PageDown`, `Home` и `End`
-ведут фокус по всем 200 строкам окна, сначала прокручивая его до ещё не
+ведут фокус по всем строкам окна, сначала прокручивая его до ещё не
 смонтированной цели, а `Enter` выбирает рынок под фокусом. Список измеряют и при
 ресайзе `390 → 1440 → 390`, и после глубокой прокрутки, за которой фильтр
 сокращает данные: строки обязаны накрывать видимую область, их число берётся из

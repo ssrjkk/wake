@@ -116,7 +116,8 @@ class AgentStepRequest(BaseModel):
 
 
 def _market_constraints(market_id: int) -> dict:
-    """market_id -> шаг и минимум рынка из живой книги (кэш 30 с, cache.py).
+    """market_id -> шаг и минимум рынка из живой книги (кэш — под ttl @cached у
+    get_order_books в lighter_rest.py).
 
     Активный рынок без любого из двух decimals — это 502, а не 500: поля
     приходят из ответа Lighter, и `int()` от отсутствующего или кривого значения

@@ -117,6 +117,10 @@ const MARKETS_TABS: readonly Tab[] = [
 // e2e/render-budget.spec.ts, который меряет смещение последней видимой строки.
 const PICKER_ROW_PITCH = 50;
 
+// Потолок списка в окне выбора рынка. Его копия — MEASURED.pickerCeiling в
+// e2e/fixtures.ts: гейт мерит список по нему, поэтому менять вместе.
+const PICKER_LIMIT = 200;
+
 function focusMarketRow(
   list: HTMLDivElement,
   index: number,
@@ -435,11 +439,13 @@ export default function App() {
       const q = marketSearch.trim().toUpperCase();
       return !q || m.symbol.toUpperCase().includes(q);
     })
-    .slice(0, 200);
+    .slice(0, PICKER_LIMIT);
 
-  // Книга Lighter отдаёт 246 строк (226 активных), и в mounted-виде это стоило
-  // 1 018 узлов и 615 мс на открытие окна (замер e2e/render-budget.spec.ts).
-  // Поиск по этому списку перерисовывал все двести кнопок на каждый keystroke.
+  // Книга Lighter — сотни строк, и в mounted-виде это стоило 1 018 узлов и
+  // 615 мс на открытие окна (замер e2e/render-budget.spec.ts; объём списка
+  // снимает MEASURED в e2e/fixtures.ts, здесь он не пересказывается — двигается
+  // вместе с рынком). Поиск по этому списку перерисовывал все его кнопки на
+  // каждый keystroke.
   const { attach: attachPicker, ...pickerWindow } = useRowWindow<HTMLDivElement>(
     filteredMarkets.length,
     PICKER_ROW_PITCH,

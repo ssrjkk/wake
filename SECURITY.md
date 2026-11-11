@@ -170,7 +170,8 @@ venue, not against the number typed into the follow row. `allocation_usd` is wha
 a follower said he is willing to risk; the cap that has to hold before an order is
 built is free margin, and the only honest reading of it is the account value
 Lighter publishes for that `account_index` (`lighter_rest.get_account_equity`,
-cached 30 s). When the venue cannot be read, the follower is skipped and the skip
+cached under that decorator's own `ttl`). When the venue cannot be read, the
+follower is skipped and the skip
 is written to `mirror_log` as `margin_unverified` — the alternative was to assume
 the allocation was available margin, which is exactly the assumption a cap exists
 to make. `POST /follows` refuses a follower whose wallet sign-in never produced a
@@ -527,7 +528,8 @@ Lighter, и из него нет ни одного пути к `/place-order`: �
 числу, вбитому в строку подписки. `allocation_usd` — сколько человек сам сказал,
 что готов рисковать; капиться до построения ордера надо по свободной марже, а
 честно её прочесть можно только из аккаунта Lighter для этого `account_index`
-(`lighter_rest.get_account_equity`, кэш 30 с). Когда площадка не отдала значение,
+(`lighter_rest.get_account_equity`, кэш под ttl этого `@cached`). Когда площадка
+не отдала значение,
 подписчик пропускается, и пропуск пишется в `mirror_log` как `margin_unverified`:
 альтернатива — считать аллокацию доступной маржой на веру, то есть ровно то
 допущение, ради которого кап и существует. `POST /follows` отклоняет подписчика,

@@ -35,8 +35,8 @@ Captured from this build with live data (2026-11-03 for the Overview panel, 2026
 
 | Panel | Where the data comes from | Works without the Wake backend |
 | --- | --- | --- |
-| Обзор (Overview) | Market ranking by real 24h quote volume (`/markets/overview`, 18 perp markets, cached 60 s) plus open Predict markets | no |
-| Терминал (Terminal) | Candles and recent trades from Lighter's public REST; the hourly tick tape under the quote is drawn from the same 48 candles the chart uses | reads yes; sending an order needs the signing service, and the order is refused if that service runs on a different network than the one the book was read from |
+| Обзор (Overview) | Market ranking by real 24h quote volume (`/markets/overview` — one row per market in `MAJOR_PERPS`, cached under that route's TTL) plus open Predict markets | no |
+| Терминал (Terminal) | Candles and recent trades from Lighter's public REST; the hourly tick tape under the quote is drawn from the same candles the chart uses | reads yes; sending an order needs the signing service, and the order is refused if that service runs on a different network than the one the book was read from |
 | Discover | Leaders ranked by follower count and AUM, follow / pause / unfollow | no |
 | Портфель (Portfolio) | Your positions on Lighter looked up by L1 address (public REST); subscriptions and the copy-engine log from the backend | positions yes, copy state no |
 | Earn | Copy subscription state and trial activation | no |
@@ -218,8 +218,10 @@ Price markets close themselves at the deadline only while this process runs; oth
 | `TELEGRAM_BOT_TOKEN` | empty | bot process and Telegram login verification |
 | `WAKE_MASTER_KEY` | empty | encrypts the key store; keep it in a secrets manager, not on disk |
 | `WAKE_RATE_LIMIT_CAPACITY` / `WAKE_RATE_LIMIT_REFILL` | 40 / 20 | token bucket per signed-in user, per IP for anonymous traffic; a write costs 3 tokens |
+| `WAKE_SIGNING_SERVICE_URL` | `http://localhost:8787` | where the copy agent posts a signed order. In Compose it is `http://signing:8787`; with a wrong address orders are built and never sent |
 | `WAKE_SIGNING_ALLOWED_HOSTS` | `localhost,127.0.0.1,::1,signing` | the only `Host` values the signing service answers; anything else is `403` before the key is read |
 | `WAKE_ENABLE_DOCS` | `false` | `/docs`, `/redoc` and `/openapi.json` exist only when this is on — the app's CSP blocks Swagger UI's script anyway |
+| `WAKE_LOG_LEVEL` | `INFO` | `CRITICAL`, `ERROR`, `WARNING`, `INFO` or `DEBUG`; an unknown name refuses to start instead of quietly falling back to INFO |
 | `ANTHROPIC_API_KEY` | empty | only the LLM decision path; without it the agent runs the rule engine |
 
 ## Testing
@@ -353,7 +355,7 @@ docker compose up predict-resolver
 - The LLM decision path is covered by fallback tests (`test_llm_agent.py`) — no key, network error, malformed JSON, invalid action — but not by a call to a real model.
 - `leader_listener.py`'s websocket connection is not exercised by tests (they cover the snapshot-diffing logic around it); it needs a network to verify.
 - A leader's `handle` is whatever the registering user types. The account index behind it is not free-text any more — it is taken from the wallet-verified follower record — but the handle itself is unverified.
-- `/markets/overview` costs 18 candle requests per refresh and is cached for 60 seconds.
+- `/markets/overview` makes one candle request per market in `MAJOR_PERPS` on every refresh; the answer is cached under that route's TTL in `backend/lighter_rest.py`.
 
 ## Security
 

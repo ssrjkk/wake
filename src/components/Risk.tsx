@@ -21,7 +21,7 @@ export default function Risk({ markets, setToast }: RiskProps) {
   const [hedgeTarget, setHedgeTarget] = useState(0);
   const [riskBusy, setRiskBusy] = useState(false);
 
-  // Поиск по списку: 225 живых рынков и «первые 60 в порядке книги» — это не
+  // Поиск по списку: сотни живых рынков и «первые 60 в порядке книги» — это не
   // выбор, а лотерея. Cap оставлен, но считается уже по совпадениям.
   const pickerMatches = (() => {
     const q = pickerQuery.trim().toUpperCase();
