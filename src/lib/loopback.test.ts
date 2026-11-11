@@ -14,14 +14,26 @@ describe('isLoopbackBackend', () => {
     'http://[0:0:0:0:0:0:0:1]:8000', // та же ::1 в развёрнутой записи
     'HTTP://LOCALHOST:8000',
     'https://localhost',
+    // Форма без схемы — так переменную записывают руками, и именно на ней
+    // прежний разбор молчал: `new URL('localhost:8787')` даёт схему
+    // «localhost:» и пустой hostname, то есть «это не петля» на адрес самой
+    // машины. Цена — боевой бандл, где каждый посетитель стучится к себе.
+    'localhost:8787',
+    '127.0.0.1:8000',
+    '[::1]:8787',
+    'localhost',
   ]
   const PUBLIC = [
     BACKEND_URL, // адрес этой сборки: на нём панель обязана называть адрес
     'https://wake.example.com/localhost',
     'https://api.localhost.example.com',
     'https://wake.example.com?callback=http://127.0.0.1:8000',
+    'http://localhost.attacker.tld', // суффикс «.attacker.tld» имя не отменяет
+    'http://localhostish:9',
+    'localhost:8787.evil.com',
     '',
     'не адрес',
+    '/api',
   ]
 
   it.each(LOOPBACK)('calls %s the machine itself', (url) => {

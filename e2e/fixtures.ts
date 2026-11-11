@@ -19,6 +19,8 @@
 // на фронте это часть контракта), поэтому фикстура проверяет тот же код, что и
 // прода, а не упрощённую версию.
 import type { Page, Route } from "@playwright/test";
+import { isLoopbackHost } from "../src/lib/loopback";
+import { urlHost, urlOrigin } from "../src/lib/url";
 
 export const MEASURED = {
   /** GET /api/v1/orderBooks?filter=all — все строки книги, активные и нет. */
@@ -428,6 +430,13 @@ export async function installFixtures(page: Page, options: FixtureOptions = {}):
   // VITE_SIGNING_SERVICE_URL из .env: отдельный процесс на петле, а не бэкенд.
   const SIGNER = "http://localhost:8787";
 
+  // «Своё» решается источником и именем хоста, а не префиксом строки. Префикс
+  // «http://localhost» продолжал запрос на http://localhost.attacker.tld и на
+  // http://localhostish:9 — прогон уходил в сеть, а счётчик фиксировал «данных
+  // нет». Петля остаётся исключением по имени: порт у signer-процесса
+  // меняется от запуска к запуску, и точный источник по нему не угадать.
+  const OWN_ORIGINS = [LIGHTER, ARCUS, BACKEND, SIGNER].map((u) => urlOrigin(u));
+
   // Ловушка порядка, из-за которой первая же версия прогона меряла не то: Playwright
   // перебирает зарегистрированные маршруты в обратном порядке, поэтому общий
   // «запретить чужое» обязан стоять ПЕРВЫМ, а конкретные ответы — позже. Иначе
@@ -435,7 +444,8 @@ export async function installFixtures(page: Page, options: FixtureOptions = {}):
   // панель замеряется в состоянии «данных нет», что выглядит как отличный результат.
   await page.route("**/*", (route) => {
     const url = route.request().url();
-    const known = [LIGHTER, ARCUS, BACKEND, "http://127.0.0.1", "http://localhost"].some((o) => url.startsWith(o));
+    const known =
+      OWN_ORIGINS.includes(urlOrigin(url) ?? "") || isLoopbackHost(urlHost(url));
     return known ? route.continue() : route.abort();
   });
 

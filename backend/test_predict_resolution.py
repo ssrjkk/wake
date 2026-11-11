@@ -89,6 +89,55 @@ class TestEventResolution(unittest.TestCase):
                 evidence_url="https://example.com",
             )
 
+    def test_rejects_evidence_that_is_not_an_address(self):
+        """Схема — не адрес. Проверка «scheme in (http, https)» принимала бы
+        `https:example.com` (у urlsplit хоста в такой форме нет), адрес с
+        userinfo (открывается домен после «@»), адрес с пробелом или переводом
+        строки внутри и `https://` без хоста. Эта строка становится ссылкой в
+        интерфейсе рынка."""
+        for evidence in (
+            "javascript:alert(1)",
+            "javascript://evil.com",
+            "data:text/html,x",
+            "mailto:curator@example.com",
+            "https://t.me@evil.com/invite",
+            "https://good.com\nX",
+            "https://good.com x",
+            "https:/good.com",
+            "https://",
+            "good.com",
+            "//evil.com/x",
+            "",
+        ):
+            with self.subTest(evidence=evidence):
+                with self.assertRaises(ValueError):
+                    resolve_event_market(
+                        outcome="yes",
+                        resolved_by="admin:alice",
+                        resolved_at=1.0,
+                        evidence_url=evidence,
+                    )
+
+    def test_evidence_of_any_https_or_http_spelling_is_recorded(self):
+        """Регистр схемы и пробелы вокруг — не причина выбрасывать источник:
+        при записи достаточно http, а вот чтобы он не показывался, у него должен
+        быть хост. В запись уходит та форма, которую проверяли, — обрамляющие
+        пробелы в href читают не все."""
+        for evidence in (
+            "https://example.com/report",
+            "HTTPS://Example.COM/report",
+            "  https://example.com  ",
+            "http://example.com:8080/report",
+        ):
+            with self.subTest(evidence=evidence):
+                r = resolve_event_market(
+                    outcome="yes",
+                    resolved_by="admin:alice",
+                    resolved_at=1.0,
+                    evidence_url=evidence,
+                )
+                self.assertEqual(r.evidence_url, evidence.strip())
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

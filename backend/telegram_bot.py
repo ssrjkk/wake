@@ -78,6 +78,7 @@ from aiogram.types import (
 import lighter_rest
 from config import BACKEND_URL, LIGHTER_NETWORK, MINIAPP_URL, TELEGRAM_BOT_TOKEN
 from funding_arb import base_asset, funding_rate_rows, venue_rate_rows
+from source_url import source_host
 
 log = logging.getLogger(__name__)
 
@@ -395,13 +396,21 @@ def predict_market_report(m: dict, now: datetime.datetime | None = None) -> str:
 def evidence_note(url: object) -> str:
     """Ссылка на источник решения — отдельной строкой и только https.
 
-    URL набирает куратор: схема проверяется, кавычки экранируются, а показанный
-    текст — тот же адрес, что и в href. Подписать ссылку одним словом было бы
-    способом спрятать чужой домен."""
+    URL набирает куратор: адрес разбирается (source_host), кавычки экранируются,
+    а подписью служит сам адрес, а не нейтральное слово — иначе под «Источником»
+    прятался бы чужой домен. Длинная подпись заменяется хостом целиком: у имени
+    вида `secure.verify.bank.example.evil.tld` домен, куда реально ведёт ссылка,
+    стоит в конце, и обрезка по 60 символам спрятала бы именно его.
+
+    Разбор, а не `startswith("https://")`, потому что эту строку Telegram делает
+    ссылкой: `https://good.com\\nX` открылся бы good.comx (перевод строки внутри
+    адреса при разборе исчезает), `https://t.me@evil.com` открылся бы evil.com, а
+    `HTTPS://good.com` перестал бы показываться из-за одного регистра."""
     text = str(url or "").strip()
-    if not text.startswith("https://") or any(c in text for c in " \t\"'<>"):
+    host = source_host(text, https_only=True)
+    if not host:
         return ""
-    label = text if len(text) <= 60 else text[:59] + "…"
+    label = text if len(text) <= 60 else f"{host}/…"
     return f'<a href="{html.escape(text, quote=True)}">{esc(label)}</a>'
 
 
@@ -494,16 +503,28 @@ def miniapp_url(
     десятка вопросов не отвечает на «показали ли мне тот самый».
 
     Табы, тикер и id проверяются здесь, а не на сайте: адрес уходит в Telegram, и
-    внятным он должен быть до отправки."""
-    if not WAKE_MINIAPP_URL.startswith("https://"):
+    внятным он должен быть до отправки. Основание разбирается так же, а не
+    сравнивается с префиксом: `WAKE_MINIAPP_URL=https://` (значение-заготовка без
+    хоста) проходило бы проверку и давало бы кнопку, которую Bot API отбраковывает
+    на валидации ответа — то есть 400 на каждом сообщении, а не отсутствие
+    кнопки."""
+    text = WAKE_MINIAPP_URL.strip()
+    if not source_host(text, https_only=True):
         return ""
-    sep = "&" if "?" in WAKE_MINIAPP_URL else "?"
-    url = f"{WAKE_MINIAPP_URL}{sep}tab={tab}"
+    # Схема в подписи — та, которую только что проверил гейт: «HTTPS://» в env
+    # разбирается в любой раскладке, а отправлять в Telegram нужно ту форму, о
+    # которой он говорит «https URL», а не ту, где это надо догадаться принять.
+    base = "https://" + text.partition("://")[2]
+    # Параметры — до якоря, а не в конец строки: после «#» запрос перестаёт быть
+    # запросом, а сайт читает их из location.search (src/lib/deeplink.ts).
+    base, _, anchor = base.partition("#")
+    sep = "&" if "?" in base else "?"
+    url = f"{base}{sep}tab={tab}"
     if asset and TICKER_RE.fullmatch(asset):
         url += f"&asset={asset}"
     if market and MARKET_ID_RE.fullmatch(market):
         url += f"&market={market}"
-    return url
+    return f"{url}#{anchor}" if anchor else url
 
 
 def web_app_button(

@@ -725,6 +725,35 @@ class TestDeepLink(unittest.TestCase):
         self.assertEqual(tb.miniapp_url("terminal", "BTC"), "")
         self.assertIsNone(tb.web_app_button("terminal", "BTC"))
 
+    def test_address_without_host_gives_no_link_at_all(self):
+        """`https://` из env-примера — не адрес: префиксная проверка пропускала
+        его, и Bot API отвечал 400 на каждом сообщении с кнопкой, тогда как
+        смысл гейта — чтобы кнопки просто не было."""
+        for value in ("", "https://", "https", "https://:8443", "https://[::1]:8443"):
+            with self.subTest(value=value):
+                tb.WAKE_MINIAPP_URL = value
+                self.assertEqual(tb.miniapp_url("terminal"), "")
+                self.assertIsNone(tb.web_app_button("terminal"))
+
+    def test_https_address_of_any_spelling_gives_the_link(self):
+        # Регистр схемы не прячет кнопку, но в Telegram уходит каноническая
+        # форма: гейт проверял https, он же и подписывает.
+        tb.WAKE_MINIAPP_URL = "HTTPS://wake-7k6.pages.dev:443"
+        self.assertEqual(
+            tb.miniapp_url("funding"),
+            "https://wake-7k6.pages.dev:443?tab=funding",
+        )
+
+    def test_params_go_before_the_anchor_not_into_it(self):
+        """Адрес превью-развёртки приходит с якорем. Дописанные в конец строки,
+        параметры остались бы внутри якоря, а сайт читает их из location.search —
+        кнопка вела бы не в тот раздел."""
+        tb.WAKE_MINIAPP_URL = "https://wake-7k6.pages.dev/#preview"
+        self.assertEqual(
+            tb.miniapp_url("predict", "BTC"),
+            "https://wake-7k6.pages.dev/?tab=predict&asset=BTC#preview",
+        )
+
     def test_price_card_button_opens_that_market(self):
         with (
             patch.object(tb, "find_perp", lambda symbol: BOOK),
@@ -899,16 +928,41 @@ class TestPredictMarketCard(unittest.TestCase):
         self.assertIn(">https://example.com/report<", got)
 
     def test_evidence_note_refuses_to_hide_a_link(self):
-        # Не-https и адрес с кавычкой/пробелом не становятся разметкой: текст
-        # набирает куратор.
+        # Не-https и адрес, который не разбирается в адрес: текст набирает
+        # куратор, и подписанная ссылка обязана вести туда, где написано.
         for url in (
             "",
             None,
             "http://example.com",
             "javascript:alert(1)",
             'https://x"onmouseover="y',
+            # Префикс «https://» у этих форм есть, а под ним другое:
+            "https://t.me@evil.com/invite",  # открывается evil.com
+            "https://good.com\nX",  # перевод строки исчезает при разборе
+            "https://good.com x",  # пробел рвёт и href, и разметку
+            "https://good.com:443x",  # порт не разобран — ссылки нет
+            "https://good.com:0/",  # по нулевому порту не подключаются
+            "https:/good.com",  # хоста в такой форме нет
+            "good.com",  # и здесь нет — это не ссылка
+            "https://",  # заготовка без адреса
+            "https://[::1]:8443/proof",  # литературный IPv6 — не имя источника
         ):
-            self.assertEqual(tb.evidence_note(url), "", url)
+            self.assertEqual(tb.evidence_note(url), "", repr(url))
+
+    def test_evidence_note_reads_the_address_not_its_spelling(self):
+        got = tb.evidence_note("HTTPS://Example.COM/report")
+        self.assertIn('href="HTTPS://Example.COM/report"', got)
+        self.assertIn(">HTTPS://Example.COM/report<", got)
+
+    def test_long_evidence_url_is_labelled_by_its_host(self):
+        """Обрезка по 60 символам прятала бы конец хоста — то самое имя, куда
+        ведёт ссылка. У длинного адреса подписью становится хост целиком."""
+        long_host = "secure.verify.bank.example.evil.tld"
+        url = f"https://{long_host}/some/quite/long/report/path?x=1"
+        self.assertGreater(len(url), 60)
+        got = tb.evidence_note(url)
+        self.assertIn(f">{long_host}/…<", got)
+        self.assertIn(f'href="{url}"', got, "адрес в href остаётся полным")
 
     def test_buttons_carry_the_market_id_and_a_readable_label(self):
         rows = tb.predict_buttons([PREDICT_MARKET])

@@ -23,7 +23,8 @@ Oracle с dispute-периодом, как у настоящего Polymarket; �
 import math
 from dataclasses import dataclass
 from enum import Enum
-from urllib.parse import urlparse
+
+from source_url import source_host
 
 
 class Comparator(Enum):
@@ -94,26 +95,32 @@ def resolve_event_market(
     создаётся этой функцией вообще. Это минимум для аудита постфактум, не
     полноценный dispute-механизм.
 
-    Схема у evidence_url проверяется, потому что эта строка становится ссылкой в
+    Адрес evidence_url разбирается, потому что эта строка становится ссылкой в
     интерфейсе: javascript: и data: прошли бы как «источник» и выполнились по
     клику. Кураторский токен — не причина доверять содержимое поля: токен один на
-    процесс, а ссылку видит каждый посетитель рынка."""
+    процесс, а ссылку видит каждый посетитель рынка.
+
+    Разбирается адрес, а не берётся одна его схема: проверка «scheme в
+    (http, https)» приняла бы `https:example.com`, у которого urlsplit вообще не
+    видит хоста, и `https://t.me@evil.com`, где открывается evil.com. Правило
+    живёт в source_url.py — оттуда же его берёт бот, чтобы «валидный источник»
+    значил одно и то же при записи и при показе."""
     if outcome not in ("yes", "no"):
         raise ValueError("outcome должен быть 'yes' или 'no'")
     if not resolved_by:
         raise ValueError("resolved_by обязателен — резолюция без куратора не создаётся")
-    if not evidence_url:
+    url = evidence_url.strip()
+    if not url:
         raise ValueError(
             "evidence_url обязателен — резолюция без источника не создаётся"
         )
-    scheme = urlparse(evidence_url).scheme.lower()
-    if scheme not in ("http", "https"):
+    if not source_host(url):
         raise ValueError(
-            f"evidence_url — http(s) ссылка, получено {evidence_url[:40]!r}"
+            f"evidence_url — http(s)-адрес с хостом, получено {url[:40]!r}"
         )
     return EventResolution(
         outcome=outcome,
         resolved_by=resolved_by,
         resolved_at=resolved_at,
-        evidence_url=evidence_url,
+        evidence_url=url,
     )

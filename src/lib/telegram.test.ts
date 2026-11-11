@@ -459,6 +459,34 @@ describe('telegram mini app', () => {
       expect(openTelegramLink).not.toHaveBeenCalled()
     })
 
+    it('routes every spelling of the t.me host and only that host', () => {
+      const cases: [string, boolean][] = [
+        ['https://t.me/waketrade_bot', true],
+        ['http://t.me/waketrade_bot', true],
+        // Префикс «https://t.me/» их не видел: кнопка уезжала в openLink, а
+        // Telegram такие адреса не открывает — ссылка выглядела мёртвой.
+        ['https://T.ME/invite/abc', true],
+        ['https://t.me:443/invite/abc', true],
+        ['https://t.me', true],
+        // А эти префикс принял бы, если бы следующий правник убрал косую черту:
+        // хост у них другой, и вести их надо в браузер Telegram.
+        ['https://t.me.evil.com/waketrade_bot', false],
+        ['https://t.me@evil.com/invite', false],
+        ['https://evilt.me/x', false],
+        ['https://wake-7k6.pages.dev/?tab=terminal', false],
+      ]
+      for (const [url, isTelegram] of cases) {
+        const openTelegramLink = vi.fn()
+        const openLink = vi.fn()
+        window.Telegram = { WebApp: { initData: INIT_DATA, openTelegramLink, openLink } }
+
+        openExternally(url)
+
+        expect(openTelegramLink.mock.calls.length, url).toBe(isTelegram ? 1 : 0)
+        expect(openLink.mock.calls.length, url).toBe(isTelegram ? 0 : 1)
+      }
+    })
+
     it('falls back to a new tab in a plain browser', () => {
       const open = vi.fn()
       window.open = open

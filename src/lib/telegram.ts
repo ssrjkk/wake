@@ -22,6 +22,7 @@
 // кнопка «назад» и вибрация. Telegram не делает этого за страницу.
 import { backendJson } from "./backend";
 import type { SignInResponse } from "./session";
+import { urlHost } from "./url";
 
 // Поля, которые реально подписывает Login Widget. photo_url виджет тоже отдаёт, но
 // в подпись Telegram его не включает — «vk.com/id123», скажем, — и вместе с ним не
@@ -320,14 +321,22 @@ export function telegramNotify(kind: "success" | "error" | "info"): void {
 }
 
 /** Ссылка наружу: из вебвью t.me-адрес обязан уйти в сам Telegram, остальные — в
- * его встроенный браузер, а не подменять собой текущий экран. */
+ * его встроенный браузер, а не подменять собой текущий экран.
+ *
+ * Решает имя хоста, а не префикс строки: `https://t.me:443/invite` и
+ * `HTTPS://T.ME/x` — тот же t.me, которого префикс не видит (кнопка молча
+ * уезжала в openLink, а Telegram такие адреса не открывает — ссылка выглядит
+ * мёртвой), а `https://t.me@evil.com` и `https://t.me.evil.com` префикс,
+ * наоборот, принял бы за свой. Последний случай держится на косом слэше после
+ * «t.me»: уберёт его следующий, кто будет трогать эту строку, — и пропуск в
+ * openTelegramLink откроется для чужого домена. */
 export function openExternally(url: string): void {
   const app = window.Telegram?.WebApp;
   if (!app) {
     window.open(url, "_blank", "noopener,noreferrer");
     return;
   }
-  if (url.startsWith("https://t.me/") || url.startsWith("http://t.me/")) {
+  if (urlHost(url) === "t.me") {
     app.openTelegramLink?.(url);
     return;
   }

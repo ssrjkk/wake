@@ -16,6 +16,7 @@ import {
 } from "../lib/predict";
 import { fmtUsdCompact, usd } from "./utils";
 import { errorText } from "../lib/backend";
+import { sourceHost } from "../lib/url";
 
 interface PredictProps {
   signedIn: boolean;
@@ -503,6 +504,14 @@ export default function Predict({
               const yes = heldByKey.get(`${m.id}:yes`);
               const no = heldByKey.get(`${m.id}:no`);
               const resolved = m.status === "resolved";
+              // Адрес источника разбирается перед тем, как стать href. Бэкенд
+              // проверяет его при записи, но в базе уже могут лежать строки,
+              // записанные до этого правила, а `https://t.me@evil.com` и
+              // `javascript://evil.com` на глаз выглядят источниками. Подписью
+              // служит хост, а не слово «Источник»: под одним словом домен
+              // спрятан ровно так же, как в текстовом сообщении бота.
+              const evidenceUrl = m.evidence_url ?? "";
+              const evidenceHost = sourceHost(evidenceUrl);
               return (
                 <article
                   key={m.id}
@@ -535,14 +544,14 @@ export default function Predict({
                       {m.resolved_by && (
                         <span className="num">закрыл: {m.resolved_by}</span>
                       )}
-                      {m.evidence_url && (
+                      {evidenceHost && (
                         <a
                           className="evidence"
-                          href={m.evidence_url}
+                          href={evidenceUrl}
                           target="_blank"
                           rel="noreferrer noopener"
                         >
-                          Источник
+                          Источник · {evidenceHost}
                           <ExternalLink className="w-2.5 h-2.5" />
                         </a>
                       )}
