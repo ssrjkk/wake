@@ -101,8 +101,13 @@ WINDOW = 14
 # про другое, и число остаётся без хозяина).
 ATTRIBUTION = 120
 
-MARKDOWN = ("README.md", "README.ru.md", "CONTRIBUTING.md", "SECURITY.md",
-            "CODE_OF_CONDUCT.md")
+MARKDOWN = (
+    "README.md",
+    "README.ru.md",
+    "CONTRIBUTING.md",
+    "SECURITY.md",
+    "CODE_OF_CONDUCT.md",
+)
 SKIP = re.compile(
     r"(node_modules|dist|build|__pycache__|\.git|alembic|CHANGELOG|fixtures\.ts)"
 )
@@ -164,7 +169,9 @@ def py_blocks(text: str):
     out = []
     tree = ast.parse(text)
     for node in ast.walk(tree):
-        if not isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+        if not isinstance(
+            node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)
+        ):
             continue
         body = list(node.body)
         if (
@@ -180,7 +187,9 @@ def py_blocks(text: str):
     for tok in tokenize.generate_tokens(io.StringIO(text).readline):
         if tok.type != tokenize.COMMENT or tok.string.startswith("#!"):
             continue
-        comments.append((tok.start[0], tok.end[0], tok.end[0], tok.string.lstrip("#").strip()))
+        comments.append(
+            (tok.start[0], tok.end[0], tok.end[0], tok.string.lstrip("#").strip())
+        )
     out.extend(_runs(comments))
     return out
 
@@ -225,14 +234,30 @@ SHAPES = (
     ("markdown-абзац", md_blocks, "Обзор стоит 18 свечных запросов на обновление."),
     ("py docstring", py_blocks, '"""Обзор стоит 18 свечных запросов."""\n'),
     ("py #-прогон", py_blocks, "x = 1\n# обзор стоит\n# 18 свечных запросов\n"),
-    ("ts //-прогон", ts_blocks, "const a = 1;\n// обзор стоит\n// 18 свечных запросов\n"),
-    ("ts /* */", ts_blocks, "const a = 1;\n/* обзор стоит 18 свечных\n   запросов */\n"),
+    (
+        "ts //-прогон",
+        ts_blocks,
+        "const a = 1;\n// обзор стоит\n// 18 свечных запросов\n",
+    ),
+    (
+        "ts /* */",
+        ts_blocks,
+        "const a = 1;\n/* обзор стоит 18 свечных\n   запросов */\n",
+    ),
     # Перенос строки не прячет число от фразы: прогон комментариев — один блок.
     # Без `_runs` эти два образца распались бы на «фраза» и «число» отдельно и
     # матчер не увидел бы ничего, а полы по пластам такой поломки не замечают
     # (блоков от неё только больше).
-    ("py #-прогон через перенос", py_blocks, "x = 1\n# обзор считает активные рынки книги\n# 225\n"),
-    ("ts //-прогон через перенос", ts_blocks, "const a = 1;\n// обзор считает активные рынки книги\n// 225\n"),
+    (
+        "py #-прогон через перенос",
+        py_blocks,
+        "x = 1\n# обзор считает активные рынки книги\n# 225\n",
+    ),
+    (
+        "ts //-прогон через перенос",
+        ts_blocks,
+        "const a = 1;\n// обзор считает активные рынки книги\n// 225\n",
+    ),
 )
 NOT_PROSE = (
     ("markdown fenced", md_blocks, "```py\na = 18  # свечных запросов\n```\n"),
@@ -257,7 +282,10 @@ def code_files():
         for path in sorted((ROOT / base).rglob("*")):
             if not path.is_file() or SKIP.search(str(path)):
                 continue
-            if path.suffix in (".ts", ".tsx", ".py") and path.name != Path(__file__).name:
+            if (
+                path.suffix in (".ts", ".tsx", ".py")
+                and path.name != Path(__file__).name
+            ):
                 yield path
 
 
@@ -291,8 +319,13 @@ def violations(blocks):
                     if any(at - ATTRIBUTION <= end <= at for end in marks):
                         continue
                     found.setdefault(
-                        (line, window[num.start():num.end()]),
-                        (owner, line, num.group(0), one[max(0, at - 40):at + 40].strip()),
+                        (line, window[num.start() : num.end()]),
+                        (
+                            owner,
+                            line,
+                            num.group(0),
+                            one[max(0, at - 40) : at + 40].strip(),
+                        ),
                     )
     return list(found.values())
 
@@ -303,9 +336,7 @@ class TestProseVolumes(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.files = [p for p in code_files() if p.exists()]
-        cls.blocks = {
-            str(p.relative_to(ROOT)): prose_blocks(p) for p in cls.files
-        }
+        cls.blocks = {str(p.relative_to(ROOT)): prose_blocks(p) for p in cls.files}
         cls.hits = []
         for rel, blocks in cls.blocks.items():
             for owner, line, num, window in violations(blocks):

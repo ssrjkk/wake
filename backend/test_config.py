@@ -702,7 +702,9 @@ class TestReadmeConfigTable(unittest.TestCase):
             )
         defaults = len(self._defaults())
         self.assertGreaterEqual(
-            defaults, 20, f"Settings не разобран — сверять не с чем ({defaults} дефолтов)"
+            defaults,
+            20,
+            f"Settings не разобран — сверять не с чем ({defaults} дефолтов)",
         )
         frontend_defaults = len(self.frontend_defaults)
         self.assertGreaterEqual(
