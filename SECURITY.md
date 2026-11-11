@@ -289,10 +289,13 @@ market in one tick, and two parallel claims by the same user must pay once.
   `WAKE_TRUSTED_PROXY_IPS`, and the address used is the rightmost chain element
   that is not itself in that list — behind Cloudflare → Railway the plain
   rightmost element is the previous proxy, and the whole service would live in
-  one bucket (`backend/net.py`). Peers and chain entries are compared as IP
-  addresses, so `::ffff:10.0.0.1`, upper-case and expanded IPv6 spellings match
-  the proxy listed in the environment. Otherwise a client could choose the IP
-  that rate limits and audit records attribute it to.
+  one bucket (`backend/net.py`). All occurrences of the header are read, not the
+  first one: repeating `X-Forwarded-For` is allowed, and the first copy is
+  usually the line the client sent itself, so the proxies in front of it would
+  stay invisible. Peers and chain entries are compared as IP addresses, so
+  `::ffff:10.0.0.1`, upper-case and expanded IPv6 spellings match the proxy
+  listed in the environment. Otherwise a client could choose the IP that rate
+  limits and audit records attribute it to.
 - Errors are one JSON shape, `{error: {code, message}}`, so clients branch on
   `code` and nothing leaks a stack trace into a response body.
 - `SENTRY_DSN` is optional; if set, exception data goes to Sentry with the SDK's
@@ -656,7 +659,10 @@ price-рынка в этот момент уже определён оракул
   `WAKE_TRUSTED_PROXY_IPS`, и берётся самый правый элемент цепочки, которого нет
   в этом списке: за Cloudflare → Railway правый по порядку — это адрес
   предыдущего прокси, и весь сервис жил бы в одном ведре (`backend/net.py`).
-  Адрес соединения и элементы цепочки сравниваются как IP, а не как строки,
+  Читаются все вхождения заголовка, а не первое: повторять `X-Forwarded-For`
+  разрешено, и обычно первое из них — строка, которую клиент прислал сам, поэтому
+  прокси перед ней остались бы невидимы. Адрес соединения и элементы цепочки
+  сравниваются как IP, а не как строки,
   поэтому `::ffff:10.0.0.1`, верхний регистр и развёрнутая запись IPv6 — тот же
   прокси, что стоит в окружении. Иначе клиент выбирал бы сам, какой IP попадает
   в аудит и в какой bucket.

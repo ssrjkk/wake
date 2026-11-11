@@ -8,14 +8,23 @@ rate limit. Ошибка здесь стоит не «неточной стро�
 import unittest
 from types import SimpleNamespace
 
+from starlette.datastructures import Headers
+
 import net
 
 
-def request_for(peer: str, xff: str | None = None):
-    headers = {} if xff is None else {"x-forwarded-for": xff}
+def request_for(peer: str, xff: "str | list[str] | None" = None):
+    """Запрос с настоящими заголовками Starlette.
+
+    Прокси дописывает X-Forwarded-For отдельной строкой, а не дописывает в
+    существующую, поэтому подменять заголовки словарём нельзя: у словаря нет
+    повторных ключей, и ровно тот случай, ради которого `client_ip` читает
+    `getlist`, в тесте исчез бы.
+    """
+    values = [xff] if isinstance(xff, str) else list(xff or [])
     return SimpleNamespace(
         client=SimpleNamespace(host=peer),
-        headers=headers,
+        headers=Headers(raw=[(b"x-forwarded-for", value.encode()) for value in values]),
     )
 
 
@@ -156,6 +165,57 @@ class TestAddressesAreNotStrings(unittest.TestCase):
         self.assertEqual(
             net.client_ip(request_for("10.0.0.1", "203.0.113.33, ::ffff:172.71.0.0")),
             "203.0.113.33",
+        )
+
+
+class TestEveryHeaderInstanceIsRead(unittest.TestCase):
+    """X-Forwarded-For разрешено повторять (RFC 9112), и прокси этим пользуются:
+    свой адрес они дописывают новой строкой, а не в существующую. `get()` из
+    нескольких вхождений возвращает первое — то есть строку, которую клиент
+    написал сам. Цепочка за прокси оставалась бы невидима, а правило «самый
+    правый недоверенный» выбирало бы адрес с клавиатуры: ровно тот обход, ради
+    которого список доверенных адресов и придуман."""
+
+    def setUp(self):
+        self.original = net.TRUSTED_PROXY_IPS
+        self.addCleanup(setattr, net, "TRUSTED_PROXY_IPS", self.original)
+        net.TRUSTED_PROXY_IPS = ["10.0.0.1", "172.71.0.0"]
+
+    def test_proxy_appends_its_own_instance(self):
+        """Клиент прислал свою строку, прокси дописал свою: подделка осталась
+        слева, где её и предписано игнорировать, а клиент виден."""
+        req = request_for("10.0.0.1", ["1.2.3.4", "198.51.100.9, 172.71.0.0"])
+        self.assertEqual(net.client_ip(req), "198.51.100.9")
+
+    def test_the_real_client_is_not_the_forged_first_instance(self):
+        req = request_for("10.0.0.1", ["1.2.3.4", "198.51.100.9"])
+        self.assertEqual(
+            net.client_ip(req),
+            "198.51.100.9",
+            "второе вхождение не должно быть невидимым",
+        )
+
+    def test_all_instances_trusted_fall_back_to_peer(self):
+        net.TRUSTED_PROXY_IPS = ["10.0.0.1"]
+        req = request_for("10.0.0.1", ["10.0.0.1", "10.0.0.1"])
+        self.assertEqual(net.client_ip(req), "10.0.0.1")
+
+    def test_starlette_semantics_it_relies_on(self):
+        """Свойство зависимого кода, проверенное самим кодом, а не пересказом:
+        на нём держится и обход, и его закрытие."""
+        headers = Headers(
+            raw=[
+                (b"x-forwarded-for", b"1.2.3.4"),
+                (b"x-forwarded-for", b"198.51.100.9"),
+            ]
+        )
+        self.assertEqual(headers.get("x-forwarded-for"), "1.2.3.4")
+        self.assertEqual(
+            headers.getlist("x-forwarded-for"), ["1.2.3.4", "198.51.100.9"]
+        )
+        self.assertEqual(
+            net.client_ip(request_for("10.0.0.1", ["1.2.3.4", "198.51.100.9"])),
+            "198.51.100.9",
         )
 
 
