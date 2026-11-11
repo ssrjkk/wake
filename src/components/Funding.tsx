@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo } from "react";
 import { RefreshCw, Percent, ArrowUpRight } from "lucide-react";
 import { getFundingRates, getCandles, type FundingRateRow, type OrderBook } from "../lib/lighter";
 import { getMarkets as getArcusMarkets, isArcusPerp, type ArcusMarket } from "../lib/arcus";
+import { pairableCarryMarkets } from "../lib/carry";
 import { backendJson, errorText } from "../lib/backend";
 import { setIntervalWhenVisible } from "../lib/visibleInterval";
 import type { FundingCheck, FundingSizing } from "./types";
@@ -74,30 +75,31 @@ export default function Funding({ markets, setToast }: FundingProps) {
       else entry.ref.push(r);
       byMarket.set(r.market_id, entry);
     }
-    const perpById = new Map(markets.filter((m) => m.market_type === "perp").map((m) => [m.market_id, m]));
-    // Нога только за тот же стейбл, что и перп: бэкенд (pairable_carry_markets)
-    // принимает "BASE/USDC" и отвергает любую другую котировку. Раньше здесь
-    // резалось по первому слэшу, и спот "BTC/USDT" показался бы живой парой,
-    // для которой /funding-arb/size честно ответит «нет спот-двойника».
-    const spotByBase = new Map(
+    // Обе ноги берутся одним разбором — pairableCarryMarkets из src/lib/carry.ts,
+    // где правило совпадает с бэкендовским pairable_carry_markets: активный перп,
+    // активный спот и котировка спота ровно тот же стейбл. Раньше спот резался по
+    // суффиксу "/USDC", а status не читался вовсе, и панель показывала
+    // возможность по неактивной книге и по написанию, которое бэкенд отвергает.
+    const carry = pairableCarryMarkets(markets);
+    const perpById = new Map(
       markets
-        .filter((m) => m.market_type === "spot" && m.symbol.endsWith("/USDC"))
-        .map((m) => [m.symbol.slice(0, -"/USDC".length), m])
+        .filter((m) => m.market_type === "perp" && m.status === "active")
+        .map((m) => [m.market_id, m]),
     );
 
     const out: Row[] = [];
     for (const [marketId, entry] of byMarket) {
       const lighter = entry.lighter;
       if (!lighter) continue;
-      const perp = perpById.get(marketId) ?? null;
+      const pair = carry.get(lighter.symbol);
       out.push({
         marketId,
         symbol: lighter.symbol,
         rate: lighter.rate,
         apy: lighter.rate * HOURS_PER_YEAR * 100,
         reference: entry.ref.map((r) => ({ exchange: r.exchange, rate: r.rate })),
-        spot: spotByBase.get(lighter.symbol) ?? null,
-        perp,
+        spot: pair?.spot ?? null,
+        perp: perpById.get(marketId) ?? null,
       });
     }
     return out.sort((a, b) => b.apy - a.apy);
