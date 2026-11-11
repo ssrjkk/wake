@@ -13,11 +13,46 @@ WAKE_TRUSTED_PROXY_IPS. Сама по себе эта строка пишетс�
 чужой. Из цепочки берётся самый правый адрес, которого нет в списке доверенных:
 его дописал последний прокси, видевший соединение с клиентом, а всё левее мог
 подставить кто угодно.
+
+Список доверенных и адреса из заголовка сравниваются как IP, а не как строки:
+`ipaddress` сводит регистр, свёрнутую и развёрнутую запись IPv6 и форму
+`::ffff:a.b.c.d` (её даёт dual-stack сокет) к одному значению. Строковое
+сравнение молча расцепляет «доверенный прокси» с самим собой — а это ровно тот
+исход, из-за которого модуль и написан: один общий bucket и одна запись в
+аудите на всю аудиторию, без ошибки в логе.
 """
+
+from ipaddress import ip_address
 
 from fastapi import Request
 
 from config import TRUSTED_PROXY_IPS
+
+
+def canonical_ip(value: str) -> str:
+    """Адрес в форме, в какой его можно сравнивать и ключевать. Всё, что IP не
+    является (имя хоста, мусор из заголовка), возвращается stripped-lowercased
+    как есть: решение «доверенный/нет» остаётся за сравнением, а не за тем,
+    распарсился ли адрес."""
+    text = value.strip().lower()
+    # Скобки и порт после них — оформление URL, а не адрес: в заголовках IPv6
+    # приезжает именно `[2001:db8::1]:443`.
+    if text.startswith("["):
+        text = text[1:].partition("]")[0]
+    try:
+        addr = ip_address(text)
+    except ValueError:
+        # Единственное «:», после которого только цифры, у IP-литеры быть не
+        # может — значит это IPv4 с портом, а не свёрнутый IPv6.
+        head, sep, port = text.rpartition(":")
+        if sep and port.isdigit():
+            try:
+                addr = ip_address(head)
+            except ValueError:
+                return text
+        else:
+            return text
+    return str(getattr(addr, "ipv4_mapped", None) or addr)
 
 
 def client_ip(request: Request) -> str:
@@ -32,14 +67,15 @@ def client_ip(request: Request) -> str:
     пропускаем всё, что входит в WAKE_TRUSTED_PROXY_IPS: остальные адреса в
     цепочке дописывали те, кому мы не доверяем, но последний недоверенный —
     это и есть ближайший к нам клиент."""
-    peer = request.client.host if request.client else ""
-    if peer not in TRUSTED_PROXY_IPS:
+    trusted = {canonical_ip(value) for value in TRUSTED_PROXY_IPS}
+    peer = canonical_ip(request.client.host if request.client else "")
+    if peer not in trusted:
         return peer or "unknown"
     chain = [
-        part.strip() for part in request.headers.get("x-forwarded-for", "").split(",")
+        canonical_ip(part)
+        for part in request.headers.get("x-forwarded-for", "").split(",")
     ]
-    chain = [value for value in chain if value]
-    for value in reversed(chain):
-        if value not in TRUSTED_PROXY_IPS:
+    for value in reversed([part for part in chain if part]):
+        if value not in trusted:
             return value
     return peer

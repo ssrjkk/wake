@@ -277,6 +277,7 @@ The interface is checked with numbers too. `theme.gate.test.ts` computes WCAG co
 - `src/lib/lighter.ts` — Lighter public REST client
 - `src/lib/arcus.ts` — Arcus public REST client: read-only market data, and the only place that interprets Arcus's status and type fields
 - `src/lib/net.ts` — the timeout every external request carries, and the human wording for one that ran out
+- `src/lib/loopback.ts` — the one answer to "is this address the machine itself", read by both the build (a production bundle must not point at it) and the wording of a failed request
 - `src/lib/telegram.ts` — sign-in from inside the Mini App and the window it lives in: `ready`/`expand`, theme colors, safe-area insets, the back button and haptics
 - `src/lib/deeplink.ts` and `src/lib/tabs.ts` — the entry point of an external link, and the single list of sections it is checked against
 - `src/lib/layers.ts` — the stack of open panels, so "back" closes the top one instead of the whole app
@@ -300,10 +301,12 @@ curl -s https://wake-7k6.pages.dev/assets/<that-name>.js | grep -c waketrade_bot
 ```
 
 - `public/_redirects` contains `/* /index.html 200` so deep links into the SPA resolve
-- A production build refuses `VITE_BACKEND_URL` pointing at localhost: `npm run build`
-  stops with the reason instead of uploading a bundle whose "backend" is each
-  visitor's own machine. `cp .env.example .env` is a development setup — to build
-  something deployable, drop the line or set the deployed address.
+- A production build refuses a `VITE_BACKEND_URL` that points at the machine
+  itself — `localhost`, any `127.` address or `::1`, decided by the host name and
+  not by the string. `npm run build` stops with the reason instead of uploading a
+  bundle whose "backend" is each visitor's own machine. `cp .env.example .env` is
+  a development setup — to build something deployable, drop the line or set the
+  deployed address.
 
 One consequence worth knowing: because Pages answers *any* unknown path with `index.html` and status 200, an API request to a host with no backend returns HTML. `src/lib/backend.ts` turns that into a readable "there is no backend at this address" message instead of a JSON parse error, and the panels print which three still work.
 
@@ -365,7 +368,7 @@ docker compose up predict-resolver
 - `WAKE_DRY_RUN` defaults to `true`, and turning it off on mainnet additionally requires `WAKE_MAINNET_LIVE=true`; the process refuses to start otherwise. Order sizes always round down.
 - Every path that can reach Lighter — the signing service, the copy-trading listener and the agent runner — checks `WAKE_DRY_RUN` in its own process before touching the SDK. While it is on, `/place-order` returns the order it would have sent and nothing reaches the exchange; `/health` of both services reports which mode they are in.
 - Curator endpoints require the `X-Curator-Token` header, compared with `hmac.compare_digest` over bytes; if the token is not configured on the server they answer 503 `CURATOR_NOT_CONFIGURED` instead of allowing anonymous market creation or resolution.
-- `X-Forwarded-For` is honoured only from `WAKE_TRUSTED_PROXY_IPS`, and only the rightmost address in the chain — otherwise a client could pick the IP that rate limits and audit records show for it.
+- `X-Forwarded-For` is honoured only from `WAKE_TRUSTED_PROXY_IPS`, and the address used is the rightmost chain element that is not itself a trusted proxy — with Cloudflare in front of Railway the plain rightmost one is the previous proxy's address. Otherwise a client could pick the IP that rate limits and audit records show for it. Peers and chain entries are compared as IP addresses, not as strings, so `::ffff:10.0.0.1`, upper-case and expanded IPv6 spellings are the same proxy as the one listed in the environment.
 - Every SQL statement goes through SQLAlchemy Core/ORM with bound parameters; there is no string-built SQL in the backend.
 - Keys are encrypted at rest (`encrypted_key_store.py`) — this is encryption, not an HSM.
 - `/health` and `/ready` need no token; everything else that reads or writes state does. Errors are one JSON shape — `{error: {code, message}}` — so a client can branch on `code` instead of parsing a sentence.

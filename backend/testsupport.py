@@ -21,6 +21,8 @@ import unittest
 
 from sqlalchemy import text
 
+from db_url import database_name
+
 # ── Окружение тестового процесса — задается здесь, а не в тестовом модуле ─────
 # config читает env один раз при импорте и на этом импорте строит настройки,
 # поэтому значение должно быть установлено ДО первого импорта config — при любом
@@ -55,7 +57,12 @@ if not _TEST_URL:
         "Например: createdb wake_test && export WAKE_TEST_DATABASE_URL="
         "postgresql+asyncpg://wake:wake@localhost:5432/wake_test"
     )
-_db_name = _TEST_URL.rstrip("/").split("/")[-1]
+# Имя базы берётся из разбора URL, а не из последнего отрезка после слэша:
+# `.../wake_test?sslmode=require` — как раз форма, которую отдаёт managed
+# Postgres, — наивным сравнением превращалось в «не _test» и отказывало, а
+# `...@host_test/` без пути, наоборот, пропускало проверку, хотя драйвер
+# открывал там базу пользователя.
+_db_name = database_name(_TEST_URL)
 if not _db_name.endswith("_test"):
     raise RuntimeError(
         f"База для тестов должна называться с суффиксом _test, получено {_db_name!r}"

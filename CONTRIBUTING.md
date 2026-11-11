@@ -39,7 +39,7 @@ export WAKE_SESSION_SECRET="$(python -c 'import secrets; print(secrets.token_url
 export WAKE_CURATOR_TOKEN=local-curator-token
 ```
 
-`backend/.env` is gitignored, so these values can live there instead of in the shell. Exported variables win over the file — `config.py` reads `env_file` after the real environment. CI has no `.env` at all, so run the gate with these exports, not with whatever your file says.
+`backend/.env` is gitignored, so these values can live there instead of in the shell. Exported variables win over the file — `config.py` reads `env_file` after the real environment. CI has no `.env` at all, so the gate is run with exports, not with whatever your file says — and with `WAKE_DATABASE_URL` pointing somewhere else than above: the gate migrates the database CI calls `wake_migrate`, and refuses to touch one named `wake`, because that is the production name.
 
 **3. Schema.**
 
@@ -67,7 +67,7 @@ cp .env.example .env    # defaults: mainnet Lighter + backend on :8000
 npm run dev             # http://localhost:5173
 ```
 
-`VITE_*` variables are compiled into the bundle by Vite — they are read from the root `.env`, not from `backend/.env`, and changing one needs a rebuild. Because the Pages project has no build configuration of its own, that file is what decides where a deployed bundle sends its requests; `npm run build` therefore refuses a `VITE_BACKEND_URL` on localhost and says why. Dev server (`npm run dev`) is unaffected.
+`VITE_*` variables are compiled into the bundle by Vite — they are read from the root `.env`, not from `backend/.env`, and changing one needs a rebuild. Because the Pages project has no build configuration of its own, that file is what decides where a deployed bundle sends its requests; `npm run build` therefore refuses a `VITE_BACKEND_URL` that points at the machine itself — `localhost`, any `127.` address or `::1`, decided by the host name — and says why. The rule lives in one function, `src/lib/loopback.ts`, which the error wording in `src/lib/backend.ts` reads too: two owners of "is this the machine" drift apart quietly, and the cheaper of the two mistakes is a deployed bundle whose "backend" is each visitor's own laptop. Dev server (`npm run dev`) is unaffected.
 
 ## Migrations
 
@@ -189,7 +189,7 @@ Virtualisation is measured as geometry, not as a row count: the rendered pitch
 of a windowed row (50 px in the picker, 40 px in the journal), the scroll range
 the window promises (`scrollHeight ≥ count × pitch`), that mounted rows cover the
 viewport at mid-scroll, and that scrolling to the end paints the fixture's last
-row — named by symbol rather than as «some row». Those four assertions are what
+row — named by symbol rather than as "some row". Those four assertions are what
 caught a collapsed spacer: the picker's bottom spacer was a plain `div` in a
 flex column, `flex-shrink` crushed its 9 200 px to nothing, and all but the
 first screenful of markets could not be reached with the mouse at all.
@@ -253,6 +253,19 @@ Adding a dependency: it goes into `backend/requirements.txt` (which is what the 
 | docker-build | builds the image on every push and every pull request to `main`, then runs `import app` and `alembic heads` inside it with no network |
 
 The runtime smoke step is separate from the tests on purpose: inside pytest the app runs through `ASGITransport`, which never exercises startup hooks, a real connection pool or `/ready` against a real Redis.
+
+The same list, executable: `bash scripts/gate.sh` runs every check step of this table on this machine. It reads the ruff pin, the language versions, the two backend database URLs and the advisory exception list out of `ci.yml` instead of restating them, and prints `НЕТ_ИНСТР` for steps the machine cannot run. The exit code is the honest part — 0: everything runnable here is green; 1: a step failed; 2: the backend environment is not configured, so the backend steps were skipped rather than passed; 3: some steps could not run at all, which is not the same as having checked them. `bash scripts/gate.sh --list` prints the registry without running or installing anything, and `bash scripts/gate.sh --check-env` answers only the configuration half of the first question — are the `WAKE_*` variables set, and do the two URLs name databases this machine is allowed to migrate and truncate — with 0 or 2, before any step starts, installing and creating nothing; whether those databases actually answer belongs to the run, not to this mode.
+
+The backend steps need the databases named the way CI names them, not the way `backend/.env` does:
+
+```bash
+export WAKE_DATABASE_URL=postgresql+asyncpg://wake:wake@localhost:5432/wake_migrate
+export WAKE_TEST_DATABASE_URL=postgresql+asyncpg://wake:wake@localhost:5432/wake_test
+```
+
+`wake_migrate` is what `alembic upgrade head` migrates, `wake_test` is what pytest truncates, and the split is not local taste: `create_all` in the tests would otherwise hide a drift between models and migrations. The gate refuses to run backend steps at all if either URL names a database called `wake` — that is the production name, and a check script must not be able to migrate it — and when it refuses it prints the two lines above, read out of `ci.yml`. The name is resolved the way the driver resolves it, not by taking the tail of the string: `?sslmode=require` (the form Railway, Supabase and Neon hand out), a trailing slash, and a URL with no path at all — asyncpg then opens the database named after the user — all name `wake` and are all refused.
+
+`backend/test_local_gate_parity.py` is what keeps both lists true. Every step in the script carries a `# ci: <job> / <name>` marker naming its workflow step, and the test compares markers with `ci.yml`: a CI step not mirrored locally, a marker whose step was renamed or deleted, a marker with no command behind it, a mirrored command that runs a narrower scope than CI (`pytest one_file.py` where CI runs `pytest .`) and a smoke copy that lost one of CI's assertions all turn it red. This table is checked the same way — its rows must name exactly the jobs in the workflow. So is the advisory exception list: the `--ignore-vuln` ids in `ci.yml` and both SECURITY.md tables have to name one set, so an exclusion CI no longer passes cannot stay documented as a live risk, and a new one cannot appear in a red log without a sentence saying why. The exit-code list is a third such set — the one in this document, the one in the script's own header, and the counters in its summary block have to return exactly those codes, because "not everything was checked" and "everything runnable here is green" differ by one number in the last line of the log; codes 1 and 3 are pinned by comparing the three lists rather than by a run, since reaching them would mean breaking a step or removing a tool from the machine, and either is a property of the box, not of the code. The production-name refusal is not checked by reading the script at all — the test runs `--check-env` against a table of URL forms and requires exit 2 for each, because a rule restated as a regex over its own source only ever catches the spelling its author already chose. It exists because "I ran the full gate" was a list in someone's head, and a head list is always shorter than the workflow: on a pushed merge the local run had `ruff check` and the whole pytest suite, CI had a separate `ruff format --check` step, and `needs: [backend-lint]` took `backend-tests` and `docker-build` with it, so the commit merged untested.
 
 ## Code style
 
@@ -355,7 +368,7 @@ export WAKE_SESSION_SECRET="$(python -c 'import secrets; print(secrets.token_url
 export WAKE_CURATOR_TOKEN=local-curator-token
 ```
 
-`backend/.env` в .gitignore, так что значения можно держать там, а не в shell. Переменные окружения важнее файла — `config.py` читает `env_file` после реального окружения. В CI файла `.env` нет вообще, поэтому и гейт прогоняйте с этими export, а не с тем, что лежит у вас в файле.
+`backend/.env` в .gitignore, так что значения можно держать там, а не в shell. Переменные окружения важнее файла — `config.py` читает `env_file` после реального окружения. В CI файла `.env` нет вообще, поэтому и гейт прогоняют с export, а не с тем, что лежит у вас в файле, — и `WAKE_DATABASE_URL` указывают не туда, где выше: гейт мигрирует базу, которую в CI зовут `wake_migrate`, и отказывается трогать базу с именем `wake`, потому что это имя продакшна.
 
 **3. Схема.**
 
@@ -383,7 +396,7 @@ cp .env.example .env    # дефолты: mainnet Lighter + бэкенд на :8
 npm run dev             # http://localhost:5173
 ```
 
-Переменные `VITE_*` Vite зашивает в бандл: читаются из корневого `.env`, а не из `backend/.env`, и смена одной из них требует пересборки. Поскольку у Pages-проекта своей конфигурации сборки нет, именно этот файл решает, куда развёрнутый бандл шлёт запросы; поэтому `npm run build` отклоняет `VITE_BACKEND_URL` на localhost и объясняет причину. На dev-сервер (`npm run dev`) это не влияет.
+Переменные `VITE_*` Vite зашивает в бандл: читаются из корневого `.env`, а не из `backend/.env`, и смена одной из них требует пересборки. Поскольку у Pages-проекта своей конфигурации сборки нет, именно этот файл решает, куда развёрнутый бандл шлёт запросы; поэтому `npm run build` отклоняет `VITE_BACKEND_URL`, указывающий на саму машину, — `localhost`, любой адрес `127.` и `::1`; решает имя хоста, а не вхождение подстроки, — и объясняет причину. Правило живёт в одной функции, `src/lib/loopback.ts`, и её же читает формулировка ошибки в `src/lib/backend.ts`: два владельца вопроса «это эта машина» расходятся молча, а более дешёвая из двух ошибок — развёрнутый бандл, у которого «бэкенд» есть ноутбук каждого посетителя. На dev-сервер (`npm run dev`) это не влияет.
 
 ## Миграции
 
@@ -573,6 +586,19 @@ CI использует `pip-audit --strict` с точечными исключ�
 | docker-build | собирает образ на каждый push и каждый pull request в `main`, затем внутри него без сети выполняет `import app` и `alembic heads` |
 
 Шаг с smoke намеренно отдельный: в pytest приложение поднимается через `ASGITransport`, поэтому startup-хуки, настоящий пул соединений и `/ready` с живым Redis в тестах не исполняются никогда.
+
+Тот же список, только исполняемый: `bash scripts/gate.sh` прогоняет на этой машине ровно те шаги таблицы, что что-то проверяют. Пин ruff, версии языков, обе строки подключения бэкэнда и список исключений аудита он вычитывает из `ci.yml`, а не пересказывает, и вместо шага, которого машина не может, печатает `НЕТ_ИНСТР`. Код выхода здесь — честная часть: 0 — всё, что на этой машине прогоняется, зелёное; 1 — шаг упал; 2 — окружение бэкэнда не настроено, то есть бэкэнд-шаги не проходили, а не прошли; 3 — часть шагов прогнать было нечем, и это не то же самое, что их проверить. `bash scripts/gate.sh --list` печатает реестр, ничего не запуская и ничего не устанавливая, а `bash scripts/gate.sh --check-env` отвечает только на половину первого вопроса — заданы ли `WAKE_*` и называют ли оба URL базы, которым этой машине разрешено мигрировать и чистить, — кодом 0 или 2, до запуска любого шага, ничего не устанавливая и не создавая; отвечают ли эти базы на самом деле, относится к прогону, а не к этому режиму.
+
+Бэкэнд-шагам нужны базы с теми именами, что у CI, а не теми, что в `backend/.env`:
+
+```bash
+export WAKE_DATABASE_URL=postgresql+asyncpg://wake:wake@localhost:5432/wake_migrate
+export WAKE_TEST_DATABASE_URL=postgresql+asyncpg://wake:wake@localhost:5432/wake_test
+```
+
+`wake_migrate` мигрирует `alembic upgrade head`, `wake_test` чистит TRUNCATE pytest, и разделение — не местный вкус: без него `create_all` из тестов замаскировал бы дрейф между моделями и миграциями. Если хоть один URL указывает на базу с именем `wake`, гейт бэкэнд-шаги не прогоняет вовсе: это имя продакшна, и проверочный скрипт не должен иметь возможности его мигрировать. Отказывая, гейт печатает две строки выше — те же, что прочитаны из `ci.yml`. Имя он берёт из строки так же, как драйвер: `?sslmode=require` (такую форму отдают Railway, Supabase и Neon), хвостовой слэш и URL вообще без пути — asyncpg тогда открывает базу с именем пользователя — называют базу `wake` и тоже отсекаются.
+
+`backend/test_local_gate_parity.py` следит за обоими списками. Каждый шаг скрипта помечен строкой `# ci: <job> / <name>` с дословным именем шага из workflow, и тест сверяет метки с `ci.yml`: шаг CI без локального зеркала, метка на переименованный или удалённый шаг, метка без команды за ней, локальная команда с более узкой областью прогона (`pytest one_file.py` там, где CI запускает `pytest .`) и копия smoke-шага, потерявшая одну из CI-проверок, — всё это краснит его. Эта таблица проверяется тем же способом: её строки обязаны называть ровно те джобы, что есть в workflow. Так же сверяется и список исключений аудита: идентификаторы `--ignore-vuln` из `ci.yml` и обе таблицы SECURITY.md должны называть одно множество, иначе снятое в CI исключение продолжало бы описываться как действующий риск, а новое появилось бы в красном логе без объяснения. Третье такое множество — перечень кодов выхода: строки этого документа, шапка самого скрипта и счётчики в его сводке должны называть ровно те коды, которыми сводка заканчивает прогон, потому что «проверено не всё» и «всё, что умеет эта машина, зелёное» различаются одним числом в последней строке лога; коды 1 и 3 закреплены сравнением трёх списков, а не прогоном, — получить их иначе, чем сломав шаг или убрав с машины инструмент, нельзя, и то и другое описывает машину, а не код. Отказ по имени базы проверяется не чтением скрипта, а прогоном `--check-env` по таблице форм строки подключения: пересказ правила регуляркой над его собственным исходником ловит ровно то написание, которое уже выбрал автор. Файлы появились потому, что «я прогнал полный гейт» было списком в голове, а список в голове всегда короче workflow: на залитом merge локально были `ruff check` и весь pytest-набор, а в CI шаг `ruff format --check` стоит отдельно, и `needs: [backend-lint]` унёс с собой ещё и `backend-tests` с `docker-build` — коммит уехал в main непроверенным.
 
 ## Стиль кода
 

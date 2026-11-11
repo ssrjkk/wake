@@ -2496,8 +2496,8 @@ class TestRateLimitBucket(HttpCase):
         )
         self.assertEqual(self.last[0], f"ip:{peer}")
 
-        # с доверенным прокси берётся правый адрес: его дописал тот, кто видел
-        # соединение, всё левее клиент подставил сам
+        # с доверенным прокси берётся правый недоверенный адрес: его дописал
+        # тот, кто видел соединение, всё левее клиент подставил сам
         original = net.TRUSTED_PROXY_IPS
         net.TRUSTED_PROXY_IPS = {peer}
         try:

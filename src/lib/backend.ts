@@ -6,6 +6,7 @@
 // Наивный res.json() на этом отвечает SyntaxError с куском разметки в тексте, и это
 // сообщение юзер видит в панели вместо внятной причины.
 import { BACKEND_URL } from "./config";
+import { isLoopbackBackend } from "./loopback";
 import { authHeader, clearSession } from "./session";
 import { BACKEND_TIMEOUT_MS, isAbortError, isTimeoutError, timeoutText } from "./net";
 
@@ -56,18 +57,19 @@ function backendMessage(body: string, status: number, path: string): string {
   return body || `Бэкенд Wake ${status}`;
 }
 
+const IS_LOCAL_BACKEND = isLoopbackBackend(BACKEND_URL);
+
 /** Сообщение о сбое транспорта. DOMException "signal timed out" и "Failed to
  *  fetch" человек не читает как объяснение, а адрес localhost в тексте панели
  *  продакшена выглядит непрофессионально — поэтому на машине говорят про
  *  сервер, а вне неё называют адрес. */
 function transportMessage(e: unknown, timeoutMs: number): string {
-  const isLocalhost = BACKEND_URL.includes("localhost") || BACKEND_URL.includes("127.0.0.1");
   if (isTimeoutError(e)) {
-    return isLocalhost
+    return IS_LOCAL_BACKEND
       ? `Бэкенд Wake ${timeoutText(timeoutMs)}. Функция требует подключённый сервер.`
       : `Бэкенд Wake ${timeoutText(timeoutMs)}: ${BACKEND_URL}`;
   }
-  return isLocalhost
+  return IS_LOCAL_BACKEND
     ? "Сервер недоступен. Функция требует подключённый бэкенд Wake."
     : `${BACKEND_URL} не отвечает (${e instanceof Error ? e.message : String(e)}). Wake — отдельный сервис, в сборку сайта он не входит.`;
 }
@@ -103,8 +105,7 @@ export async function backendJson<T>(path: string, init?: RequestInit, timeoutMs
   try {
     return (await res.json()) as T;
   } catch {
-    const isLocalhost = BACKEND_URL.includes("localhost") || BACKEND_URL.includes("127.0.0.1");
-    if (isLocalhost) {
+    if (IS_LOCAL_BACKEND) {
       throw new Error("Бэкенд Wake не настроен. Функция требует подключённый сервер.");
     }
     throw new Error(`по адресу ${BACKEND_URL} бэкенда Wake нет: вместо JSON вернулась страница сайта.`);

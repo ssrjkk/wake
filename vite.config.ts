@@ -5,8 +5,10 @@ import react from "@vitejs/plugin-react";
 // поэтому VITE_* в нём — те, что лежат в локальном .env, а не что-то из дашборда.
 // Сборка с VITE_BACKEND_URL на loopback уезжает на прод молча: сайт открывается,
 // чип бэкенда честно пишет «бэкенд недоступен», и разница с настоящим простоем
-// видна только если посмотреть в бандл. Так что петлю запрещаем на сборке.
-const LOOPBACK = /\/\/(localhost|127\.0\.0\.1|\[::1\])(:|\/|$)/;
+// видна только если посмотреть в бандл. Так что петлю запрещаем на сборке —
+// тем же разбором адреса, которым панель решает, называть ли адрес в тексте
+// ошибки (src/lib/loopback.ts): два пересказа правила разошлись бы тихо.
+import { loopbackBuildProblem } from "./src/lib/loopback";
 
 // Единственный внешний узел, шум про который мы глушим: wagmi тянет viem/tempo,
 // ox/tempo/internal/virtualMasterPool.js импортирует node:worker_threads, и
@@ -40,13 +42,8 @@ function isTempoWorkerNoise(message: string): boolean {
 
 export default defineConfig(({ mode }) => {
   const backend = loadEnv(mode, process.cwd(), "VITE_").VITE_BACKEND_URL;
-  if (mode === "production" && backend && LOOPBACK.test(backend)) {
-    throw new Error(
-      `VITE_BACKEND_URL=${backend}: боевая сборка не может указывать фронтенд на loopback — ` +
-        "каждый посетитель будет стучаться в собственную машину. Убери переменную " +
-        "(дефолт в src/lib/config.ts — развёрнутый бэкенд) или поставь боевой адрес.",
-    );
-  }
+  const problem = loopbackBuildProblem(mode, backend);
+  if (problem) throw new Error(problem);
 
   return {
     plugins: [react()],

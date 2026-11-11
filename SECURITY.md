@@ -286,9 +286,13 @@ market in one tick, and two parallel claims by the same user must pay once.
   locked out by its own limiter — and the outage is visible as `redis: fail` on
   `/ready` rather than hidden.
 - `X-Forwarded-For` is read only when the connection really came from
-  `WAKE_TRUSTED_PROXY_IPS`, and only the rightmost address in the chain
-  (`backend/net.py`). Otherwise a client could choose the IP that rate limits and
-  audit records attribute it to.
+  `WAKE_TRUSTED_PROXY_IPS`, and the address used is the rightmost chain element
+  that is not itself in that list — behind Cloudflare → Railway the plain
+  rightmost element is the previous proxy, and the whole service would live in
+  one bucket (`backend/net.py`). Peers and chain entries are compared as IP
+  addresses, so `::ffff:10.0.0.1`, upper-case and expanded IPv6 spellings match
+  the proxy listed in the environment. Otherwise a client could choose the IP
+  that rate limits and audit records attribute it to.
 - Errors are one JSON shape, `{error: {code, message}}`, so clients branch on
   `code` and nothing leaks a stack trace into a response body.
 - `SENTRY_DSN` is optional; if set, exception data goes to Sentry with the SDK's
@@ -321,16 +325,24 @@ These are bounded exceptions, not fixes: do not expose the signing service (the
 Host gate refuses it by default), add untrusted SDK hosts, or introduce those
 HTTP paths without revisiting the exceptions. Remove the exceptions when the SDK permits an update.
 
-| Advisory | Affected path |
-| --- | --- |
-| CVE-2024-37891 | Proxy authorization header forwarded across origins |
-| CVE-2025-50181 | Pool-level redirect limits ignored |
-| CVE-2025-66418 | Unbounded chained response decompression |
-| CVE-2025-66471 | Streaming response decompression exceeds read limits |
-| CVE-2026-21441 | Redirect response decompression during streaming |
-| CVE-2026-44431 | Sensitive headers forwarded by the low-level proxy API |
-| CVE-2026-97687 | Proxy and target TLS policies mixed |
-| CVE-2026-97689 | Unbounded chunk-size field while streaming |
+Each exclusion is listed twice, once by its CVE id and once by the PYSEC id that
+`pip-audit` prints. This is presentation, not a workaround: aliases are resolved,
+and on 2026-11-11 each half alone satisfied the audit (14 ignored, exit 0), so
+neither identifier is load-bearing on its own. What is checked is that the
+exclusion list and this table name the same set —
+`backend/test_local_gate_parity.py` fails if an advisory is ignored in CI but
+absent here, or documented but no longer excluded.
+
+| Advisory | Also published as | Affected path |
+| --- | --- | --- |
+| CVE-2024-37891 | PYSEC-2026-1995 | Proxy authorization header forwarded across origins |
+| CVE-2025-50181 | PYSEC-2026-1999 | Pool-level redirect limits ignored |
+| CVE-2025-66418 | PYSEC-2026-1998 | Unbounded chained response decompression |
+| CVE-2025-66471 | PYSEC-2026-1994 | Streaming response decompression exceeds read limits |
+| CVE-2026-21441 | PYSEC-2026-1996 | Redirect response decompression during streaming |
+| CVE-2026-44431 | PYSEC-2026-141 | Sensitive headers forwarded by the low-level proxy API |
+| CVE-2026-97687 | PYSEC-2026-4175 | Proxy and target TLS policies mixed |
+| CVE-2026-97689 | PYSEC-2026-4177 | Unbounded chunk-size field while streaming |
 
 The decompression exceptions remain residual risk for dependency code that reads
 responses in full; trusted HTTPS hosts reduce exposure but do not remove it.
@@ -641,8 +653,13 @@ price-рынка в этот момент уже определён оракул
   открыты позиции, и собственный лимитер не должен его запирать. Мёртвый Redis
   виден как `redis: fail` на `/ready`, а не спрятан.
 - `X-Forwarded-For` читается, только если соединение реально пришло из
-  `WAKE_TRUSTED_PROXY_IPS`, и берётся правый элемент цепочки (`backend/net.py`).
-  Иначе клиент выбирал бы сам, какой IP попадает в аудит и в какой bucket.
+  `WAKE_TRUSTED_PROXY_IPS`, и берётся самый правый элемент цепочки, которого нет
+  в этом списке: за Cloudflare → Railway правый по порядку — это адрес
+  предыдущего прокси, и весь сервис жил бы в одном ведре (`backend/net.py`).
+  Адрес соединения и элементы цепочки сравниваются как IP, а не как строки,
+  поэтому `::ffff:10.0.0.1`, верхний регистр и развёрнутая запись IPv6 — тот же
+  прокси, что стоит в окружении. Иначе клиент выбирал бы сам, какой IP попадает
+  в аудит и в какой bucket.
 - Ошибки приходят в одной форме `{error: {code, message}}`, чтобы клиент
   ветвился по `code`, а стектрейсы в тело ответа не пишутся.
 - `SENTRY_DSN` опционален: если задан, данные об исключениях уходят в Sentry с
@@ -676,16 +693,24 @@ urllib3. `npm audit` проверяет фронтенд вместе с dev-з�
 теперь не пропускает гейт по `Host`), недоверенные хосты SDK или добавление этих
 HTTP-путей требуют пересмотра исключений. После снятия ограничения SDK исключения надо удалить.
 
-| Уязвимость | Затронутый путь |
-| --- | --- |
-| CVE-2024-37891 | Передача заголовка авторизации прокси другому хосту |
-| CVE-2025-50181 | Игнорирование запрета редиректов на уровне пула |
-| CVE-2025-66418 | Неограниченная цепочка распаковки ответа |
-| CVE-2025-66471 | Распаковка потокового ответа превышает лимит чтения |
-| CVE-2026-21441 | Распаковка ответа редиректа при потоковом чтении |
-| CVE-2026-44431 | Передача секретных заголовков низкоуровневым API прокси |
-| CVE-2026-97687 | Смешивание TLS-настроек прокси и целевого сервера |
-| CVE-2026-97689 | Неограниченное поле размера чанка при потоковом чтении |
+Каждое исключение названо дважды — по CVE и по PYSEC-имени, которое печатает
+`pip-audit`. Это оформление, а не обход: алиасы разрешаются, и 2026-11-11
+каждый из двух наборов по отдельности удовлетворял аудит (14 ignored, exit 0),
+то есть ни один идентификатор сам по себе не держит гейт. Проверяется другое —
+что список исключений и эта таблица называют одинаковое множество:
+`backend/test_local_gate_parity.py` краснеет, если адвизория исключена в CI, но
+не описана здесь, или описана, но уже не исключается.
+
+| Уязвимость | Также публикуется как | Затронутый путь |
+| --- | --- | --- |
+| CVE-2024-37891 | PYSEC-2026-1995 | Передача заголовка авторизации прокси другому хосту |
+| CVE-2025-50181 | PYSEC-2026-1999 | Игнорирование запрета редиректов на уровне пула |
+| CVE-2025-66418 | PYSEC-2026-1998 | Неограниченная цепочка распаковки ответа |
+| CVE-2025-66471 | PYSEC-2026-1994 | Распаковка потокового ответа превышает лимит чтения |
+| CVE-2026-21441 | PYSEC-2026-1996 | Распаковка ответа редиректа при потоковом чтении |
+| CVE-2026-44431 | PYSEC-2026-141 | Передача секретных заголовков низкоуровневым API прокси |
+| CVE-2026-97687 | PYSEC-2026-4175 | Смешивание TLS-настроек прокси и целевого сервера |
+| CVE-2026-97689 | PYSEC-2026-4177 | Неограниченное поле размера чанка при потоковом чтении |
 
 Распаковка остаётся остаточным риском для кода зависимостей, читающего ответ
 целиком: доверенные HTTPS-хосты уменьшают риск, но не устраняют его.

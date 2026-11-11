@@ -123,6 +123,24 @@ class TestServiceAddresses(unittest.TestCase):
             with self.assertRaises(ValidationError):
                 build(wake_predict_resolver_tick=tick)
 
+    def test_allowed_hosts_are_named_without_ipv6_brackets(self):
+        """Скобки — оформление URL, а не имя хоста: сверка идёт по адресу без них.
+
+        В дефолте скобок нет, значит расхождение видно только на явном значении,
+        и теряет оно не «произвольный хост», а петлю: оператор, который переписал
+        `[::1]` из `ip a`, получил бы 403 там, где разрешён запрос.
+        """
+        self.assertEqual(
+            build().signing_allowed_host_list,
+            ["localhost", "127.0.0.1", "::1", "signing"],
+        )
+        self.assertEqual(
+            build(
+                wake_signing_allowed_hosts="[::1], Signing,LOCALHOST"
+            ).signing_allowed_host_list,
+            ["::1", "signing", "localhost"],
+        )
+
 
 class TestDatabaseUrl(unittest.TestCase):
     def test_hosting_style_url_gets_the_async_driver(self):
