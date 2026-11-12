@@ -171,11 +171,49 @@ const SOURCE: { url: string; any: string | null; https: string | null }[] = [
   { url: "https://good..com", any: null, https: null },
   { url: "https://.good.com", any: null, https: null },
   { url: "https://-good.com", any: null, https: null },
-  // `%2E` — точка, но разбор её здесь не раскодиует: расхождение языков,
-  // поэтому адрес с экранированным символом в хосте отвергается обоими.
+  // `%2E` — точка, и WHATWG раскодирует её в хосте (`good..com`), а urlsplit
+  // оставляет как есть. Имя читают из написания, поэтому обе стороны отвергают
+  // адрес с экранированным символом в хосте — и по одной причине.
   { url: "https://good.%2Ecom/x", any: null, https: null },
   { url: "", any: null, https: null },
   { url: "/api", any: null, https: null },
+  // Числовые написания, которые WHATWG ведёт по IPv4-ветке: ссылка была бы
+  // подписана одним именем, а открылась другим (`0x7f000001` и `017700000001`
+  // открывают 127.0.0.1, `0xA9.254.169.254` — 169.254.169.254, `1` — 0.0.0.1,
+  // `1.2.3` — 1.2.0.3, `1.2.3.004` — 1.2.3.4). Замер — Node 24 и urlsplit.
+  { url: "https://0x7f000001", any: null, https: null },
+  { url: "https://2130706433", any: null, https: null },
+  { url: "https://017700000001", any: null, https: null },
+  { url: "https://0xA9.254.169.254", any: null, https: null },
+  { url: "https://127.1", any: null, https: null },
+  { url: "https://1.2.3.004", any: null, https: null },
+  { url: "https://192.168.000.001", any: null, https: null },
+  { url: "https://1", any: null, https: null },
+  { url: "https://1.2.3", any: null, https: null },
+  { url: "https://1.1.1.0x", any: null, https: null },
+  { url: "https://1.1.1.00", any: null, https: null },
+  // …а эти WHATWG отвергает вовсе, тогда как urlsplit отдаёт строку буквально.
+  { url: "https://999.999.999.999", any: null, https: null },
+  { url: "https://1.2.3.4.5", any: null, https: null },
+  { url: "https://127.0.0.1.", any: null, https: null },
+  { url: "https://example.1", any: null, https: null },
+  // Канонический dotted-quad — единственная числовая форма, где написание и есть
+  // адрес; правило обязано принимать её, иначе оно свелось бы к «никаких чисел».
+  { url: "https://1.1.1.0", any: "1.1.1.0", https: "1.1.1.0" },
+  { url: "https://192.168.1.10/x", any: "192.168.1.10", https: "192.168.1.10" },
+  // Цифра начинает НЕ последнюю метку: IPv4-ветка не срабатывает ни в одном
+  // разборе, и имя остаётся именем.
+  { url: "https://1com.example", any: "1com.example", https: "1com.example" },
+  // Percent-форма в хосте раскодируется WHATWG (`%63` → `c`,
+  // `%31%32%37.0.0.1` → 127.0.0.1) и не раскодируется urlsplit — отвергается
+  // обоими, пока имя читается из написания.
+  { url: "https://good.%63om", any: null, https: null },
+  { url: "https://%31%32%37.0.0.1", any: null, https: null },
+  // Пустой userinfo: у `urlsplit` поле `username` в этой форме — пустая строка,
+  // а не None, и проверка «есть ли userinfo» по нему не срабатывала.
+  { url: "https://@good.com", any: null, https: null },
+  { url: "https://:@good.com", any: null, https: null },
+  { url: "https://good.com:443@evil.com", any: null, https: null },
 ];
 
 describe("sourceHost", () => {
@@ -191,6 +229,21 @@ describe("sourceHost", () => {
     expect(wider).toEqual([]);
   });
 
+  it("names the address that actually opens", () => {
+    // Главное свойство правила: то, что стоит под ссылкой, и то, куда она
+    // ведёт, — одно имя. `new URL` здесь не второй вариант правила, а тот же
+    // движок, который открывает соединение в браузере: если принятая форма
+    // начнёт резолвиться в другой хост (`0x7f000001` → `127.0.0.1`), таблица
+    // это увидит сама, без сверки двух реализаций.
+    const redirected = SOURCE.filter((r) => r.any !== null)
+      .map((r) => {
+        const host = new URL(r.url.trim()).hostname.toLowerCase();
+        return host === r.any ? null : { url: r.url, shown: r.any, opens: host };
+      })
+      .filter((r): r is { url: string; shown: string; opens: string } => r !== null);
+    expect(redirected).toEqual([]);
+  });
+
   it("keeps the table about parsing, not about one case", () => {
     // Зеркало прежнего гейта бота: `text.strip().startswith("https://")` —
     // тримка в нём была, поэтому пробелы вокруг адреса здесь не расхождение, а
@@ -201,11 +254,16 @@ describe("sourceHost", () => {
     const tooStrict = SOURCE.filter((r) => !prefix(r.url) && r.https !== null).map((r) => r.url);
     expect(tooStrict).toEqual(["HTTPS://Wake.Example.COM"]);
     // MEASURED по текущей таблице: столько её форм префикс считал ссылкой.
-    expect(tooKind).toHaveLength(17);
+    expect(tooKind).toHaveLength(37);
     expect(tooKind).toContain("https://t.me@evil.com/invite");
     expect(tooKind).toContain("https://good.com:443x");
     expect(tooKind).toContain("https://");
     expect(tooKind).toContain("https://good.com x");
+    // Класс, которого в прежней таблице не было: префикс принимает их как https,
+    // а открывается по ним не то, что написано.
+    expect(tooKind).toContain("https://0x7f000001");
+    expect(tooKind).toContain("https://@good.com");
+    expect(tooKind).toContain("https://good.%63om");
   });
 
   it("refuses a bidirectional mark inside the host", () => {

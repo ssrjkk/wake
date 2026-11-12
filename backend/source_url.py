@@ -22,7 +22,14 @@
     ошибке в написании два разбора показывают два разных адреса. Правило
     требует каноническое `scheme://`, и с этого места расхождений не остаётся;
   * `HTTPS://good.com` — валидный https, который префикс отвергает: доказательство
-    резолюции молча перестаёт показываться из-за регистра.
+    резолюции молча перестаёт показываться из-за регистра;
+  * `https://0xA9.254.169.254` — WHATWG читает хост по IPv4-ветке и ведёт на
+    169.254.169.254, а urlsplit отдаёт написанную строку. Пока хост брали у
+    парсера, две стороны отвечали по-разному на `https://1`, `https://127.1`,
+    `https://1.2.3.004` и на percent-форме `https://good.%63om` (WHATWG
+    раскодирует её в `good.com`, urlsplit — нет). Теперь имя читают из
+    написания, и из числовых форм остаётся только канонический dotted-quad:
+    подпись ссылки обязана называть тот адрес, который по ней откроется.
 """
 
 import re
@@ -35,8 +42,32 @@ from urllib.parse import urlsplit
 _UNSAFE = re.compile(r"""[\s<>"'`\\]|[^\x20-\x7e]""")
 # Хост после разбора: только буквы, цифры, дефис и точки. Punycode (`xn--…`)
 # под этот шаблон попадает, IPv6-литерал («::1») и любая строка с точкой с
-# запятой или пробелом — нет.
+# запятой или пробелом — нет. Сюда же попадают «@» (userinfo) и «%» — имя,
+# которое парсер дочитывает до другого адреса, подписью не бывает.
 _HOST = re.compile(r"^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$")
+_IPV4_LABEL = re.compile(r"[0-9]{1,3}")
+_STARTS_WITH_DIGIT = re.compile(r"[0-9]")
+
+
+def _canonical_ipv4(host: str) -> bool:
+    """Четыре метки по 1–3 цифры, каждая ≤255 и без ведущих нулей.
+
+    Ровно те написания, которые оба разбора читают одинаково: всё остальное,
+    где последняя метка начинается с цифры, WHATWG сворачивает в IPv4
+    (`https://017700000001` → 127.0.0.1) или отвергает (`https://1.2.3.4.5`),
+    тогда как urlsplit отдаёт строку как есть.
+    """
+    labels = host.split(".")
+    if len(labels) != 4:
+        return False
+    for label in labels:
+        if not _IPV4_LABEL.fullmatch(label):
+            return False
+        if len(label) > 1 and label[0] == "0":
+            return False
+        if int(label) > 255:
+            return False
+    return True
 
 
 def source_host(url: object, https_only: bool = False) -> str:
@@ -66,14 +97,26 @@ def source_host(url: object, https_only: bool = False) -> str:
     wanted = ("https",) if https_only else ("http", "https")
     if scheme not in wanted:
         return ""
-    # userinfo меняет смысл адреса: до «@» — логин, а не домен.
-    if parts.username is not None or parts.password is not None:
+    # «@» меняет смысл адреса: до него — логин, а не домен. Проверка
+    # текстовая, а не через `parts.username`: у `urlsplit` поле `username` для
+    # пустого userinfo (`https://@good.com`) — пустая строка, а не None, и
+    # проверка `is not None` всё равно бы сработала, но явное «нет @ в authority»
+    # читается проще и симметрично TS-стороне.
+    if "@" in parts.netloc:
         return ""
     if port == 0:
         return ""
-    host = (parts.hostname or "").lower()
+    # Имя берётся из написания, а не из `parts.hostname`: WHATWG нормализует
+    # хост, urlsplit — нет, и сверять надо то, что читатель видит под ссылкой.
+    host = parts.netloc.partition(":")[0].lower()
     # Пустая этикетка («good..com») — не имя: адрес с ней не резолвится, и
     # принять её означало бы пообещать «хост назван», не пообещав ничего.
     if ".." in host:
         return ""
-    return host if _HOST.match(host) else ""
+    if not _HOST.match(host):
+        return ""
+    # Числовая последняя метка — это заявка на IPv4, а не имя: её оставляем
+    # только в канонической записи, где написание и есть адрес.
+    if _STARTS_WITH_DIGIT.match(host.rpartition(".")[2]):
+        return host if _canonical_ipv4(host) else ""
+    return host
