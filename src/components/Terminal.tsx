@@ -5,12 +5,15 @@ import {
   getCandles,
   getRecentTrades,
   getFundingRates,
+  getOrderBookDepth,
+  depthSpread,
   getApiHost,
   getSignerHealth,
   placeOrderViaSigningService,
   SignerNetworkMismatch,
   type LighterNetwork,
   type OrderBook,
+  type OrderBookDepth,
   type Candle,
   type SignerHealth,
   type Trade,
@@ -46,6 +49,17 @@ const TICKER_TTL_MS = 60_000;
    это же число: вписанное рядом вторым экземпляром оно расходится с запросом
    молча — запрос правят, подпись остаётся. */
 const CANDLE_COUNT = 48;
+
+/* Сколько уровней цены показывает стакан с каждой стороны. Шесть строк на
+   сторону помещаются между графиком и лентой сделок без прокрутки, а более
+   глубокая книга всё равно не читается одним взглядом: за лучшей ценой следят
+   по спреду, а не по двадцатому уровню. */
+const DEPTH_LEVELS = 6;
+
+/* Виток опроса книги. Чаще свечей (20 с) и реже ленты сделок (4 с): заявки
+   переставляются быстрее, чем закрывается час, но каждый виток стоит 45 КБ
+   ответа — см. DEPTH_ORDERS в src/lib/lighter.ts. */
+const DEPTH_POLL_MS = 5000;
 
 /* Ось цен. Ширина подписи = знаков × ширина цифры, поэтому box оси
    считается из измеренного размера подписи, а не зашит в 72 px: на базовой
@@ -124,6 +138,10 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
   const [orderSending, setOrderSending] = useState(false);
   const [lastCandlesUpdate, setLastCandlesUpdate] = useState<Date | null>(null);
   const [lastTradesUpdate, setLastTradesUpdate] = useState<Date | null>(null);
+  const [depth, setDepth] = useState<OrderBookDepth>({ asks: [], bids: [] });
+  const [depthPending, setDepthPending] = useState(true);
+  const [depthError, setDepthError] = useState<string | null>(null);
+  const [lastDepthUpdate, setLastDepthUpdate] = useState<Date | null>(null);
   const [tickers, setTickers] = useState<Record<number, Ticker | null>>({});
   const [nonce, setNonce] = useState(0);
   /* Тик: куда и сколько раз изменилась цена. Нужен состоянием, а не выводом из
@@ -140,6 +158,7 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
   const marketId = currentMarket?.market_id;
   const candlesLoading = marketId != null && candlesPending;
   const tradesLoading = marketId != null && tradesPending;
+  const depthLoading = marketId != null && depthPending;
   const isSpot = currentMarket?.market_type === "spot";
 
   const filteredMarkets = useMemo(() => {
@@ -216,6 +235,33 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
     load();
     const stopTrades = setIntervalWhenVisible(load, 4000);
     return () => { live = false; stopTrades(); };
+  }, [marketId]);
+
+  useEffect(() => {
+    if (marketId == null) return;
+    const id = marketId;
+    let live = true;
+    function load() {
+      getOrderBookDepth(id, DEPTH_LEVELS)
+        .then((data) => {
+          if (!live) return;
+          setDepth(data);
+          setDepthError(null);
+          setLastDepthUpdate(new Date());
+        })
+        // Сбой витка не затирает прочитанное: заявки остаются под своим
+        // временем, а не исчезают на пять секунд.
+        .catch((e) => { if (live) setDepthError(errorText(e)); })
+        .finally(() => { if (live) setDepthPending(false); });
+    }
+    /* Сбрасывать книгу при смене рынка здесь нечего: Terminal перемонтируется
+       вместе с рынком (key `${network}:${asset}:${market_id}` в src/App.tsx), и
+       состояние начинается с пустого листа само. Чужие заявки под новым
+       заголовком — это другая цена, а не «ещё грузится», так что за отсутствие
+       сброса отвечает именно key, а не этот эффект. */
+    load();
+    const stopDepth = setIntervalWhenVisible(load, DEPTH_POLL_MS);
+    return () => { live = false; stopDepth(); };
   }, [marketId]);
 
   useEffect(() => {
@@ -484,6 +530,19 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
      Причина тогда общая — dataError, а не ошибка несуществующего запроса. */
   const chartError = candles.length ? null : candlesError ?? (currentMarket ? null : dataError);
 
+  const spread = depthSpread(depth);
+  const bookEmpty = depth.asks.length === 0 && depth.bids.length === 0;
+  /* Полоса глубины мерится от общего края обеих сторон, а не от своей: иначе
+     толстая продажа и тонкая покупка рисовали бы одинаковую длину, и сравнить
+     стороны между собой было бы нельзя. Край — последний уровень, он же самый
+     глубокий из прочитанных. */
+  const bookScale = Math.max(
+    depth.asks[depth.asks.length - 1]?.total ?? 0,
+    depth.bids[depth.bids.length - 1]?.total ?? 0
+  );
+  const barWidth = (total: number) =>
+    `${bookScale > 0 ? ((total / bookScale) * 100).toFixed(1) : "0.0"}%`;
+
   return (
     <div className="terminal-layout">
       <div className="terminal-main">
@@ -611,6 +670,77 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
             </ResponsiveContainer>
             </div>
           )}
+        </div>
+
+        {/* ── Стакан ───────────────────────────────────────────────────── */}
+        <div>
+          <div className="panel-caption" style={{ background: "var(--bg-1)" }}>
+            <span className="label">Стакан · {DEPTH_LEVELS} уровней</span>
+            <span className="num muted">обновлено {stamp(lastDepthUpdate)}</span>
+          </div>
+
+          <div className="table-scroll" style={{ background: "var(--bg-1)" }}>
+            {depthError && bookEmpty ? (
+              <p className="book-note" style={{ color: "var(--down)" }}>{depthError}</p>
+            ) : bookEmpty ? (
+              <p className="book-note">
+                {depthLoading ? "загрузка…" : chartError ? "Заявок нет: Lighter не ответил." : "Заявок в книге нет."}
+              </p>
+            ) : (
+              <table className="data-table book-table">
+                <thead>
+                  <tr>
+                    <th>Цена</th>
+                    <th className="right">Размер</th>
+                    <th className="right">Всего</th>
+                  </tr>
+                </thead>
+                {/* Продажа стоит сверху и перевёрнута: лучшая цена лежит у
+                    спреда, худшая — у края панели, как в книге биржи. */}
+                <tbody>
+                  {depth.asks.length === 0 ? (
+                    <tr className="book-side-empty"><td colSpan={3}>Продавцов нет</td></tr>
+                  ) : (
+                    [...depth.asks].reverse().map((l) => (
+                      <tr key={`ask-${l.price}`} className="book-row ask">
+                        <td className="num book-price">
+                          <i className="book-bar" style={{ "--w": barWidth(l.total) } as CSSProperties} aria-hidden="true" />
+                          <span style={{ color: "var(--down-hi)" }}>{fmt(l.price, decimals)}</span>
+                        </td>
+                        <td className="num right"><span style={{ color: "var(--fg-2)" }}>{fmt(l.size, 4)}</span></td>
+                        <td className="num right"><span style={{ color: "var(--fg-3)" }}>{fmt(l.total, 4)}</span></td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+                <tbody>
+                  <tr className="book-spread">
+                    <td colSpan={3}>
+                      {spread
+                        ? `Спред ${fmt(spread.gap, decimals)} · ${spread.bps.toFixed(2)} bps`
+                        : "Спред не посчитать: одной стороны нет"}
+                    </td>
+                  </tr>
+                </tbody>
+                <tbody>
+                  {depth.bids.length === 0 ? (
+                    <tr className="book-side-empty"><td colSpan={3}>Покупателей нет</td></tr>
+                  ) : (
+                    depth.bids.map((l) => (
+                      <tr key={`bid-${l.price}`} className="book-row bid">
+                        <td className="num book-price">
+                          <i className="book-bar" style={{ "--w": barWidth(l.total) } as CSSProperties} aria-hidden="true" />
+                          <span style={{ color: "var(--up)" }}>{fmt(l.price, decimals)}</span>
+                        </td>
+                        <td className="num right"><span style={{ color: "var(--fg-2)" }}>{fmt(l.size, 4)}</span></td>
+                        <td className="num right"><span style={{ color: "var(--fg-3)" }}>{fmt(l.total, 4)}</span></td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            )}
+          </div>
         </div>
 
         {/* ── Лента сделок ─────────────────────────────────────────────── */}

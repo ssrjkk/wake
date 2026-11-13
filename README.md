@@ -15,11 +15,11 @@ Live backend: https://wake-backend-production-3483.up.railway.app — its curren
 
 ## Screens
 
-Captured from this build with live data (2026-11-03 for the Overview panel, 2026-10-25 for the rest), not mockups. Panels that need the Wake backend show its degraded state on purpose: the backend is a separate service, and until PostgreSQL and Redis are attached it answers `/health` while `/ready` reports the failing check — or it does not answer at all when the deployment is stopped. A screenshot with invented numbers would be worse than an honest empty state.
+Captured from this build with live data (2026-11-13 for the Terminal, 2026-11-03 for the Overview panel, 2026-10-25 for the rest), not mockups. Panels that need the Wake backend show its degraded state on purpose: the backend is a separate service, and until PostgreSQL and Redis are attached it answers `/health` while `/ready` reports the failing check — or it does not answer at all when the deployment is stopped. A screenshot with invented numbers would be worse than an honest empty state.
 
 | | |
 | --- | --- |
-| ![Terminal](docs/screenshots/terminal-1440.png) | **Терминал** — the desk: quote in a display mono, hourly tick tape, candles, trade tape, order ticket, and a market list with a liquidity rank along each row. Public Lighter REST, no backend. |
+| ![Terminal](docs/screenshots/terminal-1440.png) | **Терминал** — the desk: quote in a display mono, hourly tick tape, candles, an order-book depth ladder with the spread, trade tape, order ticket, and a market list with a liquidity rank along each row. Public Lighter REST, no backend. |
 | ![Overview](docs/screenshots/overview-1440.png) | **Обзор** — ranking by real 24h quote volume, Arcus markets, open Predict markets. The ranking itself is a backend call. The shot is framed on the Robinhood Chain table: class, mid, and the venue's own hourly funding with its annualised figure. |
 | ![Funding](docs/screenshots/funding-1440.png) | **Funding** — live rates from four venues (Lighter, Binance, Bybit, Hyperliquid) ranked by annualised yield, with the carry candidates where both legs exist on one exchange. The rate and perp counts move with the market, so the panel prints them itself rather than this sentence naming a number. |
 | ![Portfolio](docs/screenshots/portfolio-1440.png) | **Портфель** — subscriptions from the `follows` table and the Lighter account by L1 address; both empty states say what is missing and where to act. |
@@ -28,7 +28,7 @@ Captured from this build with live data (2026-11-03 for the Overview panel, 2026
 | ![Predict](docs/screenshots/predict-1440.png) | **Predict** — LMSR price and event markets, quoting and claims; the shot shows the list gate (backend) and the sign-in gate (positions and payouts). |
 | ![Agent](docs/screenshots/agent-1440.png) | **Агент** — per-market decision with per-market win-rate memory, gated on trial or Pro; the empty state names the endpoint, the curator header and the table the rows live in. |
 | ![Risk](docs/screenshots/risk-1440.png) | **Risk** — basket exposure and hedge sizing on Lighter's single margin, correlations from hourly candles. |
-| ![Terminal at 390](docs/screenshots/terminal-390.png) | **Terminal at 390 px** — the same desk stacked, with its sections moved into a bottom bar under the thumb; when the tabs don't fit, the bar scrolls sideways with an edge fade, and the document itself never scrolls horizontally. |
+| ![Terminal at 390](docs/screenshots/terminal-390.png) | **Terminal at 390 px** — the same desk stacked, with its sections moved into a bottom bar under the thumb; when the tabs don't fit, the bar scrolls sideways with an edge fade, and the document itself never scrolls horizontally. The shot is scrolled down to the depth ladder and the trade tape. |
 | ![Telegram bot](docs/screenshots/bot-cards.png) | **@waketrade_bot** — the HTML cards `backend/telegram_bot.py` sends, rendered in a browser: the `/start` welcome with the live liquidity ranking as buttons, ranking with ticker buttons and pagination, price card with the hourly sparkline, funding ranking, `/spread` across venues. |
 
 ## What each panel does
@@ -36,7 +36,7 @@ Captured from this build with live data (2026-11-03 for the Overview panel, 2026
 | Panel | Where the data comes from | Works without the Wake backend |
 | --- | --- | --- |
 | Обзор (Overview) | Market ranking by real 24h quote volume (`/markets/overview` — one row per market in `MAJOR_PERPS`, cached under that route's TTL) plus open Predict markets | no |
-| Терминал (Terminal) | Candles and recent trades from Lighter's public REST; the hourly tick tape under the quote is drawn from the same candles the chart uses | reads yes; sending an order needs the signing service, and the order is refused if that service runs on a different network than the one the book was read from |
+| Терминал (Terminal) | Candles, recent trades and the order-book depth ladder from Lighter's public REST (`/orderBookOrders`, individual orders aggregated into price levels); the hourly tick tape under the quote is drawn from the same candles the chart uses | reads yes; sending an order needs the signing service, and the order is refused if that service runs on a different network than the one the book was read from |
 | Discover | Leaders ranked by follower count and AUM, follow / pause / unfollow | no |
 | Портфель (Portfolio) | Your positions on Lighter looked up by L1 address (public REST); subscriptions and the copy-engine log from the backend | positions yes, copy state no |
 | Earn | Copy subscription state and trial activation | no |

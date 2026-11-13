@@ -190,6 +190,125 @@ test.describe("Оболочка приложения", () => {
     expect(errors).toEqual([]);
   });
 
+  test("Терминал собирает стакан из заявок, а не из готовых уровней", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.route("**/api/v1/orderBooks?*", (route) => route.fulfill({ json: { order_books: [{
+      symbol: "BTC", market_id: 1, market_type: "perp", status: "active", taker_fee: "0", maker_fee: "0",
+      min_base_amount: "0.00001", min_quote_amount: "10", supported_price_decimals: 1,
+      supported_size_decimals: 5, open_interest: "370.84",
+    }] } }));
+    await page.route("**/api/v1/candles?*", (route) => route.fulfill({ json: { c: [] } }));
+    await page.route("**/api/v1/recentTrades?*", (route) => route.fulfill({ json: { trades: [] } }));
+    await page.route("**/api/v1/funding-rates", (route) => route.fulfill({ json: { funding_rates: [] } }));
+    // Две заявки на одной цене — ровно тот случай, ради которого уровни
+    // собираются суммированием: готовых уровней площадка не отдаёт вовсе.
+    await page.route("**/api/v1/orderBookOrders?*", (route) => route.fulfill({ json: {
+      code: 200,
+      total_asks: 3,
+      asks: [
+        { price: "100", remaining_base_amount: "0.5" },
+        { price: "100", remaining_base_amount: "0.25" },
+        { price: "101", remaining_base_amount: "1" },
+      ],
+      total_bids: 1,
+      bids: [{ price: "99", remaining_base_amount: "2" }],
+    } }));
+    await page.goto("/");
+    await nav(page).getByRole("tab", { name: "Терминал" }).click();
+
+    const asks = page.locator(".book-row.ask");
+    const bids = page.locator(".book-row.bid");
+    await expect(asks).toHaveCount(2);
+    await expect(bids).toHaveCount(1);
+    // Продажа перевёрнута: худшая цена сверху, лучшая — у спреда.
+    await expect(asks.nth(0)).toContainText("101.0");
+    await expect(asks.nth(1)).toContainText("100.0");
+    await expect(asks.nth(1)).toContainText("0.7500");
+    await expect(bids.nth(0)).toContainText("99.0");
+    await expect(page.locator(".book-spread td")).toHaveText("Спред 1.0 · 100.50 bps");
+
+    // Полоса глубины мерится от общего края обеих сторон: край здесь — покупка
+    // с размером 2, поэтому худшая продажа (1.75) рисует 87.5% строки.
+    const ratio = await page.evaluate(() => {
+      const row = document.querySelectorAll(".book-row.ask")[0] as HTMLElement;
+      const bar = row.querySelector(".book-bar") as HTMLElement;
+      return bar.getBoundingClientRect().width / row.getBoundingClientRect().width;
+    });
+    expect(ratio).toBeCloseTo(0.875, 2);
+  });
+
+  test("смена рынка не оставляет чужих заявок в стакане", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const market = (symbol: string, id: number) => ({
+      symbol, market_id: id, market_type: "perp", status: "active", taker_fee: "0", maker_fee: "0",
+      min_base_amount: "0.00001", min_quote_amount: "10", supported_price_decimals: 1,
+      supported_size_decimals: 5, open_interest: "370.84",
+    });
+    const book = (price: number) => ({
+      code: 200,
+      total_asks: 1,
+      asks: [{ price: String(price), remaining_base_amount: "0.5" }],
+      total_bids: 1,
+      bids: [{ price: String(price - 1), remaining_base_amount: "0.5" }],
+    });
+    await page.route("**/api/v1/orderBooks?*", (route) =>
+      route.fulfill({ json: { order_books: [market("BTC", 1), market("ETH", 2)] } })
+    );
+    await page.route("**/api/v1/candles?*", (route) => route.fulfill({ json: { c: [] } }));
+    await page.route("**/api/v1/recentTrades?*", (route) => route.fulfill({ json: { trades: [] } }));
+    await page.route("**/api/v1/funding-rates", (route) => route.fulfill({ json: { funding_rates: [] } }));
+    /* Ответ ETH висит: это тот самый промежуток, в котором старый стакан может
+       остаться под новым заголовком. Его не остаётся, потому что Терминал
+       перемонтируется вместе с рынком (key `${network}:${asset}:${market_id}`). */
+    let releaseEth: (() => void) | undefined;
+    const ethHeld = new Promise<void>((resolve) => { releaseEth = resolve; });
+    await page.route("**/api/v1/orderBookOrders?*", async (route) => {
+      const id = new URL(route.request().url()).searchParams.get("market_id");
+      if (id === "2") await ethHeld;
+      await route.fulfill({ json: book(id === "2" ? 200 : 100) });
+    });
+    await page.goto("/");
+    await nav(page).getByRole("tab", { name: "Терминал" }).click();
+    const table = page.locator(".book-table");
+    await expect(table).toContainText("100.0");
+
+    const ethRequest = page.waitForRequest((r) =>
+      r.url().includes("orderBookOrders") && new URL(r.url()).searchParams.get("market_id") === "2"
+    );
+    await page.getByRole("button", { name: /^ETH/ }).click();
+    await ethRequest;
+    /* Ни одной заявки на экране: под заголовком ETH не осталось строк BTC, а
+       вместо таблицы — «загрузка…». Если бы при смене рынка прежний стакан
+       доживал до ответа нового, падение было бы здесь. */
+    await expect(page.locator(".book-row")).toHaveCount(0);
+    await expect(page.locator(".book-note")).toHaveText("загрузка…");
+
+    releaseEth?.();
+    await expect(page.locator(".book-row.ask")).toContainText("200.0");
+  });
+
+  test("Терминал честно показывает пустую книгу и отказ площадки", async ({ page }) => {
+    await page.route("**/api/v1/orderBooks?*", (route) => route.fulfill({ json: { order_books: [{
+      symbol: "BTC", market_id: 1, market_type: "perp", status: "active", taker_fee: "0", maker_fee: "0",
+      min_base_amount: "0.00001", min_quote_amount: "10", supported_price_decimals: 1,
+      supported_size_decimals: 5, open_interest: "370.84",
+    }] } }));
+    await page.route("**/api/v1/candles?*", (route) => route.fulfill({ json: { c: [] } }));
+    await page.route("**/api/v1/recentTrades?*", (route) => route.fulfill({ json: { trades: [] } }));
+    await page.route("**/api/v1/funding-rates", (route) => route.fulfill({ json: { funding_rates: [] } }));
+    await page.route("**/api/v1/orderBookOrders?*", (route) => route.fulfill({ json: {
+      code: 200, total_asks: 0, asks: [], total_bids: 0, bids: [],
+    } }));
+    await page.goto("/");
+    await nav(page).getByRole("tab", { name: "Терминал" }).click();
+    await expect(page.locator(".book-note")).toHaveText("Заявок в книге нет.");
+
+    await page.route("**/api/v1/orderBookOrders?*", (route) => route.fulfill({ status: 403, json: { code: 20001 } }));
+    await page.reload();
+    await nav(page).getByRole("tab", { name: "Терминал" }).click();
+    await expect(page.locator(".book-note")).toContainText("Lighter API 403");
+  });
+
   test("переключатель публикации пишет в базу и выключает зеркалирование", async ({ page }) => {
     // Публикация лидера — единственная кнопка в Терминале, у которой есть
     // денежное последствие для чужих счетов: mirror_engine читает подписки по

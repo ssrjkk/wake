@@ -18,6 +18,11 @@
 // СТРОКАМИ — lighter отдаёт fees/OI/min_base_amount строками, и Number()-коэрция
 // на фронте это часть контракта), поэтому фикстура проверяет тот же код, что и
 // прода, а не упрощённую версию.
+//
+// Книга меряется отдельно и позже остальных: она живая, и число разных цен в
+// ней — снимок момента, а не свойство рынка.
+//   curl https://mainnet.zklighter.elliot.ai/api/v1/orderBookOrders?market_id=1&limit=100
+//        → 100 заявок на сторону, 73 разные цены продажи и 75 цен покупки, 45 159 байт (2026-11-13)
 import type { Page, Route } from "@playwright/test";
 import { isLoopbackHost } from "../src/lib/loopback";
 import { urlHost, urlOrigin } from "../src/lib/url";
@@ -37,6 +42,12 @@ export const MEASURED = {
   candles: 48,
   /** Terminal.tsx: getRecentTrades(marketId, N) — лента сделок. */
   trades: 20,
+  /** GET /api/v1/orderBookOrders — заявок на сторону; потолок limit у площадки 250. */
+  depthOrders: 100,
+  /** Из них разных цен продажи: строка ответа — ордер, а не уровень цены. */
+  depthAskPrices: 73,
+  /** То же для покупки. */
+  depthBidPrices: 75,
   /** backend/api/copy_trading.py: limit=Query(50, ge=1, le=200) — потолок журнала. */
   mirrorLogCeiling: 200,
   /** App.tsx: PICKER_LIMIT — потолок списка в окне выбора рынка. */
@@ -168,6 +179,29 @@ function tradeRows(n: number) {
     is_maker_ask: i % 2 === 0,
     timestamp: Math.floor(Date.now() / 1000) - i * 12,
   }));
+}
+
+/** Заявки книги для стакана: все восемь полей живого ответа /orderBookOrders
+ *  (замер mainnet 2026-11-13), числа СТРОКАМИ, как в проде. Строка — отдельный
+ *  ордер, поэтому заявки раскладываются по ценам с повторами: проверка задевает
+ *  ту же агрегацию уровней, что и живой ответ, а не готовые уровни. */
+function bookOrders(n: number, distinct: number, side: "ask" | "bid") {
+  const base = stress ? 1_234_567.891011 : 80_000;
+  return Array.from({ length: n }, (_, i) => {
+    const level = i < distinct ? i : i % distinct;
+    const price = side === "ask" ? base + 2.4 * (level + 1) : base - 2.4 * (level + 1);
+    const size = stress ? 98_765.4321 + i : 0.05 + (i % 17) / 100;
+    return {
+      order_index: 562_953_820_615_987 + i,
+      order_id: String(562_953_820_615_987 + i),
+      owner_account_index: 270_812 + i,
+      initial_base_amount: String(size),
+      remaining_base_amount: String(size),
+      price: stress ? String(price) : price.toFixed(1),
+      order_expiry: 1_796_999_148_978,
+      transaction_time: 0,
+    };
+  });
 }
 
 function arcusMarketRow(i: number) {
@@ -465,6 +499,13 @@ export async function installFixtures(page: Page, options: FixtureOptions = {}):
   await page.route(`${LIGHTER}/recentTrades**`, async (route) => {
     count("lighter/recentTrades");
     await route.fulfill({ json: { trades: tradeRows(MEASURED.trades) } });
+  });
+  await page.route(`${LIGHTER}/orderBookOrders**`, async (route) => {
+    count("lighter/orderBookOrders");
+    const limit = Number(new URL(route.request().url()).searchParams.get("limit") ?? MEASURED.depthOrders);
+    const asks = bookOrders(limit, MEASURED.depthAskPrices, "ask");
+    const bids = bookOrders(limit, MEASURED.depthBidPrices, "bid");
+    await route.fulfill({ json: { code: 200, total_asks: asks.length, asks, total_bids: bids.length, bids } });
   });
   await page.route(`${LIGHTER}/account**`, async (route) => {
     count("lighter/account");

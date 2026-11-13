@@ -172,6 +172,81 @@ export async function getRecentTrades(marketId: number, limit = 20): Promise<Tra
   }));
 }
 
+// GET /api/v1/orderBookOrders — живые заявки книги, замер mainnet 2026-11-13.
+// Ответ {code, total_asks, asks, total_bids, bids}: total_* равно числу
+// возвращённых строк, а строка — ОТДЕЛЬНЫЙ ОРДЕР, не уровень цены. На одной
+// цене стоят несколько заявок: у BTC при limit=100 из 100 заявок продажи вышло
+// 73 разные цены, из 100 заявок покупки — 75. Книга живая, поэтому это снимок,
+// а не константа: уровни собираются суммированием remaining_base_amount, и
+// сколько их выйдет, зависит от того, сколько заявок стоит на каждой цене.
+// Цена и размер приходят СТРОКАМИ ("69254.9", "0.04399") — как в /recentTrades.
+// limit принят в [1, 250]: и 0, и 251 отвечают 400 {"code":20001}. Незнакомый
+// market_id — это 200 с пустыми массивами: пустая книга существует, а не ошибка.
+//
+// Сколько заявок читать. 100 — это 45 КБ на ответ; потолок 250 стоил бы 112 КБ
+// на каждый виток опроса. Шесть заявок не дали бы шести уровней: на лучшей
+// цене могут стоять все шесть, и лестница выродилась бы в одну строку.
+const DEPTH_ORDERS = 100;
+
+type RawBookOrder = {
+  price: string | number;
+  remaining_base_amount: string | number;
+};
+
+export type DepthLevel = {
+  price: number;
+  /** Сумма remaining_base_amount всех заявок этой цены, в базовом активе. */
+  size: number;
+  /** Накопленный размер от лучшей цены к краю книги — по нему рисуется полоса. */
+  total: number;
+};
+
+export type OrderBookDepth = { asks: DepthLevel[]; bids: DepthLevel[] };
+
+/** Заявки одной стороны → уровни цены, лучшие первыми.
+ *
+ *  Мусор и неположительные числа не доходят до лестницы: NaN в сортировке ведёт
+ *  себя как «больше всех» и переставляет уровни, а нулевая заявка рисует строку
+ *  без объёма. Ключ — число, а не строка: "69417.8" и "69417.80" — одна цена. */
+export function depthLevels(orders: RawBookOrder[], side: "ask" | "bid", levels: number): DepthLevel[] {
+  const byPrice = new Map<number, number>();
+  for (const order of orders) {
+    const price = Number(order.price);
+    const size = Number(order.remaining_base_amount);
+    if (!Number.isFinite(price) || price <= 0 || !Number.isFinite(size) || size <= 0) continue;
+    byPrice.set(price, (byPrice.get(price) ?? 0) + size);
+  }
+  const sorted = [...byPrice.entries()].sort((a, b) => (side === "ask" ? a[0] - b[0] : b[0] - a[0]));
+  let total = 0;
+  return sorted.slice(0, levels).map(([price, size]) => {
+    total += size;
+    return { price, size, total };
+  });
+}
+
+export async function getOrderBookDepth(marketId: number, levels: number): Promise<OrderBookDepth> {
+  const params = new URLSearchParams({ market_id: String(marketId), limit: String(DEPTH_ORDERS) });
+  const res = await timedFetch(`${BASE_URL()}/orderBookOrders?${params}`);
+  if (!res.ok) throw new Error(`Lighter API ${res.status}`);
+  const data = await json<{ asks?: RawBookOrder[]; bids?: RawBookOrder[] }>(res);
+  return {
+    asks: depthLevels(data.asks ?? [], "ask", levels),
+    bids: depthLevels(data.bids ?? [], "bid", levels),
+  };
+}
+
+export type DepthSpread = { ask: number; bid: number; gap: number; bps: number };
+
+/** Спред по лучшим ценам книги. null, пока одной из сторон нет: спред от нуля
+ *  был бы числом, которого рынок не показывал. */
+export function depthSpread(depth: OrderBookDepth): DepthSpread | null {
+  const ask = depth.asks[0]?.price;
+  const bid = depth.bids[0]?.price;
+  if (ask == null || bid == null) return null;
+  const mid = (ask + bid) / 2;
+  return { ask, bid, gap: ask - bid, bps: ((ask - bid) / mid) * 10_000 };
+}
+
 // GET /api/v1/funding-rates returns one row per (market, venue): the Lighter funding rate
 // alongside binance / bybit / hyperliquid for the same market_id. Verified live on
 // mainnet 2026-10-02 (737 rows, 211 of them exchange="lighter", keyed by the same

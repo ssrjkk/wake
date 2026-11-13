@@ -253,7 +253,9 @@
   .terminal-main {
     display: grid;
     grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: auto minmax(0, 1fr) auto;
+    /* Четыре строки: шапка рынка, график, стакан, лента сделок. Стакан и лента
+       обе auto — их высота из содержимого, а график забирает остаток. */
+    grid-template-rows: auto minmax(0, 1fr) auto auto;
     gap: 1px;
     background: var(--line);
     overflow: hidden;
@@ -750,6 +752,57 @@
   }
 
   .venue-row:hover { background: var(--bg-2); }
+
+  /* ── Стакан ─────────────────────────────────────────────────────────────
+     Полоса глубины красит строку, а не отдельную колонку: сторону книги читают
+     по длине полосы, и колонка с числами для этого слишком узка. Полоса лежит
+     в первой ячейке, но мерится от строки — position:relative у .book-row
+     делает его containing block, ячейка остаётся static. Порядок покраски тот
+     же, что у .row-vol: полоса первая в DOM, числа после неё, оба positioned,
+     поэтому числа рисуются поверх без единого z-index. */
+  .book-table td { border-bottom: none; padding: 3px 12px; }
+  /* Строка книги — не действие: подсветка наведения обещала бы клик, которого
+     нет, а на тринадцать строк это ещё и тринадцать ложных приглашений. */
+  .book-table tbody tr:hover { background: none; }
+
+  .book-row { position: relative; }
+
+  .book-bar {
+    position: absolute;
+    left: 0;
+    top: 0;
+    bottom: 0;
+    width: var(--w, 0%);
+    pointer-events: none;
+    transition: width 0.24s cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+
+  .book-row.ask .book-bar { background: var(--down-faint); }
+  .book-row.bid .book-bar { background: var(--up-faint); }
+  .book-row td > span { position: relative; }
+
+  .book-spread td {
+    padding: 6px 12px;
+    font-size: var(--fs-data);
+    color: var(--fg-2);
+    background: var(--bg-2);
+    text-align: center;
+    overflow-wrap: anywhere;
+  }
+
+  .book-side-empty td {
+    padding: 7px 12px;
+    font-size: var(--fs-data);
+    color: var(--fg-3);
+  }
+
+  .book-note {
+    padding: 16px 14px;
+    margin: 0;
+    font-size: var(--fs-data);
+    color: var(--fg-3);
+    overflow-wrap: anywhere;
+  }
 
   /* Буква в аватаре — самый мелкий текст интерфейса, и он тоже обязан быть на
      шкале: 10px классом Tailwind не переживает удвоение темы. */

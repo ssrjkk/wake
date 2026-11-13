@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { BACKEND_URL, SIGNING_SERVICE_URL } from './config'
 import { jsonBody } from '../test/request'
-import { setNetwork, getNetwork, getOrderBooks, getCandles, getRecentTrades, getAccountByL1Address, getMarketOverview, listOwnFollows, createFollow, setFollowPaused, deleteFollow, getMirrorLog, registerLeader, getMyLeader, setLeaderActive, openInterestUsd, toBaseUnits, toPriceTicks, randomClientOrderIndex, placeOrderViaSigningService, getSignerHealth, SignerNetworkMismatch, type OrderBook, type SignerHealth } from './lighter'
+import { setNetwork, getNetwork, getOrderBooks, getCandles, getRecentTrades, getAccountByL1Address, getMarketOverview, listOwnFollows, createFollow, setFollowPaused, deleteFollow, getMirrorLog, registerLeader, getMyLeader, setLeaderActive, openInterestUsd, toBaseUnits, toPriceTicks, randomClientOrderIndex, placeOrderViaSigningService, getSignerHealth, SignerNetworkMismatch, depthLevels, getOrderBookDepth, depthSpread, type OrderBook, type SignerHealth } from './lighter'
 
 describe('открытый интерес в долларах', () => {
   // Живой /orderBooks (mainnet, 2026-10-24) отдаёт open_interest_usd СТРОКОЙ
@@ -207,6 +207,109 @@ describe('lighter', () => {
       const url = calledUrlWithTimeout(global.fetch as ReturnType<typeof vi.fn>)
       expect(url).toContain('market_id=1')
       expect(url).toContain('limit=10')
+    })
+  })
+
+  describe('стакан', () => {
+    it('складывает заявки одной цены в уровень и копит размер от лучшей цены', () => {
+      const levels = depthLevels(
+        [
+          { price: '100', remaining_base_amount: '0.5' },
+          { price: '100', remaining_base_amount: '0.25' },
+          { price: '99', remaining_base_amount: '1' },
+        ],
+        'ask',
+        6
+      )
+      expect(levels).toEqual([
+        { price: 99, size: 1, total: 1 },
+        { price: 100, size: 0.75, total: 1.75 },
+      ])
+    })
+
+    it('продажу сортирует от дешёвой, покупку от дорогой, и режет по числу уровней', () => {
+      const orders = [
+        { price: '99', remaining_base_amount: '1' },
+        { price: '101', remaining_base_amount: '1' },
+        { price: '100', remaining_base_amount: '1' },
+      ]
+      expect(depthLevels(orders, 'ask', 2).map((l) => l.price)).toEqual([99, 100])
+      expect(depthLevels(orders, 'bid', 2).map((l) => l.price)).toEqual([101, 100])
+    })
+
+    it('мусор и неположительный размер не доходят до лестницы', () => {
+      // NaN в сортировке ведёт себя как «больше всех»: без фильтра он переставил
+      // бы уровни, а нулевая заявка нарисовала бы строку без объёма.
+      const levels = depthLevels(
+        [
+          { price: 'abc', remaining_base_amount: '1' },
+          { price: '100', remaining_base_amount: '0' },
+          { price: '100', remaining_base_amount: '-1' },
+          { price: '100', remaining_base_amount: '2' },
+        ],
+        'ask',
+        6
+      )
+      expect(levels).toEqual([{ price: 100, size: 2, total: 2 }])
+    })
+
+    it('цена — число, поэтому «69417.8» и «69417.80» сливаются в один уровень', () => {
+      const levels = depthLevels(
+        [
+          { price: '69417.8', remaining_base_amount: '1' },
+          { price: '69417.80', remaining_base_amount: '2' },
+        ],
+        'bid',
+        6
+      )
+      expect(levels).toEqual([{ price: 69417.8, size: 3, total: 3 }])
+    })
+
+    it('читает книгу с limit=100 и собирает уровни из строк-ордеров', async () => {
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            code: 200,
+            total_asks: 2,
+            asks: [
+              { price: '100', remaining_base_amount: '1' },
+              { price: '100', remaining_base_amount: '2' },
+            ],
+            total_bids: 1,
+            bids: [{ price: '99', remaining_base_amount: '4' }],
+          }),
+      })
+      const depth = await getOrderBookDepth(7, 6)
+      expect(depth.asks).toEqual([{ price: 100, size: 3, total: 3 }])
+      expect(depth.bids).toEqual([{ price: 99, size: 4, total: 4 }])
+      const url = calledUrlWithTimeout(global.fetch as ReturnType<typeof vi.fn>)
+      expect(url).toContain('/orderBookOrders')
+      expect(url).toContain('market_id=7')
+      expect(url).toContain('limit=100')
+    })
+
+    it('пустой ответ площадки — пустая книга, а не ошибка', async () => {
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ code: 200, total_asks: 0, asks: [], total_bids: 0, bids: [] }),
+      })
+      expect(await getOrderBookDepth(7, 6)).toEqual({ asks: [], bids: [] })
+    })
+
+    it('отказ площадки поднимает ошибку, а не рисует пустую книгу', async () => {
+      global.fetch = vi.fn().mockResolvedValue({ ok: false, status: 403 })
+      await expect(getOrderBookDepth(7, 6)).rejects.toThrow('Lighter API 403')
+    })
+
+    it('спред считается от лучших цен, а без одной стороны его нет', () => {
+      const spread = depthSpread({
+        asks: [{ price: 100, size: 1, total: 1 }],
+        bids: [{ price: 99, size: 1, total: 1 }],
+      })
+      expect(spread?.gap).toBe(1)
+      expect(spread?.bps).toBeCloseTo(100.5025, 3)
+      expect(depthSpread({ asks: [], bids: [{ price: 99, size: 1, total: 1 }] })).toBeNull()
     })
   })
 
