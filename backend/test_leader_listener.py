@@ -567,7 +567,9 @@ class TestLiveExecution(ListenerDbCase):
             min_base_amount=0.001, size_decimals=3, price_decimals=2
         )
 
-    async def live(self, event, *, store, result=None, raises=None, mark=MARK, mark_error=None):
+    async def live(
+        self, event, *, store, result=None, raises=None, mark=MARK, mark_error=None
+    ):
         """Событие при выключенном dry_run: подставные `lighter`, хранилище
         ключей и mark-цена вместо сети, всё остальное — настоящий код.
 
@@ -579,8 +581,11 @@ class TestLiveExecution(ListenerDbCase):
         цены выводилось из `MARK`, и подмена `MARK` на цену события оставляла
         всю группу зелёной, хотя ровно эта пара «рынок против события» и есть
         проверяемый дефект. Хелпер не даёт fixture тихо стать неразличимой."""
-        if mark is not None and mark_error is None and abs(mark - event["price"]) <= (
-            event["price"] * MAX_SLIPPAGE_BPS / 10_000
+        if (
+            mark is not None
+            and mark_error is None
+            and abs(mark - event["price"])
+            <= (event["price"] * MAX_SLIPPAGE_BPS / 10_000)
         ):
             raise AssertionError(
                 f"mark={mark} и цена события {event['price']} различаются не "
@@ -748,7 +753,9 @@ class TestLiveExecution(ListenerDbCase):
             "причина в журнале, а не молчание: подписчик видит, что его не зеркалили",
         )
         self.assertEqual(rows[0]["base_amount"], 0)
-        self.assertEqual(clients, [], "без рыночной цены до Lighter не доходит ни один ордер")
+        self.assertEqual(
+            clients, [], "без рыночной цены до Lighter не доходит ни один ордер"
+        )
         self.assertEqual(
             await self.mirrored(self.follow_ids[follower_id]),
             0.0,
@@ -915,7 +922,9 @@ class TestOrderLimitPrice(unittest.IsolatedAsyncioTestCase):
             )
             mark, reason = await leader_listener._event_mark_price(8)
             self.assertIsNone(mark, f"mark={bad!r}")
-            self.assertIn(repr(bad), reason, f"mark={bad!r}: в причине должен быть сам номер")
+            self.assertIn(
+                repr(bad), reason, f"mark={bad!r}: в причине должен быть сам номер"
+            )
 
 
 class TestStreamMessage(ListenerDbCase):

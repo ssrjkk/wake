@@ -357,9 +357,7 @@ class TestTradePriceBound(PredictCase):
                 str(uuid.uuid4()), "user-alice", "m-event", "yes", shares, 1.0
             )
         )
-        self.assertGreater(
-            filled, quoted, "чужая покупка обязала сделать нашу дороже"
-        )
+        self.assertGreater(filled, quoted, "чужая покупка обязала сделать нашу дороже")
         self.assertGreater(
             filled / shares,
             quoted / shares,
@@ -413,7 +411,9 @@ class TestTradePriceBound(PredictCase):
         self.trade("user-alice", "m-event", "yes", 40)
         shares = -20.0
         limit = self.quote("m-event", "yes", shares) / shares  # цена продажи за долю
-        self.trade("user-other", "m-event", "no", 400)  # yes дешевеет — продавать стало невыгодно
+        self.trade(
+            "user-other", "m-event", "no", 400
+        )  # yes дешевеет — продавать стало невыгодно
 
         with self.assertRaises(ValueError) as ctx:
             _run(
