@@ -18,6 +18,7 @@ python3 -m unittest test_key_store -v
 хелпер.
 """
 
+import io
 import os
 import stat
 import unittest
@@ -208,6 +209,24 @@ class TestOperatorCli(KeyStoreCase):
             1,
             "второе удаление — «такого нет», а не тихий успех",
         )
+
+    def test_list_prints_ids_and_nothing_else(self):
+        """Вывод `list` закрепляет то, что о нём обещают SECURITY.md и README.
+
+        Пропасть между «печатает id и индексы» и тем, что печатает код, глаз не
+        ловит: перечитать предложение дешевле, чем запустить CLI. Поэтому
+        утверждение о выводе живёт здесь, а не в доке: строки равны id
+        подписчиков, порядка вставки, без ключа и без api_key_index.
+        """
+        for follower_id, index in (("f1", 3), ("f2", 7)):
+            with patch(
+                "encrypted_key_store._read_secret",
+                return_value=f"0xsecret-{follower_id}",
+            ):
+                encrypted_key_store._cli(["store", follower_id, str(index)])
+        with patch("sys.stdout", new_callable=io.StringIO) as out:
+            self.assertEqual(encrypted_key_store._cli(["list"]), 0)
+        self.assertEqual(out.getvalue().splitlines(), ["f1", "f2"])
 
     def test_negative_api_key_index_is_refused(self):
         with self.assertRaises(SystemExit):

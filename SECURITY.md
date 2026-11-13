@@ -217,8 +217,8 @@ secret from stdin (terminal echo off on a tty, one line when piped) and
 `remove`/`list` work on the same file. A route that accepted an API key would put
 a follower's signing secret in request bodies — in proxied logs, in any
 `curl -v` transcript, and in front of every middleware that records payloads.
-`list` prints ids and indexes only and never a key, so the operator can compare
-the store against the `followers` table without opening it.
+`list` prints follower ids only, one per line — neither keys nor indexes, so the
+operator sees who has a key without opening the store.
 
 ### Data layer
 
@@ -591,8 +591,9 @@ IAM-контура и не отдают сырой ключ процессу; э
 из stdin (без эха в терминале, одной строкой при пайпе), `remove` и `list` работают
 с тем же файлом. Роут, принимающий API-ключ, положил бы секрет подписчика в тела
 запросов — в логи прокси, в распечатку `curl -v` и под каждый middleware, который
-пишет полезную нагрузку. `list` печатает только id и индексы, без ключей: оператор
-может сверить хранилище с таблицей `followers`, не открывая его.
+пишет полезную нагрузку. `list` печатает только id подписчиков, по строке на
+каждого — без ключей и без индексов: оператор сверяет, у кого ключ есть, не
+открывая хранилище.
 
 ### Данные
 

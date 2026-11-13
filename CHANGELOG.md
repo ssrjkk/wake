@@ -12,6 +12,17 @@ measured number goes stale while the text around it still looks fine.
 ## [Unreleased]
 
 ### Added
+- `backend/test_hygiene.py` · `test_readme_halves_stand_on_the_same_lines` —
+  форма двух половин README сверяется якорями разметки: заголовки, границы
+  блоков кода и пункты списков обязаны стоять на одних и тех же строках
+  английской и русской половины. Абзацы прозы переводятся длиннее или короче
+  оригинала, поэтому счёт строк у половин разный и сверять его нельзя;
+  разошедшиеся номера якорей значат другое — половины перестали быть одним
+  документом, и абзац, заведённый в одной из них, для читателя другой просто
+  отсутствует. Каждый вид якорей обязан быть непустым, иначе проверка
+  проходит на документе, где из трёх видов разметки ничего не осталось.
+  Мутация — добавленный в русскую половину пункт списка — красит и списки, и
+  заголовки: сдвиг одной строки уводит за собой все последующие якоря.
 - `backend/test_theme_registry.py` (13 checks) — реестр токенов темы сверяется
   с тем, кто их на самом деле читает. Живая причина: в `src/index.css` лежало
   шестнадцать объявлений, которых не вызывал ни один файл, а
@@ -488,8 +499,8 @@ measured number goes stale while the text around it still looks fine.
 - `python -m encrypted_key_store store <follower_id> <api_key_index>`, with
   `list` and `remove`. The secret is read from stdin — no echo on a terminal, one
   line when piped — and never appears in argv, where shell history and the process
-  list would both keep it. `list` prints ids and key indexes and no secret, which
-  is enough to compare the file against the `followers` table.
+  list would both keep it. `list` prints follower ids only — one per line, no
+  secret and no key index — which is enough to see who has a key.
 - `POST /follows` refuses a session whose wallet sign-in never produced a Lighter
   account index (403 `LIGHTER_ACCOUNT_NOT_LINKED`), and `src/App.tsx` refuses the
   same click earlier with the same words. A subscription that cannot be resolved
@@ -1223,6 +1234,14 @@ measured number goes stale while the text around it still looks fine.
   импортов ни в `src/`, ни в `e2e/` не осталось.
 
 ### Fixed
+- `list` операторского CLI печатал id подписчиков, а три места в доках
+  (`SECURITY.md` по-английски и по-русски, обе половины README) обещали «id и
+  индексы». Этот класс не ловил никто: перечитать предложение дешевле, чем
+  запустить CLI, а `test_key_store.TestOperatorCli` проверял у `list` только код
+  выхода. Проза описывает вывод как есть — по строке на id, ни ключа, ни
+  `api_key_index`, — а само утверждение живёт кодом:
+  `test_list_prints_ids_and_nothing_else` перехватывает stdout и требует ровно
+  списка id. Мутация «печатать ещё и индекс» красит её сама: `f1 3` вместо `f1`.
 - Меню кошелька раскрывалось без связи: у триггера был `aria-expanded`, но не
   было `aria-controls`, а панель была безымянным `<div>`. Раскрыв его, человек с
   диктором получал «развёрнуто» и ничего про то, куда идти дальше. Теперь у

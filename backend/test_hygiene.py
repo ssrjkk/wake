@@ -97,6 +97,21 @@ def sources():
         yield path
 
 
+# Форма README — то, что стоит на строке и потому переживает перевод. Абзацы
+# прозы в двух половинах разной длины, сверять их слово в слово нельзя; а вот
+# разметка обязана встать на те же номера, иначе половины разошлись содержанием,
+# а не языком.
+README_ANCHORS = (
+    ("заголовки", lambda line: line.startswith("#")),
+    ("границы блоков кода", lambda line: line.lstrip().startswith("```")),
+    ("пункты списков", lambda line: line.startswith("- ")),
+)
+
+
+def _anchor_lines(lines, is_anchor):
+    return [number for number, line in enumerate(lines) if is_anchor(line)]
+
+
 def _lines_with(path, pattern):
     """Номера строк, где встречается pattern; файлы не нашей кодировки пропускаются."""
     try:
@@ -198,10 +213,39 @@ class TestSourceHygiene(unittest.TestCase):
             )
 
     def test_readme_pair_exists(self):
-        """Документация двуязычная по договору: английская основная, русская
-        вторичной. README.ru.md без README.md — сломанный договор."""
+        """Документация двуязычная по договору: английская основная, русская —
+        вторичная. README.ru.md без README.md — сломанный договор."""
         self.assertTrue((ROOT / "README.md").is_file())
         self.assertTrue((ROOT / "README.ru.md").is_file())
+
+    def test_readme_halves_stand_on_the_same_lines(self):
+        """Половины README обязаны быть одним документом, а не двумя.
+
+        Русская половина — вторичная: абзац, заведенный только в английской, для
+        читателя README.ru.md просто отсутствует, и наоборот. Сверять половины
+        слово в слово нельзя — перевод длиннее или короче оригинала, и счёт
+        строк потому и расходится. Сверяется форма документа: заголовки,
+        границы блоков кода и пункты списков обязаны стоять на одних и тех же
+        строках. Разошлись номера — разошлись деревья, то есть половина больше
+        не перевод, а другой текст с той же вывеской.
+
+        Каждый вид якорей обязан быть непустым: проверка, у которой список
+        якорей пуст, проходит на документе, где из трёх видов разметки не
+        осталось ни одного.
+        """
+        halves = {
+            name: (ROOT / name).read_text(encoding="utf-8").splitlines()
+            for name in ("README.md", "README.ru.md")
+        }
+        for name, is_anchor in README_ANCHORS:
+            en = _anchor_lines(halves["README.md"], is_anchor)
+            ru = _anchor_lines(halves["README.ru.md"], is_anchor)
+            self.assertTrue(en, f"«{name}»: якорей нет — проверка ничего не мерит")
+            self.assertEqual(
+                en,
+                ru,
+                f"«{name}»: половины README стоят на разных строках",
+            )
 
 
 if __name__ == "__main__":
