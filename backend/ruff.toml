@@ -10,7 +10,7 @@ target-version = "py312"
 # Стабильное ядро: pycodestyle (E4/E7/E9) + pyflakes (F). Не включаем
 # preview/эзотерические наборы — они ломают CI при каждом апгрейде ruff и
 # размывают сигнал.
-select = ["E4", "E7", "E9", "F"]
+select = ["E4", "E7", "E9", "F", "RUF100"]
 
 [lint.per-file-ignores]
 # Модульные тесты и bootstrap-скрипты сознательно поднимают env/redis перед

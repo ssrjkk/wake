@@ -18,7 +18,10 @@
     говорит заголовок самого файла);
   * `command:`, ведущая на файл, которого нет в образе;
   * версии инфраструктуры в двух местах: CI поднимает один образ Redis, compose
-    — другой, и зелёный прогон ничего не говорит про сервер у человека;
+    — другой, и зелёный прогон ничего не говорит про сервер у человека. К
+    интерпретатору это относится в первую очередь: прод-образ и Python, на
+    котором CI гоняет тесты, обязаны быть одной версией, иначе зелёный прогон
+    ничего не знает о том, что реально запускается;
   * сузленный запуск тестов в CI (`pytest test_one.py` вместо `pytest .`) — job
     зелёный, половина дерева не проверена.
 
@@ -694,7 +697,7 @@ class TestEnvironmentIsRead(Manifest):
                 kwargs = dict(self.defaults)
                 kwargs[field] = literal
                 Settings(_env_file=None, **kwargs)
-            except Exception as error:  # noqa: BLE001 — форма отказа не важна
+            except Exception as error:  # форма отказа не важна, важен сам факт
                 problems.append(
                     f"{name}={literal!r} из {origins[name]}: "
                     f"{type(error).__name__}: {error}"
@@ -884,7 +887,18 @@ class TestVersionsMatch(Manifest):
             "compose поднимает dev-сервер на другом мажоре Node, чем CI собирает бандл",
         )
 
-    def test_dockerfile_interpreter_is_the_one_the_docs_promise(self):
+    def test_dockerfile_interpreter_is_the_one_ci_tests_on(self):
+        """Прод-образ обязан крутиться на том же Python, на котором CI гоняет
+        тесты.
+
+        Прежняя проверка требовала меньшего: она сверяла, что обе версии
+        названы в таблице окружения CONTRIBUTING, — то есть легитимировала
+        расхождение, а не запрещала его. Класс от этого не исчез: dependabot
+        поднял базу образа на минор, на котором не выполнялся ни один тест
+        (b0f70da — 3.12-slim → 3.14-slim), и CI остался зелёным, потому что
+        `docker-build` собирает образ и делает в нём только `import app` плюс
+        `alembic heads`. Расхождение в интерпретаторе не производит ошибку в
+        коде — оно производит прод, о котором зелёный прогон ничего не знает."""
         tags = sorted(
             set(
                 re.findall(
@@ -897,10 +911,15 @@ class TestVersionsMatch(Manifest):
         self.assertEqual(len(tags), 1, f"стадии Dockerfile разошлись по Python: {tags}")
         ci_python = re.findall(r'PYTHON_VERSION:\s*"?([0-9.]+)"?', self.ci_text)
         self.assertEqual(len(ci_python), 1, "версия Python в CI объявлена не один раз")
+        self.assertEqual(
+            tags[0],
+            ci_python[0],
+            f"прод идёт на Python {tags[0]}, а тесты — на {ci_python[0]}: "
+            "зелёный CI про этот образ ничего не утверждает",
+        )
         manual = (ROOT / "CONTRIBUTING.md").read_text(encoding="utf-8")
-        # Расхождение «CI тестирует на одной версии, образ крутится на другой»
-        # сознательное, и ровно поэтому оно обязано быть названо в таблице
-        # окружения: один номер вместо двух читается как «среда та же, что в проде».
+        # Номер остаётся названным и в таблице: человек ставит интерпретатор
+        # руками, и он должен совпадать с тем, что собирается в прод.
         self.assertIn(
             f"python:{tags[0]}-slim", manual, "в таблице окружения нет runtime-тега"
         )

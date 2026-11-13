@@ -24,7 +24,9 @@ import { WagmiProvider } from "wagmi";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import { config } from "./wagmi";
-import { BACKEND_URL } from "./lib/config";
+import { BACKEND_URL, LIGHTER_NETWORK } from "./lib/config";
+import { setNetwork as setLighterNetwork } from "./lib/lighter";
+import { setNetwork as setArcusNetwork } from "./lib/arcus";
 import { TABS } from "./lib/tabs";
 
 // Один рынок вместо пустого списка: «нет данных» и «данные есть, но панелей не
@@ -42,6 +44,33 @@ const MARKET = {
   supported_size_decimals: 5,
   open_interest: "370.84",
 };
+
+/* Один и тот же market_id в двух сетях — не одна и та же монета. Замер живого
+   /orderBooks?filter=all (2026-11-13): mainnet — 246 книг, testnet — 9, и у них
+   пять общих номеров, 4095…4099, под разными тикерами. Здесь взят 4096: в
+   mainnet это OURA, в testnet — BTC. */
+const COLLISION_ID = 4096;
+/* Снят с торгов: у HANMI (#148, mainnet) книга пустая — orderBookOrders отдаёт
+   `total_asks: 0, total_bids: 0`, — а свечи продолжают печатать последнюю цену.
+   Поэтому статус площадки читается, а не выводится из наличия цены. */
+const DELISTED = { ...MARKET, market_id: 148, symbol: "HANMI", status: "inactive" };
+const MARKETS_BY_NETWORK: Record<"mainnet" | "testnet", unknown[]> = {
+  mainnet: [MARKET, { ...MARKET, market_id: COLLISION_ID, symbol: "OURA" }, DELISTED],
+  testnet: [{ ...MARKET, market_id: COLLISION_ID, symbol: "BTC" }],
+};
+/* Цена последней часовой свечи той же парой «сеть:market_id». Сеть берётся из
+   хоста запроса, потому что именно хостом код различает площадки: BASE_URL() в
+   lib/lighter.ts собирает адрес из текущей сети, и подмена по нему — это ответ
+   биржи, а не догадка теста. 293001 — измеренное значение последней свечи HANMI. */
+const CLOSE_BY_NETWORK: Record<string, number> = {
+  "mainnet:4096": 12.34,
+  "testnet:4096": 69000.12,
+  "mainnet:148": 293001,
+};
+
+function networkOf(url: string): "mainnet" | "testnet" {
+  return url.includes("testnet") ? "testnet" : "mainnet";
+}
 
 type Mode = "ready" | "backend-down";
 
@@ -64,8 +93,19 @@ function respond(url: string): Response {
     if (mode === "backend-down") throw new TypeError("fetch failed");
     return json({ status: "ready", checks: { postgres: "ok", redis: "ok" } });
   }
-  if (url.includes("/api/v1/orderBooks")) return json({ order_books: [MARKET] });
-  if (url.includes("/api/v1/candles")) return json({ c: [] });
+  if (url.includes("/api/v1/orderBooks")) return json({ order_books: MARKETS_BY_NETWORK[networkOf(url)] });
+  if (url.includes("/api/v1/candles")) {
+    const close = CLOSE_BY_NETWORK[`${networkOf(url)}:${new URL(url).searchParams.get("market_id")}`];
+    // Рынка без записи в таблице в ответе нет вовсе: пустой ряд — это «свечей
+    // нет», а не «свечи по нулям», и цена в списке осталась бы прочерком.
+    if (close === undefined) return json({ c: [] });
+    return json({
+      c: [
+        { t: 1, o: close, h: close, l: close, c: close, v: 1, V: close },
+        { t: 2, o: close, h: close, l: close, c: close, v: 1, V: close },
+      ],
+    });
+  }
   if (url.includes("/api/v1/recentTrades")) return json({ trades: [] });
   if (url.includes("/api/v1/funding-rates")) return json({ funding_rates: [] });
   if (url.includes("/api/v1/markets/overview")) return json({ markets: [] });
@@ -142,6 +182,13 @@ beforeAll(async () => {
 beforeEach(() => {
   mode = "ready";
   calls = [];
+  /* Сети библиотек — глобальное состояние модуля, и переключатель в шапке его
+     меняет по-настоящему. Без возврата к написанному в конфиге умолчанию каждый
+     тест после сетевого молча ходил бы в testnet: ассерты продолжали бы зелёным
+     гореть над чужими ответами. Адрес окна — то же самое про ссылку ?asset=. */
+  setLighterNetwork(LIGHTER_NETWORK);
+  setArcusNetwork(LIGHTER_NETWORK);
+  window.history.replaceState(null, "", "/");
   vi.stubGlobal(
     "fetch",
     vi.fn((input: RequestInfo | URL) => {
@@ -172,6 +219,19 @@ beforeEach(() => {
       disconnect() {}
     },
   );
+  /* Модальные <dialog> в jsdom не реализованы: showModal отсутствует, и любое
+     окно (а рынок выбирается именно в окне) падало бы на монтировании — до
+     первого ассерта. Заменяются только два метода открытия/закрытия, и делают
+     они ровно то, что требует спецификация: двигают `open`, от которого зависит
+     видимость. Всё остальное внутри окна — настоящий код компонента; поведение
+     самого диалога (Esc, возврат фокуса) отдаётся браузером и здесь не
+     проверялось бы. */
+  HTMLDialogElement.prototype.showModal = function showModal(this: HTMLDialogElement) {
+    this.open = true;
+  };
+  HTMLDialogElement.prototype.close = function close(this: HTMLDialogElement) {
+    this.open = false;
+  };
 });
 
 afterEach(() => {
@@ -275,5 +335,85 @@ describe("оболочка", () => {
     const shell = container.querySelector(".app-shell");
     expect(shell).not.toBeNull();
     expect(within(shell as HTMLElement).getByRole("tabpanel")).toBe(panel);
+  });
+});
+
+/** Строка списка рынков по тикеру. Спрос внутри `.markets-list` и живой узел на
+ *  каждой попытке: тикер выбранного рынка продублирован в шапке терминала, а
+ *  React при смене сети пересоздаёт строку по новому market_id — захваченный
+ *  раньше узел остался бы отсоединённым числом из прошлой сети. */
+function marketRow(container: Element, symbol: string): Element | undefined {
+  return Array.from(container.querySelectorAll(".markets-list .desk-row")).find((node) =>
+    node.textContent?.includes(symbol),
+  );
+}
+
+// Кэш цен списка живёт вне компонента и переживает remount, который делает
+// переключатель сети. Это единственная проверка, где после смены сети читается
+// ОТРИСОВАННОЕ число, а не сам факт запроса: прежний e2e ждал запрос к Arcus и
+// ничего не сверял, поэтому расхождение цен двух площадок под одним market_id
+// (см. COLLISION_ID выше) не ловилось нигде.
+describe("переключение сети", () => {
+  it("не отдаёт цену mainnet в строке testnet под тем же market_id", async () => {
+    const { container } = mount();
+    await expectSelected(TABS[0].label);
+    fireEvent.click(tab("Терминал"));
+    await expectSelected("Терминал");
+
+    // mainnet: market_id 4096 — это OURA, последняя свеча 12.34.
+    await waitFor(() =>
+      expect(marketRow(container, "OURA")?.textContent).toContain("12.34"),
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "testnet" }));
+
+    // testnet: тот же 4096 — уже BTC, и свеча там другая.
+    await waitFor(() =>
+      expect(marketRow(container, "BTC")?.textContent).toContain("69,000.12"),
+    );
+    expect(marketRow(container, "BTC")?.textContent).not.toContain("12.34");
+    expect(marketRow(container, "OURA")).toBeUndefined();
+  });
+});
+
+/* Рынок, снятый с торгов, из книги не исчезает: у 26 из 246 книг mainnet
+   (замер /orderBooks?filter=all, 2026-11-13) стоит status inactive. Свечи у них
+   продолжают отдавать цену, а заявок нет, поэтому список без фильтра предлагает
+   тикет по инструменту, на котором ничего не исполнится. */
+describe("снятый с торгов рынок", () => {
+  it("не едет ни в рельсе терминала, ни в окне выбора рынка", async () => {
+    const { container } = mount();
+    await expectSelected(TABS[0].label);
+    fireEvent.click(tab("Терминал"));
+    await expectSelected("Терминал");
+
+    // Активный сосед отрисован с ценой: «HANMI нет» значит «выкинут», а не
+    // «список ещё не заполнился».
+    await waitFor(() =>
+      expect(marketRow(container, "OURA")?.textContent).toContain("12.34"),
+    );
+    expect(marketRow(container, "HANMI")).toBeUndefined();
+
+    fireEvent.click(screen.getByRole("button", { name: "Выбрать рынок" }));
+    const search = await screen.findByLabelText("Поиск рынка");
+    fireEvent.change(search, { target: { value: "HANMI" } });
+    expect(await screen.findByText("Ничего не найдено")).toBeVisible();
+  });
+
+  it("по ссылке ?asset= не открывает кнопку ордера", async () => {
+    window.history.replaceState(null, "", "/?tab=terminal&asset=HANMI");
+    const { container } = mount();
+    await expectSelected("Терминал");
+
+    // Сначала доказательство, что книга пришла: до неё кнопка выключена по
+    // любой ссылке, и проверка прошла бы зелёным на пустом экране.
+    await waitFor(() => expect(marketRow(container, "OURA")).toBeDefined());
+
+    const ticketName = /Открыть (long|short)|Рынок не загружен|Цена недоступна/;
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: ticketName })).toBeDisabled(),
+    );
+    expect(screen.getByRole("button", { name: "Рынок не загружен" })).toBeVisible();
+    expect(container.querySelector(".markets-list")?.textContent).not.toContain("HANMI");
   });
 });

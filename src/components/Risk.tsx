@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { X, Loader2 } from "lucide-react";
-import { getCandles, openInterestUsd, type OrderBook } from "../lib/lighter";
+import { getCandles, isTradeable, openInterestUsd, type OrderBook } from "../lib/lighter";
 import { alignHourlyReturns } from "../lib/series";
 import { backendJson, errorText } from "../lib/backend";
 import { usd } from "./utils";
@@ -107,7 +107,7 @@ export default function Risk({ markets, setToast }: RiskProps) {
       // предложение было бы недостижимым. Interest считается из строки книги один
       // раз, а не по два раза на каждое сравнение.
       const pool = markets
-        .filter((m) => m.status === "active")
+        .filter(isTradeable)
         .map((m) => ({ market: m, interest: openInterestUsd(m) }))
         .filter((row) => row.interest > 0)
         .sort((a, b) => b.interest - a.interest)

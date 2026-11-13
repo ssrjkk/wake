@@ -438,6 +438,30 @@ class TestHandleLeaderEvent(ListenerDbCase):
         self.assertEqual(rows[0]["reason"], "margin_unverified")
         self.assertEqual(rows[0]["base_amount"], 0)
 
+    async def test_margin_read_failing_by_type_is_still_a_skip(self):
+        """Ветка отказа чтения маржи ловит тот же класс, что и весь клиент
+        Lighter. Пока это был только `RuntimeError`, любое другое исключение
+        от `get_account_equity` (ValueError на неизвестной сети — например)
+        пролетало выше и стоило события всем остальным подписчикам: у
+        обработчика стрима после него остаётся только лог."""
+        follower_id = await self.add_follower(1000.0)
+
+        def boom(index, network=None):
+            raise ValueError("неизвестная сеть Lighter: 'mainnnet'")
+
+        self.addCleanup(_patch_module(lighter_rest, "get_account_equity", boom))
+        await self.run_event(
+            raw_event(),
+            MarketConstraints(min_base_amount=0.001, size_decimals=3, price_decimals=2),
+        )
+
+        rows = await self.mirror_log(follower_id)
+        self.assertEqual(
+            [(r["status"], r["reason"]) for r in rows],
+            [("skipped", "margin_unverified")],
+            "отказ чтения маржи называется тем же словом, что и отсутствие маржи",
+        )
+
 
 def _fake_lighter(result=None, raises=None):
     """Модуль-замена `lighter`.
@@ -543,18 +567,19 @@ class TestLiveExecution(ListenerDbCase):
             min_base_amount=0.001, size_decimals=3, price_decimals=2
         )
 
-    async def live(self, event, *, store, result=None, raises=None, mark=MARK):
+    async def live(self, event, *, store, result=None, raises=None, mark=MARK, mark_error=None):
         """Событие при выключенном dry_run: подставные `lighter`, хранилище
         ключей и mark-цена вместо сети, всё остальное — настоящий код.
 
-        `mark=None` — рынок без ответа (свечей нет), отдельная ветка в
-        `handle_leader_event`.
+        `mark=None` — рынок без ответа (свечей нет), `mark_error` — рынок
+        отвечает ОТКАЗОМ: так проверяется, что причина отказа доходит до
+        mirror_log, а не остаётся в логе процесса.
 
         Различимость цен проверяется здесь, а не в отдельном тесте: ожидание
         цены выводилось из `MARK`, и подмена `MARK` на цену события оставляла
         всю группу зелёной, хотя ровно эта пара «рынок против события» и есть
         проверяемый дефект. Хелпер не даёт fixture тихо стать неразличимой."""
-        if mark is not None and abs(mark - event["price"]) <= (
+        if mark is not None and mark_error is None and abs(mark - event["price"]) <= (
             event["price"] * MAX_SLIPPAGE_BPS / 10_000
         ):
             raise AssertionError(
@@ -567,6 +592,8 @@ class TestLiveExecution(ListenerDbCase):
         self.addCleanup(_patch_module(leader_listener, "_key_store", lambda: store))
 
         def get_mark_price(market_id, network=None):
+            if mark_error is not None:
+                raise mark_error
             if mark is None:
                 raise RuntimeError("нет свечей")
             return mark
@@ -703,21 +730,77 @@ class TestLiveExecution(ListenerDbCase):
         self.assertTrue(call["is_ask"])
         self.assertEqual(call["price"], self.limit(False))
 
-    async def test_order_without_a_market_price_falls_back_to_event_price(self):
-        """Ветки `mark is None` без теста не существует: листенер обязан остаться
-        исполнимым, а не бросить исключение в цикл вебсокета, и цена тогда
-        берётся из события как есть, без запаса."""
+    async def test_order_without_a_market_price_is_skipped_not_priced_by_leader(self):
+        """Без mark-цены ордера нет. Фолбэк на цену события выглядел исполнимым
+        и ронял ровно тот дефект, из-за которого ветку и придумали: цена события
+        — avg_entry лидера, для убыточного закрытия она стоит по другую сторону
+        книги, IOC не исполняется, Lighter отвечает успешно (отмены — не отказ),
+        и подписчик оставался в позиции, из которой лидер вышел, а в журнале это
+        выглядело как исполненная сделка."""
         follower_id = await self.add_follower(1000.0)
         event = raw_event()
         clients = await self.live(event, store=_KeyStore({follower_id: KEY}), mark=None)
 
         rows = await self.mirror_log(follower_id)
-        self.assertEqual(rows[0]["status"], "sent", "нет рынка — ордер всё равно идёт")
         self.assertEqual(
-            clients[0].calls[0]["price"],
-            scale_to_int(event["price"], 2),
-            "без рынка запас брать не от чего — цена события как есть",
+            [(r["status"], r["reason"]) for r in rows],
+            [("skipped", "mark_price_unavailable: нет свечей")],
+            "причина в журнале, а не молчание: подписчик видит, что его не зеркалили",
         )
+        self.assertEqual(rows[0]["base_amount"], 0)
+        self.assertEqual(clients, [], "без рыночной цены до Lighter не доходит ни один ордер")
+        self.assertEqual(
+            await self.mirrored(self.follow_ids[follower_id]),
+            0.0,
+            "учёт подписчика не двигается от ордера, которого не было",
+        )
+
+    async def test_transport_failure_on_the_mark_price_names_itself_in_the_journal(
+        self,
+    ):
+        """Сбой сети по mark-цене терял событие молча: обрыв чтения тела
+        отдавался классом, который не входит в `(RuntimeError, ValueError)`
+        (исправлено в самом клиенте — см. test_lighter_rest.TestRetryPolicy), а
+        дальше исключение доходило до обработчика стрима, где от него оставалась
+        только строка в логе процесса. Состояние трекера к этому моменту уже
+        сохранено, повтор не придёт (at-most-once), и для подписчика это «лидер
+        вышел, а я всё ещё в позиции» без единой строки в журнале.
+
+        Здесь — конец пути: журнал обязан называть причину словами площадки, а не
+        просто «не зеркалено»."""
+        follower_id = await self.add_follower(1000.0)
+        clients = await self.live(
+            raw_event(),
+            store=_KeyStore({follower_id: KEY}),
+            mark_error=RuntimeError("Lighter API недоступен: timed out while reading"),
+        )
+
+        rows = await self.mirror_log(follower_id)
+        self.assertEqual(len(rows), 1, "отказ обязан быть записан, а не промолчан")
+        self.assertEqual(
+            [(r["status"], r["reason"]) for r in rows],
+            [
+                (
+                    "skipped",
+                    "mark_price_unavailable: Lighter API недоступен: "
+                    "timed out while reading",
+                )
+            ],
+        )
+        self.assertEqual(clients, [], "никакого ордера по цене, которой нет")
+
+    async def test_mark_answer_that_is_not_a_price_is_skipped_too(self):
+        """Отрицательная/NaN mark — не «поставим как есть», а тот же skip: цена
+        ордера считается с запасом от неё, и запас вокруг нуля дал бы лимит 0."""
+        follower_id = await self.add_follower(1000.0)
+        clients = await self.live(
+            raw_event(), store=_KeyStore({follower_id: KEY}), mark=float("nan")
+        )
+
+        rows = await self.mirror_log(follower_id)
+        self.assertEqual([r["status"] for r in rows], ["skipped"])
+        self.assertTrue(rows[0]["reason"].startswith("mark_price_unavailable:"))
+        self.assertEqual(clients, [])
 
     async def test_two_live_orders_never_share_a_client_order_index(self):
         """client_order_index — по нему ордер ищется в Lighter. `time-ms % 1e6`
@@ -788,7 +871,8 @@ class TestOrderLimitPrice(unittest.IsolatedAsyncioTestCase):
         return MirrorOrder("f1", 8, side, 0.5, reduce_only)
 
     async def limit(self, side, reduce_only):
-        mark = await leader_listener._event_mark_price(8)
+        mark, reason = await leader_listener._event_mark_price(8)
+        self.assertIsNone(reason, "цена есть — причины не было")
         return marketable_limit_price(mark, is_buy_order(self.order(side, reduce_only)))
 
     async def test_losing_long_exit_is_priced_below_market(self):
@@ -805,14 +889,19 @@ class TestOrderLimitPrice(unittest.IsolatedAsyncioTestCase):
         self.assertAlmostEqual(await self.limit(Side.LONG, False), 1919.0)
         self.assertAlmostEqual(await self.limit(Side.SHORT, False), 1881.0)
 
-    async def test_missing_mark_falls_back_to_event_price(self):
+    async def test_missing_mark_comes_back_with_a_reason(self):
+        """Причина — не украшение: её пишет mirror_log, и по ней человек
+        разбирается, почему его не зеркалили. `None` без причины означало бы
+        «что-то не получили, не знаем что»."""
+
         def boom(market_id, network=None):
             raise RuntimeError("нет свечей")
 
         self.addCleanup(_patch_module(lighter_rest, "get_mark_price", boom))
-        self.assertIsNone(
+        self.assertEqual(
             await leader_listener._event_mark_price(8),
-            "без mark вызывающий обязан взять цену события как есть",
+            (None, "нет свечей"),
+            "без mark вызывающий обязан уйти в skip, а не брать цену события",
         )
 
     async def test_non_finite_mark_is_not_used(self):
@@ -824,9 +913,9 @@ class TestOrderLimitPrice(unittest.IsolatedAsyncioTestCase):
                     lambda market_id, network=None, v=bad: v,
                 )
             )
-            self.assertIsNone(
-                await leader_listener._event_mark_price(8), f"mark={bad!r}"
-            )
+            mark, reason = await leader_listener._event_mark_price(8)
+            self.assertIsNone(mark, f"mark={bad!r}")
+            self.assertIn(repr(bad), reason, f"mark={bad!r}: в причине должен быть сам номер")
 
 
 class TestStreamMessage(ListenerDbCase):

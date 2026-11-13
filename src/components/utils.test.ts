@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest'
-import { avatarColor, categorizeMarket, fmt, fmtPrice, fmtPct, fmtUsdCompact, shortHandle, toastVariant, usd } from './utils'
+import { avatarColor, categorizeMarket, fmt, fmtPrice, fmtPct, fmtUsdCompact, shortHandle, toastVariant, trialToast, usd } from './utils'
+import type { ToastVariant } from './utils'
+import type { Subscription } from './types'
 import { COMMODITY_SYMBOLS, FOREX_SYMBOLS, STOCK_SYMBOLS } from './types'
 import type { OrderBook } from '../lib/lighter'
 
@@ -173,13 +175,15 @@ describe('toastVariant', () => {
     'Размер ордера должен быть больше нуля',
     'Минимальный ордер по этому рынку — 10 USDC',
     'Нет свечей Lighter по этому рынку — агенту не на чём решать',
+    'Пробный период не выдан: бэкенд вернул ответ без подписки',
   ]
 
   const successes = [
     'Ордер отправлен: 0x4f2a',
     'Подписка на @vega записана в таблицу follows',
     'Забрано $12.34 по «BTC выше 90k к 5 октября?»',
-    'Пробный период начат — 14 дней',
+    'Пробный период активен — осталось 4 дн.',
+    'Подписка Pro активна — пробный период не требуется',
     'Публикация включена: индекс Lighter #7, комиссия 0.08% за сделку',
     'Публикация выключена: mirror_engine больше не строит план по твоим сделкам',
     'Кошелёк подтверждён: @vega, Lighter #7',
@@ -196,9 +200,87 @@ describe('toastVariant', () => {
     'Сначала подключи кошелёк',
     'Добавь хотя бы одну позицию',
     'Сервис подписи работает в сухом режиме: ордер в Lighter не ушёл',
+    'Пробный период уже использован — он даётся один раз на аккаунт',
   ]
 
   for (const message of failures) it(`отклоняет: ${message.slice(0, 40)}`, () => expect(toastVariant(message)).toBe('error'))
   for (const message of successes) it(`подтверждает: ${message.slice(0, 40)}`, () => expect(toastVariant(message)).toBe('success'))
   for (const message of neutral) it(`не окрашивает: ${message.slice(0, 40)}`, () => expect(toastVariant(message)).toBe('info'))
+})
+
+// Строка о трайле выводится из ответа /subscription/trial, а не из литерала:
+// ensure_trial пишет через ON CONFLICT DO NOTHING (backend/agent_db.py), поэтому
+// повторный клик ничего не начинает и обещать «начат — 14 дней» было враньем в
+// двух состояниях — на десятый день трайла и после его конца. Здесь проверяется
+// и то, как каждая из этих строк окрашивается: плашка про «доступ есть» не должна
+// выглядеть отказом, а отказ — выглядеть успехом.
+describe('trialToast', () => {
+  const sub = (over: Partial<Subscription>): Subscription => ({
+    tier: 'free_trial',
+    has_ai_agent: true,
+    has_copy_trading: true,
+    has_predict_markets: true,
+    days_left_in_trial: 13.99,
+    ...over,
+  })
+
+  // Четыре значения `tier` из types.ts — все, что умеет отвечать бэкенд.
+  const cases: Array<{ sub: Subscription; text: string; variant: ToastVariant }> = [
+    {
+      sub: sub({ days_left_in_trial: 13.99 }),
+      text: 'Пробный период активен — осталось 14 дн.',
+      variant: 'success',
+    },
+    {
+      sub: sub({ days_left_in_trial: 4.2 }),
+      text: 'Пробный период активен — осталось 5 дн.',
+      variant: 'success',
+    },
+    {
+      sub: sub({ days_left_in_trial: 0.4 }),
+      text: 'Пробный период активен — осталось 1 дн.',
+      variant: 'success',
+    },
+    {
+      // Остаток обнуляется ровно на границе: `is_trial_expired` сравнивает через
+      // «>», поэтому сутки до перехода тира в «free» доступ ещё открыт, а
+      // считать его осталось ноль — это правда, а не «период закончился».
+      sub: sub({ days_left_in_trial: 0 }),
+      text: 'Пробный период активен — осталось 0 дн.',
+      variant: 'success',
+    },
+    {
+      sub: sub({ days_left_in_trial: null }),
+      text: 'Пробный период активен',
+      variant: 'success',
+    },
+    {
+      sub: sub({ tier: 'pro', days_left_in_trial: null }),
+      text: 'Подписка Pro активна — пробный период не требуется',
+      variant: 'success',
+    },
+    {
+      sub: sub({ tier: 'free', has_ai_agent: false, days_left_in_trial: 0 }),
+      text: 'Пробный период уже использован — он даётся один раз на аккаунт',
+      variant: 'info',
+    },
+    {
+      sub: sub({ tier: 'none', has_ai_agent: false, days_left_in_trial: null }),
+      text: 'Пробный период не выдан: бэкенд вернул ответ без подписки',
+      variant: 'error',
+    },
+  ]
+
+  for (const { sub: s, text, variant } of cases) {
+    it(`${s.tier} + ${String(s.days_left_in_trial)} → ${text}`, () => {
+      expect(trialToast(s)).toBe(text)
+      expect(toastVariant(trialToast(s))).toBe(variant)
+    })
+  }
+
+  it('не обещает начало там, где ничего не начинается', () => {
+    // «начат» — единственный смысл, которого у этой функции нет: она не знает,
+    // создана строка этим кликом или лежала до него.
+    for (const { sub: s } of cases) expect(trialToast(s)).not.toMatch(/начат/)
+  })
 })

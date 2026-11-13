@@ -12,6 +12,7 @@ import uuid
 
 import testsupport
 import predict_db as pdb
+from predict_amm import LMSRMarket
 
 _run = testsupport.run
 
@@ -42,9 +43,17 @@ class PredictCase(unittest.TestCase):
             )
         )
 
-    def trade(self, user_id, market_id, outcome, shares):
+    def trade(self, user_id, market_id, outcome, shares, limit_price=None):
+        """Предел «мне всё равно» зависит от знака сделки: доля не стоит дороже
+        номинала, поэтому покупателю это 1.0, а продавцу — нижняя граница поля,
+        1e-6. Одно число на оба случая отсекало бы половину тестовых сделок: с
+        1.0 продажа по 0.53 выходила «ниже предела»."""
+        if limit_price is None:
+            limit_price = 1.0 if shares > 0 else 1e-6
         return _run(
-            pdb.record_trade(str(uuid.uuid4()), user_id, market_id, outcome, shares)
+            pdb.record_trade(
+                str(uuid.uuid4()), user_id, market_id, outcome, shares, limit_price
+            )
         )
 
     def resolve(self, market_id="m-price", outcome="yes"):
@@ -225,7 +234,11 @@ class TestTrading(PredictCase):
             )
         )
         with self.assertRaises(ValueError) as ctx:
-            _run(pdb.record_trade(str(uuid.uuid4()), "user-alice", "m-late", "yes", 10))
+            _run(
+                pdb.record_trade(
+                    str(uuid.uuid4()), "user-alice", "m-late", "yes", 10, 1.0
+                )
+            )
         self.assertIn("дедлайн", str(ctx.exception))
         market = _run(pdb.get_market("m-late"))
         self.assertEqual((market["q_yes"], market["q_no"]), (0.0, 0.0), "пул не тронут")
@@ -247,7 +260,7 @@ class TestTrading(PredictCase):
         with self.assertRaises(ValueError):
             _run(
                 pdb.record_trade(
-                    str(uuid.uuid4()), "user-alice", "m-late-event", "yes", 5
+                    str(uuid.uuid4()), "user-alice", "m-late-event", "yes", 5, 1.0
                 )
             )
 
@@ -305,6 +318,174 @@ class TestPositionsAndClaims(PredictCase):
     def test_claim_without_a_position_pays_nothing(self):
         self.resolve()
         self.assertEqual(_run(pdb.claim_winnings("user-nikto", "m-price")), 0.0)
+
+
+class TestTradePriceBound(PredictCase):
+    """Предел цены за долю у сделки есть всегда, и проверяется он внутри блокировки
+    строки рынка, а не на глаз в интерфейсе.
+
+    Повод. Фронт считает карточку «Стоимость сейчас» по эндпоинту /preview, а
+    исполнение идёт по пулу в момент POST /trade: между двумя запросами любой
+    человек может сдвинуть q_yes/q_no, и Wake-сделка исполняется по цене, которую
+    человек не видел. Первый тест ниже это мерит, а не утверждает. Дальше без
+    предела расход нечем ограничить: покупка за 0.99 вместо обещанных 0.55 —
+    тоже «исполнено успешно».
+
+    Проверяется на обеих сторонах: покупка не имеет права исполниться ДОРОЖЕ
+    предела, продажа — ДЕШЕВЛЕ. Направленность важна, иначе однополое сравнение
+    отказывало бы как раз выгодным сделкам.
+    """
+
+    def quote(self, market_id: str, outcome: str, shares: float) -> float:
+        """Стоимость сделки по тому же пулу, по которому считает /preview
+        (api/predict.py берёт LMSRMarket.cost_to_trade) — копия формулы в тесте
+        была бы вторым владельцем правила."""
+        m = _run(pdb.get_market(market_id))
+        return LMSRMarket(b=m["b"], q_yes=m["q_yes"], q_no=m["q_no"]).cost_to_trade(
+            outcome, shares
+        )
+
+    def test_a_foreign_trade_reprices_the_market_between_quote_and_fill(self):
+        """Замер расхождения на живом коде: квота снята, чужая сделка двигает пул,
+        и наша исполняется по другой цене за долю. Это то, что обязан ограничить
+        предел, поэтому тест остаётся зелёным и после фикса."""
+        shares = 20.0
+        quoted = self.quote("m-event", "yes", shares)
+        self.trade("user-other", "m-event", "yes", 200)
+        filled = _run(
+            pdb.record_trade(
+                str(uuid.uuid4()), "user-alice", "m-event", "yes", shares, 1.0
+            )
+        )
+        self.assertGreater(
+            filled, quoted, "чужая покупка обязала сделать нашу дороже"
+        )
+        self.assertGreater(
+            filled / shares,
+            quoted / shares,
+            "цена за долю без предела уходит от обещанной куда угодно",
+        )
+
+    def test_worse_fill_is_rejected_and_pool_untouched(self):
+        shares = 20.0
+        limit = self.quote("m-event", "yes", shares) / shares
+        self.trade("user-other", "m-event", "yes", 200)
+        before = _run(pdb.get_market("m-event"))
+
+        with self.assertRaises(ValueError) as ctx:
+            _run(
+                pdb.record_trade(
+                    str(uuid.uuid4()), "user-alice", "m-event", "yes", shares, limit
+                )
+            )
+        msg = str(ctx.exception)
+        self.assertIn("хуже предела", msg)
+        self.assertIn(f"{limit:.6f}", msg, "в отказе обязан быть сам предел")
+        after = _run(pdb.get_market("m-event"))
+        self.assertEqual(
+            (after["q_yes"], after["q_no"]),
+            (before["q_yes"], before["q_no"]),
+            "отказанная сделка не двинула пул",
+        )
+        self.assertEqual(_run(pdb.list_user_positions("user-alice")), [])
+
+    def test_better_fill_than_the_limit_is_accepted(self):
+        """Предел — «не хуже», а не «ровно столько»: пул сдвинулся в пользу
+        человека, и сделка обязана исполниться, иначе гейт превратился бы в
+        отказ по любой параллельной сделке. Здесь чужая покупка «no» удешевляет
+        «yes»: лимит снят до неё, исполнение выходит дешевле."""
+        shares = 20.0
+        limit = self.quote("m-event", "yes", shares) / shares
+        self.trade("user-other", "m-event", "no", 200)
+        cost = _run(
+            pdb.record_trade(
+                str(uuid.uuid4()), "user-alice", "m-event", "yes", shares, limit
+            )
+        )
+        self.assertLess(
+            cost / shares, limit, "чужая сделка сделала нашу дешевле предела"
+        )
+
+    def test_sell_is_bounded_from_the_other_side(self):
+        """Продажа получает деньги, и хуже для неё — меньше. Однополое сравнение
+        («avg > limit») отклоняло бы выгодную продажу и пропускало бы
+        невыгодную."""
+        self.trade("user-alice", "m-event", "yes", 40)
+        shares = -20.0
+        limit = self.quote("m-event", "yes", shares) / shares  # цена продажи за долю
+        self.trade("user-other", "m-event", "no", 400)  # yes дешевеет — продавать стало невыгодно
+
+        with self.assertRaises(ValueError) as ctx:
+            _run(
+                pdb.record_trade(
+                    str(uuid.uuid4()), "user-alice", "m-event", "yes", shares, limit
+                )
+            )
+        self.assertIn("ниже предела", str(ctx.exception))
+        self.assertEqual(
+            _run(pdb.get_position("user-alice", "m-event", "yes"))["shares"],
+            40.0,
+            "отказанная продажа не уменьшила позицию",
+        )
+
+    def test_one_dollar_accepts_any_buy(self):
+        """1.0 — верхняя граница цены доли и «без предела» для ПОКУПКИ: доля не
+        может стоить дороже номинала, поэтому этот вызов обязан проходить всегда
+        и им пользуются тесты, которым предел не важен."""
+        self.trade("user-other", "m-event", "yes", 500)
+        cost = _run(
+            pdb.record_trade(
+                str(uuid.uuid4()), "user-alice", "m-event", "yes", 20.0, 1.0
+            )
+        )
+        self.assertGreater(cost, 0)
+
+    def test_one_dollar_is_not_the_absence_of_a_sell_bound(self):
+        """То же число для продажи означает «продавать только по номиналу», а
+        кривая столько не отдаёт никогда — отказ. «Без предела» для продажи
+        лежит внизу поля (1e-6), и тест-фикстуры обязаны это различать: один
+        дефолт на оба направления отсекал все продажи."""
+        self.trade("user-alice", "m-event", "yes", 40)
+        with self.assertRaises(ValueError) as ctx:
+            _run(
+                pdb.record_trade(
+                    str(uuid.uuid4()), "user-alice", "m-event", "yes", -20.0, 1.0
+                )
+            )
+        self.assertIn("ниже предела", str(ctx.exception))
+        self.assertEqual(
+            _run(pdb.get_position("user-alice", "m-event", "yes"))["shares"], 40.0
+        )
+        self.assertLess(
+            _run(
+                pdb.record_trade(
+                    str(uuid.uuid4()), "user-alice", "m-event", "yes", -20.0, 1e-6
+                )
+            ),
+            0.0,
+            "тот же объём с нижней границей поля обязан исполниться, и продажей",
+        )
+
+    def test_oversell_is_refused_for_the_position_not_for_the_price(self):
+        """Проверка позиции идёт до проверки предела. Продажа, которой нет чем
+        торговать, отказывается по позиции даже с заведомо невыполнимым
+        пределом: иначе человек с «1.0 на оба случая» читал бы про цену там,
+        где настоящая причина — нечего продавать."""
+        self.trade("user-alice", "m-event", "yes", 10)
+        with self.assertRaises(ValueError) as ctx:
+            _run(
+                pdb.record_trade(
+                    str(uuid.uuid4()), "user-alice", "m-event", "yes", -1000.0, 1.0
+                )
+            )
+        msg = str(ctx.exception)
+        self.assertIn("чем есть в позиции", msg)
+        self.assertNotIn("предела", msg)
+        self.assertEqual(
+            _run(pdb.get_position("user-alice", "m-event", "yes"))["shares"],
+            10.0,
+            "отказ не тронул позицию",
+        )
 
 
 if __name__ == "__main__":

@@ -25,7 +25,7 @@
 // по той же таблице бэкенд. Правило, записанное дважды без общей таблицы,
 // расходится в тот день, когда его поправят в одном месте.
 
-import type { OrderBook } from "./lighter";
+import { isTradeable, type OrderBook } from "./lighter";
 
 /** Стейбл, в котором маржируется перп: спот за другой котировкой — не вторая нога. */
 export const CARRY_QUOTE = "USDC";
@@ -61,11 +61,11 @@ export function pairableCarryMarkets(
 ): Map<string, CarryPair> {
   const perps = new Map<string, OrderBook>();
   for (const m of markets) {
-    if (m.market_type === "perp" && m.status === "active" && m.symbol) perps.set(m.symbol, m);
+    if (m.market_type === "perp" && isTradeable(m) && m.symbol) perps.set(m.symbol, m);
   }
   const pairs = new Map<string, CarryPair>();
   for (const m of markets) {
-    if (m.market_type !== "spot" || m.status !== "active") continue;
+    if (m.market_type !== "spot" || !isTradeable(m)) continue;
     const base = spotBase(m.symbol, quote);
     if (base === null) continue;
     const perp = perps.get(base);

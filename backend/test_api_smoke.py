@@ -35,16 +35,16 @@ from urllib.parse import urlencode
 # здесь, и прогон `pytest test_db.py test_api_smoke.py` падал уже из-за порядка
 # импортов: config успевает импортироваться тестом базы раньше, чем этот модуль
 # успевает их подменить.
-import testsupport  # noqa: E402  (импортируется первым из проектных модулей)
+import testsupport
 
-import httpx  # noqa: E402
-import agent_db  # noqa: E402
-import app  # noqa: E402
-import api.auth as api_auth  # noqa: E402
-import audit_log as al  # noqa: E402
-import db  # noqa: E402
-import session  # noqa: E402
-from subscription import Tier  # noqa: E402
+import httpx
+import agent_db
+import app
+import api.auth as api_auth
+import audit_log as al
+import db
+import session
+from subscription import Tier
 
 # httpx пишет в лог каждый запрос; на этом прогоне это 60 строк шума, а предмет
 # теста — ответы роутов, не сам факт запроса.
@@ -845,14 +845,14 @@ class TestApiSmoke(HttpCase):
         # «сыграть на чужом месте» стоило одну строку JSON
         r = await self.client.post(
             f"/predict/markets/{market_id}/trade",
-            json={"outcome": "yes", "shares": 10},
+            json={"outcome": "yes", "shares": 10, "limit_price": 1.0},
         )
         self.assertEqual(r.status_code, 401)
         self.assertEqual(r.json()["error"]["code"], "SESSION_REQUIRED")
 
         r = await self.client.post(
             f"/predict/markets/{market_id}/trade",
-            json={"outcome": "yes", "shares": 10},
+            json={"outcome": "yes", "shares": 10, "limit_price": 1.0},
             headers=auth(forged_token("tg_6001")),
         )
         self.assertEqual(
@@ -860,9 +860,34 @@ class TestApiSmoke(HttpCase):
         )
         self.assertEqual(r.json()["error"]["code"], "SESSION_BAD_SIGNATURE")
 
+        # Предел обязателен в самом запросе: «поле забыли» не должно означать
+        # «проскальзывание не ограничено», иначе фронт, потерявший строку, вернул
+        # бы прежний неизмеримый риск молча.
         r = await self.client.post(
             f"/predict/markets/{market_id}/trade",
             json={"outcome": "yes", "shares": 10},
+            headers=trader,
+        )
+        self.assertEqual(r.status_code, 422, r.text)
+        self.assertIn("limit_price", r.text)
+
+        r = await self.client.post(
+            f"/predict/markets/{market_id}/trade",
+            json={"outcome": "yes", "shares": 10, "limit_price": 0},
+            headers=trader,
+        )
+        self.assertEqual(r.status_code, 422, "цена доли не бывает нулевой")
+
+        r = await self.client.post(
+            f"/predict/markets/{market_id}/trade",
+            json={"outcome": "yes", "shares": 10, "limit_price": 1.5},
+            headers=trader,
+        )
+        self.assertEqual(r.status_code, 422, "предел выше номинала доли — бессмыслица")
+
+        r = await self.client.post(
+            f"/predict/markets/{market_id}/trade",
+            json={"outcome": "yes", "shares": 10, "limit_price": 1.0},
             headers=trader,
         )
         self.assertEqual(r.status_code, 200, r.text)
@@ -872,7 +897,7 @@ class TestApiSmoke(HttpCase):
         # продажа половины позиции: cost отрицательный, юзеру возвращаются деньги
         r = await self.client.post(
             f"/predict/markets/{market_id}/trade",
-            json={"outcome": "yes", "shares": -4},
+            json={"outcome": "yes", "shares": -4, "limit_price": 0.01},
             headers=trader,
         )
         self.assertEqual(r.status_code, 200)
@@ -887,19 +912,65 @@ class TestApiSmoke(HttpCase):
         self.assertTrue(all(row["success"] == 1 for row in audit))
 
         # отказ тоже аудится — попытка продать больше, чем есть, это то, что
-        # стоит увидеть постфактум
+        # стоит увидеть постфактум. Предел здесь нарочно назначен верхом поля
+        # (1.0 для продажи читается «продавать только по доллару»): отказ обязан
+        # прийти про позицию, а не про цену, иначе две проверки спорят за текст.
         r = await self.client.post(
             f"/predict/markets/{market_id}/trade",
-            json={"outcome": "yes", "shares": -1000},
+            json={"outcome": "yes", "shares": -1000, "limit_price": 1.0},
             headers=trader,
         )
         self.assertEqual(r.status_code, 400)
+        self.assertIn("чем есть в позиции", r.json()["error"]["message"])
         failed = [
             row
             for row in await al.recent_actions(actor="tg_6001", action="trade_executed")
             if row["success"] == 0
         ]
         self.assertEqual(len(failed), 1)
+
+        # Худшая цена ниже фактической: исполнение дороже предела — это отказ с
+        # обеими числами в тексте, а не «200 и цена, которую не показывали».
+        # Цена снимается по /preview — тому же эндпоинту, который смотрит человек,
+        # и ровно поэтому расхождение между ним и POST и есть тот риск.
+        quoted = (
+            await self.client.get(
+                f"/predict/markets/{market_id}/preview?outcome=yes&shares=10",
+                headers=trader,
+            )
+        ).json()["cost_usd"]
+        too_low = round(quoted / 10 * 0.9, 6)
+        before = (
+            await self.client.get(f"/predict/markets/{market_id}", headers=trader)
+        ).json()
+        r = await self.client.post(
+            f"/predict/markets/{market_id}/trade",
+            json={"outcome": "yes", "shares": 10, "limit_price": too_low},
+            headers=trader,
+        )
+        self.assertEqual(r.status_code, 400, r.text)
+        self.assertIn("хуже предела", r.json()["error"]["message"])
+        self.assertIn(f"{too_low:.6f}", r.json()["error"]["message"])
+        self.assertEqual(
+            (
+                await self.client.get(f"/predict/markets/{market_id}", headers=trader)
+            ).json()["price_yes"],
+            before["price_yes"],
+            "отказанная сделка не двинула цену рынка",
+        )
+        self.assertEqual(
+            len(
+                [
+                    row
+                    for row in await al.recent_actions(
+                        actor="tg_6001", action="trade_executed"
+                    )
+                    if row["success"] == 0
+                ]
+            ),
+            2,
+            "отказ по пределу так же попадает в аудит, как и отказ по позиции",
+        )
 
         # объём считается по |cost| обеих состоявшихся сделок — это сделки через
         # Wake, не рыночный объём
@@ -2687,7 +2758,22 @@ class TestPredictMarketBoundary(HttpCase):
             with self.subTest(shares=shares):
                 r = await self.client.post(
                     f"/predict/markets/{market_id}/trade",
-                    content=f'{{"outcome":"yes","shares":{shares}}}'.encode(),
+                    content=(
+                        f'{{"outcome":"yes","shares":{shares},"limit_price":1.0}}'
+                    ).encode(),
+                    headers={**trader, "Content-Type": "application/json"},
+                )
+                self.assertEqual(r.status_code, 422)
+        # Тот же язык отказа у предела: limit_price обязан быть конечным числом
+        # внутри (0, 1]. Без `limit_price` выше этот цикл мерил бы не shares, а
+        # отсутствующее поле.
+        for limit in ("NaN", "Infinity", "0", "-0.5", "1.01"):
+            with self.subTest(limit_price=limit):
+                r = await self.client.post(
+                    f"/predict/markets/{market_id}/trade",
+                    content=(
+                        f'{{"outcome":"yes","shares":1,"limit_price":{limit}}}'
+                    ).encode(),
                     headers={**trader, "Content-Type": "application/json"},
                 )
                 self.assertEqual(r.status_code, 422)

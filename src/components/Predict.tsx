@@ -10,6 +10,7 @@ import {
   predictTimeLeft,
   previewPredictTrade,
   tradePredictMarket,
+  worstSharePrice,
   type PredictMarket,
   type PredictPosition,
   type PredictStatus,
@@ -43,6 +44,14 @@ function cents(price: number): string {
 // а в строке стоимости сделки расхождение в $45 заметно сразу.
 function money(value: number): string {
   return usd(value, 2);
+}
+
+// Предел доли печатается шестью знаками — ровно теми, которыми бэкенд пишет
+// отказ: «вышла по 0.505000 за долю, что хуже предела 0.510000». Округлённый до
+// целых центов, он совпал бы с ценой входа (0.495 и 0.50 → обе «50¢»), и человек
+// не смог бы сверить карточку с текстом отказа.
+function priceBound(value: number): string {
+  return `$${value.toFixed(6)}`;
 }
 
 // Условие рынка берётся из полей порога, а не из текста вопроса: вопрос пишет
@@ -101,6 +110,14 @@ export default function Predict({
     : "";
   const preview = quote?.key === quoteKey ? quote.cost : null;
   const previewError = quote?.key === quoteKey ? quote.error : null;
+  // Знак количества задаёт направление сделки один раз: листается ли это покупка
+  // или продажа, обязаны одинаково понимать /preview, POST и то, что на экране.
+  const qty = trade ? (sellMode ? -Math.abs(shares) : Math.abs(shares)) : 0;
+  // Предел вычисляется из того же ответа /preview, что показан человеком, и
+  // уезжает в POST тем же числом. Два отдельных расчёта дали бы одну границу
+  // на экране и другую — в запросе, а отказ бэкенда цитировал бы вторую.
+  const limitPrice =
+    preview === null || qty === 0 ? null : worstSharePrice(preview, qty);
   const confirmationKey = `${quoteKey}:${preview}`;
   const tradeConfirmed = preview !== null && confirmedQuote === confirmationKey;
 
@@ -240,7 +257,6 @@ export default function Predict({
     const marketId = trade.market.id;
     const outcome = trade.outcome;
     let live = true;
-    const qty = sellMode ? -Math.abs(shares) : Math.abs(shares);
     if (!qty) return;
     previewPredictTrade(marketId, outcome, qty)
       .then((d) => {
@@ -252,17 +268,17 @@ export default function Predict({
     return () => {
       live = false;
     };
-  }, [trade, shares, sellMode, quoteKey]);
+  }, [trade, qty, quoteKey]);
 
   async function confirmTrade() {
-    if (!trade || !signedIn || preview == null) return;
+    if (!trade || !signedIn || preview == null || limitPrice == null) return;
     setSending(true);
     try {
-      const qty = sellMode ? -Math.abs(shares) : Math.abs(shares);
       const data = await tradePredictMarket(
         trade.market.id,
         trade.outcome,
         qty,
+        limitPrice,
       );
       setToast(
         sellMode
@@ -715,6 +731,10 @@ export default function Predict({
                     <dd>{money(shares)}</dd>
                   </>
                 )}
+                <dt className="sub-label">
+                  {sellMode ? "Не продать дешевле" : "Не купить дороже"}
+                </dt>
+                <dd>{limitPrice == null ? "…" : priceBound(limitPrice)}</dd>
               </dl>
 
               <button
@@ -752,8 +772,10 @@ export default function Predict({
                 Номинал — это не прибыль: share победившего исхода после
                 резолюции стоит $1, проигравшего — $0, а вход по LMSR-кривой
                 обычно дороже {cents(0.5)} и двигается против тебя с каждой
-                покупкой. Верхнюю границу продажи и запрет торговать по
-                закрытому рынку держит бэкенд, а не эта форма.
+                покупкой. Предел проверяется в момент записи: сдвинется пул за
+                него — сделка не запишется вовсе, а не исполнится дороже.
+                Верхнюю границу продажи и запрет торговать по закрытому рынку
+                держит бэкенд, а не эта форма.
               </p>
             </div>
           </Modal>

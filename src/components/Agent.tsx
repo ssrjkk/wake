@@ -183,7 +183,19 @@ export default function Agent({ signedIn, subscription, currentMarket, setToast,
             Статус подписки читается с <code style={{ color: "var(--fg-2)" }}>GET /subscription</code> — того, кому он принадлежит, решает токен входа; без
             Telegram или кошелька её не на что заводить.
           </p>
-          <button className="btn-primary" onClick={startTrial}>Начать 14-дневный trial</button>
+          {/* Кнопка «начать trial» у человека, у которого trial уже был, —
+              мёртвый контрол: ensure_trial пишет через ON CONFLICT DO NOTHING,
+              повторный клик не двигает trial_started_at и ничего не продлевает.
+              Сказать это текстом честнее, чем предлагать действие, которое не
+              происходит. */}
+          {subscription?.tier === "free" ? (
+            <p style={{ fontSize: "var(--fs-data)", color: "var(--fg-2)", maxWidth: "320px" }}>
+              Продлить трайл нельзя — он даётся один раз на аккаунт. Доступ дальше
+              включает <code style={{ color: "var(--fg-2)" }}>Pro</code>.
+            </p>
+          ) : (
+            <button className="btn-primary" onClick={startTrial}>Начать 14-дневный trial</button>
+          )}
           <p style={{ fontSize: "var(--fs-label)", color: "var(--text-muted)", marginTop: "12px", maxWidth: "320px", lineHeight: 1.5 }}>
             Trial заводится без оплаты, один раз на аккаунт. «pro» включает <code style={{ color: "var(--fg-2)" }}>POST /subscription/&lt;user_id&gt;/upgrade</code>{" "}
             на бэкенде под токеном куратора — платёжного пути в репозитории нет, и кнопкой в интерфейсе это не делается. Строки подписки лежат в{" "}

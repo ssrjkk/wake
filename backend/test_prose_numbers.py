@@ -107,6 +107,7 @@ MARKDOWN = (
     "CONTRIBUTING.md",
     "SECURITY.md",
     "CODE_OF_CONDUCT.md",
+    "WHITEPAPER.md",
 )
 SKIP = re.compile(
     r"(node_modules|dist|build|__pycache__|\.git|alembic|CHANGELOG|fixtures\.ts)"

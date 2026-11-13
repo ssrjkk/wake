@@ -251,7 +251,7 @@ def run_agent_step(
         body = ""
         try:
             body = e.read().decode(errors="replace")[:300]
-        except Exception:  # noqa: BLE001 — тело ответа не важнее самого отказа
+        except Exception:  # тело ответа не важнее самого отказа
             pass
         logger.error("исполнение не удалось: HTTP %s %s", e.code, body or e.reason)
         return decision, {

@@ -23,15 +23,16 @@ URL, которые ушли бы наружу, и ровно тот JSON, ко�
 
 import json
 import math
+import socket
 import unittest
 import urllib.error
 import urllib.request
 from unittest.mock import patch
 
 # Тестовое окружение раньше config: lighter_rest читает LIGHTER_* при импорте.
-import testsupport  # noqa: E402, F401
-import cache  # noqa: E402
-import lighter_rest  # noqa: E402
+import testsupport  # noqa: F401
+import cache
+import lighter_rest
 
 MAINNET_HOST = "mainnet.zklighter.elliot.ai"
 MINUTE_MS = 60_000
@@ -65,6 +66,36 @@ class _Response:
 
     def read(self):
         return self._body
+
+
+class ReadFails:
+    """Соединение открылось и отдаёт ответ, который не дочитывается — так ведёт
+    себя балансировщик Lighter посреди техработ. `read()` бросает socket.timeout
+    (в Python 3.10+ это TimeoutError): подкласс OSError, но НЕ
+    urllib.error.URLError, и urllib не успевает завернуть его в свой тип,
+    потому что тело читается уже после do_open."""
+
+    def __init__(self, error: Exception):
+        self._error = error
+        self.urls = []
+
+    def __call__(self, req, timeout=None):
+        self.urls.append(req.full_url)
+        return _Stalling(self._error)
+
+
+class _Stalling:
+    def __init__(self, error):
+        self._error = error
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def read(self):
+        raise self._error
 
 
 def http_error(code):
@@ -442,6 +473,27 @@ class TestRetryPolicy(unittest.TestCase):
         ):
             lighter_rest._get("https://x/api/v1/a")
         self.assertEqual(len(transport.urls), lighter_rest.MAX_RETRIES)
+
+    def test_timeout_while_reading_the_body_is_retried_and_renamed(self):
+        """Обрыв при ЧТЕНИИ тела обязан говорить на том же языке, что и обрыв
+        при открытии, — иначе обещание «один язык отказа» держится только
+        наполовину. Раньше ветка повтора была `except URLError`, а TimeoutError
+        к ней не относится: он уходил наружу своим классом и в листенере
+        пролетал мимо `except (RuntimeError, ValueError)`, то есть стоил всего
+        события лидера — уже после сохранения состояния трекера, поэтому и не
+        повторяющегося никогда."""
+        transport = ReadFails(socket.timeout("timed out while reading"))
+        with (
+            patch("urllib.request.urlopen", transport),
+            self.assertRaises(RuntimeError),
+        ):
+            lighter_rest._get("https://x/api/v1/a")
+        self.assertEqual(
+            len(transport.urls),
+            lighter_rest.MAX_RETRIES,
+            "читается с теми же повторами, что и открывается",
+        )
+        self.assertEqual(len(self.sleeps), lighter_rest.MAX_RETRIES - 1)
 
     def test_recovery_after_one_failure_costs_nothing_extra(self):
         transport = Transport(http_error(500), {"ok": 1})

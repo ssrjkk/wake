@@ -161,8 +161,17 @@ class RedisRateLimiter:
         await self.redis.aclose()
 
     async def ping(self) -> bool:
-        """Жив ли Redis (для /ready)."""
+        """Жив ли Redis (для /ready).
+
+        Ловится ровно RedisError — то же правило, что у allow(): голый
+        except Exception давал собственному багу модуля диагноз «redis: fail»,
+        и оператор по 503 в /ready чинил соединение, которого не было. Причина
+        пишется в лог: checks["redis"] = "fail" сам по себе не оставляет ничего
+        кроме слова."""
         try:
             return bool(await self.redis.ping())
-        except Exception:
+        except redis.RedisError as error:
+            logger.warning(
+                "rate limiter: Redis не ответил на ping: %s", error, exc_info=True
+            )
             return False

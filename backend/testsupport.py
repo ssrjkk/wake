@@ -70,8 +70,8 @@ if not _db_name.endswith("_test"):
 
 os.environ["WAKE_DATABASE_URL"] = _TEST_URL
 
-from database import engine  # noqa: E402
-from pg_models import Base  # noqa: E402
+from database import engine
+from pg_models import Base
 
 
 def run(coro):

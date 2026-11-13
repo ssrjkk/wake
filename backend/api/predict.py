@@ -83,8 +83,21 @@ class CreateEventMarket(CreateMarketBase):
 
 
 class TradeRequest(BaseModel):
+    """outcome + shares + предел цены одной доли.
+
+    `limit_price` обязателен и не имеет значения по умолчанию: «без предела» —
+    это то, что было до него, и отсутствие поля в запросе не должно
+    восстанавливать неисполнимое раньше правило.
+
+    Направление задаёт знак `shares`, и «любая цена» у двух сторон — разное
+    число: покупателю это верх поля (1.0 — дороже номинала доля не стоит
+    никогда), продавцу его низ (gt=0 не даёт выразить «любая» нулём). 1.0 в
+    продаже читается как «продавать только по доллару», и кривая столько не
+    отдаёт. Вызывающий обязан произнести это вслух."""
+
     outcome: Literal["yes", "no"]
     shares: float = Field(allow_inf_nan=False, ge=-MAX_SHARES, le=MAX_SHARES)
+    limit_price: float = Field(gt=0, le=1, allow_inf_nan=False)
 
     @field_validator("shares")
     @classmethod
@@ -253,7 +266,7 @@ async def trade_predict_market(
     trade_id = str(uuid.uuid4())
     try:
         cost = await pdb.record_trade(
-            trade_id, user_id, market_id, req.outcome, req.shares
+            trade_id, user_id, market_id, req.outcome, req.shares, req.limit_price
         )
     except ValueError as e:
         await al.log_action(

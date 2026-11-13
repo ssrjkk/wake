@@ -3,19 +3,23 @@ import { Search } from "lucide-react";
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, ResponsiveContainer } from "recharts";
 import {
   getCandles,
+  getTicker,
   getRecentTrades,
   getFundingRates,
   getOrderBookDepth,
   depthSpread,
   getApiHost,
   getSignerHealth,
+  isTradeable,
   placeOrderViaSigningService,
   SignerNetworkMismatch,
+  TICKER_TTL_MS,
   type LighterNetwork,
   type OrderBook,
   type OrderBookDepth,
   type Candle,
   type SignerHealth,
+  type Ticker,
   type Trade,
 } from "../lib/lighter";
 import { SIGNING_SERVICE_URL } from "../lib/config";
@@ -41,9 +45,10 @@ interface TerminalProps {
 /* Сколько строк списка обеспечено живыми ценами. Каждая строка — один запрос
    свечей (публичного «тикера сразу по всем рынкам» у Lighter нет: /tickers и
    /markets отвечают 403). 12 — тот же порядок, что у /markets/overview на
-   бэкенде, который считает оборот по 24 часовым свечам. */
+   бэкенде, который считает оборот по 24 часовым свечам. Виток опроса и кэш
+   принадлежат getTicker в lib/lighter.ts: там же, где живёт сеть, к ключу
+   которой они привязаны. */
 const TICKER_ROWS = 12;
-const TICKER_TTL_MS = 60_000;
 
 /* Сколько часовых свечей берёт график. Подпись над графиком обязана печатать
    это же число: вписанное рядом вторым экземпляром оно расходится с запросом
@@ -71,37 +76,6 @@ const AXIS_PAD_PX = 12;
 const AXIS_MIN_PX = 56;
 const AXIS_MAX_PX = 128;
 const AXIS_FALLBACK_FONT_PX = 10.5;
-
-type Ticker = { price: number; changePct: number | null; volume24h: number };
-
-// Кэш на уровне модуля: список перерисовывается при поиске, и без него каждый
-// скролл заново спрашивал бы Lighter по тем же рынкам.
-const tickerCache = new Map<number, { at: number; value: Ticker | null }>();
-
-async function getTicker(marketId: number): Promise<Ticker | null> {
-  const hit = tickerCache.get(marketId);
-  if (hit && Date.now() - hit.at < TICKER_TTL_MS) return hit.value;
-  try {
-    const candles = await getCandles(marketId, "1h", 24);
-    if (!candles.length) {
-      tickerCache.set(marketId, { at: Date.now(), value: null });
-      return null;
-    }
-    const last = candles[candles.length - 1];
-    const first = candles[0];
-    const value: Ticker = {
-      price: last.c,
-      changePct: first.o ? (last.c - first.o) / first.o : null,
-      volume24h: candles.reduce((sum, c) => sum + c.V, 0),
-    };
-    tickerCache.set(marketId, { at: Date.now(), value });
-    return value;
-  } catch {
-    // Просроченный ответ не должен выбивать цены из всего списка: строка
-    // остаётся с прочерком и обновится на следующем витке.
-    return null;
-  }
-}
 
 // Ответ GET /health сервиса подписи. Спрашиваем его ТОЛЬКО по действию
 // пользователя: сервис живёт на машине самого человека, и запрос к нему при
@@ -154,7 +128,12 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
   const [signerChecked, setSignerChecked] = useState(false);
   const [signerBusy, setSignerBusy] = useState(false);
 
-  const currentMarket = markets.find((m) => m.symbol === asset);
+  /* Рынок, снятый с торгов, остаётся и в книге, и в лентах свечей, поэтому
+     отсев стоит сделать здесь, а не в каждом месте, где из рынка что-то берут:
+     через этот список идут и рельс, и тикет, и ссылка ?asset=… */
+  const tradeable = useMemo(() => markets.filter(isTradeable), [markets]);
+
+  const currentMarket = tradeable.find((m) => m.symbol === asset);
   const marketId = currentMarket?.market_id;
   const candlesLoading = marketId != null && candlesPending;
   const tradesLoading = marketId != null && tradesPending;
@@ -162,10 +141,10 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
   const isSpot = currentMarket?.market_type === "spot";
 
   const filteredMarkets = useMemo(() => {
-    if (!searchQuery.trim()) return markets;
+    if (!searchQuery.trim()) return tradeable;
     const q = searchQuery.toUpperCase();
-    return markets.filter((m) => m.symbol.toUpperCase().includes(q));
-  }, [markets, searchQuery]);
+    return tradeable.filter((m) => m.symbol.toUpperCase().includes(q));
+  }, [tradeable, searchQuery]);
 
   /* Порядок рельса — по номеру рынка, а не «как вернула книга». Замер живого
      /orderBooks (mainnet, 2026-10-24): три подряд запроса отдают те же 214
@@ -973,9 +952,9 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
               );
             })
           )}
-          {markets.length > TICKER_ROWS && (
+          {tradeable.length > TICKER_ROWS && (
             <button className="link-action list-foot" onClick={() => setMarketPickerOpen(true)}>
-              Все рынки ({markets.length})
+              Все рынки ({tradeable.length})
             </button>
           )}
         </div>

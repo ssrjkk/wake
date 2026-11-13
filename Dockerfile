@@ -1,7 +1,15 @@
 # ── Stage 1: build dependencies ──────────────────────────────────────────────
 # Отдельный stage для компиляции wheels — финальный образ не тащит gcc, libpq-dev
 # и кэш pip. Если зависимости не менялись, Docker переиспользует этот слой целиком.
-FROM python:3.14-slim AS builder
+#
+# Тег интерпретатора обязан совпадать с PYTHON_VERSION в .github/workflows/ci.yml:
+# иначе зелёный CI ничего не знает о том Python, на котором крутится прод. Ровно
+# так и вышло — dependabot поднял базу образа на 3.14 (b0f70da), CI остался на
+# 3.12, и расхождение легитимировала доки-проверка, требовавшая лишь «назови обе
+# версии в таблице». Равенство держит код:
+# backend/test_deployment_manifest.py::TestVersionsMatch
+# ·test_dockerfile_interpreter_is_the_one_ci_tests_on
+FROM python:3.12-slim AS builder
 
 WORKDIR /build
 
@@ -15,7 +23,7 @@ RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 # ── Stage 2: runtime ─────────────────────────────────────────────────────────
 # Минимальный образ: только runtime-зависимости, непривилегированный пользователь,
 # код скопирован поверх уже установленных пакетов из builder.
-FROM python:3.14-slim AS runtime
+FROM python:3.12-slim AS runtime
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends libpq5 curl && \

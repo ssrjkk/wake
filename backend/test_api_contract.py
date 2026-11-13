@@ -30,10 +30,10 @@ import re
 import unittest
 from pathlib import Path
 
-import testsupport  # noqa: F401,E402  (задаёт env раньше app и config)
+import testsupport  # noqa: F401  (задаёт env раньше app и config)
 
-import app as wake_app  # noqa: E402
-import signing_service  # noqa: E402
+import app as wake_app
+import signing_service
 
 SRC = Path(__file__).resolve().parent.parent / "src"
 

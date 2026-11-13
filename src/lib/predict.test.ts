@@ -7,8 +7,10 @@ import {
   getPredictPositions,
   predictOutcomeWorth,
   PREDICT_PAGE_SIZE,
+  PREDICT_SLIPPAGE_TOLERANCE,
   predictTimeLeft,
   tradePredictMarket,
+  worstSharePrice,
 } from './predict'
 
 // Те же границы формата, что проверяет backend/test_telegram_bot.py для
@@ -36,6 +38,78 @@ describe('predict', () => {
       expect(predictOutcomeWorth('no', 'no')).toBe(1)
       expect(predictOutcomeWorth('yes', 'no')).toBe(0)
       expect(predictOutcomeWorth(null, 'yes')).toBe(0)
+    })
+  })
+
+  // Предел — это одно число на две стороны сделки. Направление задаётся знаком
+  // shares: невыгода покупателю лежит выше цены, продавцу — ниже. Ошибка в
+  // знаке отклоняла бы как раз выгодные сделки, а не рискованные.
+  describe('worstSharePrice', () => {
+    it('lifts the bound above the quoted average for a buy', () => {
+      expect(worstSharePrice(5, 10)).toBe(0.505)
+      expect(worstSharePrice(0.61, 10)).toBe(0.06161)
+      // 0.07/3 = 0.02333… — цена, которая не лежит на сетке разряда, поэтому
+      // здесь видно, в какую сторону округляется предел: вверх, к невыгоде.
+      expect(worstSharePrice(0.07, 3)).toBe(0.023567)
+      expect(worstSharePrice(0.123456789, 7)).toBe(0.017814)
+    })
+
+    it('drops the bound below the quoted average for a sell', () => {
+      expect(worstSharePrice(-1.5, -3)).toBe(0.495)
+      expect(worstSharePrice(-0.03, -60)).toBe(0.000495)
+      // Те же числа, что и в покупке, но сделка обратная: вниз по сетке.
+      expect(worstSharePrice(-0.07, -3)).toBe(0.0231)
+      expect(worstSharePrice(-0.123456789, -7)).toBe(0.01746)
+    })
+
+    it('takes the whole tolerance and no more', () => {
+      // Ни половины запаса, ни двойной: округление идёт наружу ровно на один
+      // разряд, и проверяется на числе между разрядами — иначе обе стороны
+      // неровности дают один и тот же ответ.
+      const tol = PREDICT_SLIPPAGE_TOLERANCE
+      for (const [cost, shares] of [
+        [0.07, 3],
+        [0.123456789, 7],
+      ] as const) {
+        const avg = Math.abs(cost) / Math.abs(shares)
+        expect(worstSharePrice(cost, shares)).toBeGreaterThanOrEqual(avg * (1 + tol))
+        expect(worstSharePrice(cost, shares)).toBeLessThan(avg * (1 + tol) + 1e-6)
+      }
+      for (const [cost, shares] of [
+        [-0.07, -3],
+        [-0.123456789, -7],
+      ] as const) {
+        const avg = Math.abs(cost) / Math.abs(shares)
+        expect(worstSharePrice(cost, shares)).toBeLessThanOrEqual(avg * (1 - tol))
+        expect(worstSharePrice(cost, shares)).toBeGreaterThan(avg * (1 - tol) - 1e-6)
+      }
+    })
+
+    it('stays inside the interval the backend field accepts', () => {
+      // limit_price = Field(gt=0, le=1). На верхнем краю округление вверх
+      // вылезло бы за 1.0, и собственный предел отвергал бы сделку сам;
+      // на нижнем floor от мизерной цены дал бы 0 — то же самое.
+      expect(worstSharePrice(0.995, 1)).toBe(1)
+      expect(worstSharePrice(1, 1)).toBe(1)
+      expect(worstSharePrice(-1e-9, -1)).toBe(1e-6)
+      expect(worstSharePrice(-0.0000004, -1)).toBe(1e-6)
+    })
+
+    it('speaks the six digits the refusal is printed with', () => {
+      // Бэкенд пишет «вышла по {avg:.6f}» — числа в карточке, в запросе и в
+      // отказе обязаны сойтись, иначе человек сравнивает цену с чем-то одним,
+      // а отказ получает про другое.
+      for (const [cost, shares] of [
+        [5, 10],
+        [-1.5, -3],
+        [0.123456789, 7],
+        [-0.03, -60],
+        [0.9999999, 1],
+      ] as const) {
+        const v = worstSharePrice(cost, shares)
+        expect(v).toBe(Math.round(v * 1e6) / 1e6)
+        expect(String(v)).not.toMatch(/e/)
+      }
     })
   })
 
@@ -108,18 +182,20 @@ describe('predict', () => {
       expect((fetchMock.mock.calls[1][1] as RequestInit).method).toBe('POST')
     })
 
-    it('sells with negative shares on the same endpoint as buying', async () => {
+    // limit_price уезжает всегда: бэкенд объявил его обязательным, и клиент,
+    // который его не посчитал, получил бы 422 вместо сделки.
+    it('sells with negative shares and its own price bound on the same endpoint as buying', async () => {
       ok({ cost_usd: -4.2 })
-      await tradePredictMarket('m1', 'yes', -3)
+      await tradePredictMarket('m1', 'yes', -3, worstSharePrice(-1.5, -3))
       const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
       expect(url).toBe(`${BACKEND_URL}/predict/markets/m1/trade`)
       expect(init.method).toBe('POST')
-      expect(jsonBody(init)).toEqual({ outcome: 'yes', shares: -3 })
+      expect(jsonBody(init)).toEqual({ outcome: 'yes', shares: -3, limit_price: 0.495 })
     })
 
     it('surfaces the backend reason, not a bare status code', async () => {
       fail(409, 'рынок уже резолвлен с исходом yes')
-      await expect(tradePredictMarket('m1', 'yes', 5)).rejects.toThrow('уже резолвлен')
+      await expect(tradePredictMarket('m1', 'yes', 5, 1)).rejects.toThrow('уже резолвлен')
     })
 
     it('falls back to the status code when the error body is empty', async () => {

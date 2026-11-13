@@ -78,15 +78,17 @@ export type FundingSizing = {
 
 // Ответ GET /subscription (backend/api/agent.py): «none» синтезируется бэкендом,
 // когда записи о подписке нет, остальные — значения Tier из
-// backend/subscription.py. days_left_in_trial приходит только у подписки. Чей это
-// тир, решает токен сессии: эндпоинт не принимает user_id, потому что присланный
-// id — пожелание клиента.
+// backend/subscription.py. Ключ `days_left_in_trial` бэкенд отдаёт всегда, в том
+// числе значением null (см. `_subscription_body`), поэтому он не опциональный, а
+// обязателен и пустеет через null: absent был бы отдельным состоянием, которого
+// в ответе нет. Чей это тир, решает токен сессии: эндпоинт не принимает user_id,
+// потому что присланный id — пожелание клиента.
 export type Subscription = {
   tier: "none" | "free_trial" | "free" | "pro";
   has_ai_agent: boolean;
   has_copy_trading: boolean;
   has_predict_markets: boolean;
-  days_left_in_trial?: number;
+  days_left_in_trial: number | null;
 };
 
 // Вкладки верхнего уровня. Тип живёт здесь, а не в App.tsx, потому что

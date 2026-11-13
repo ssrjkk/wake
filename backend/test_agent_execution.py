@@ -36,18 +36,18 @@ from unittest.mock import patch
 # config: api.agent тянет за собой agent_db и database, а config читает env один
 # раз при импорте. Без этой строки алфавитный порядок сборки (этот файл идёт
 # перед test_api_smoke) оставлял тесты входа на фиктивных секретах из backend/.env.
-import testsupport  # noqa: E402, F401  (импорт ради порядка env)
-import agent_runner  # noqa: E402
-from agent_decision import AgentDecision, rule_based_decision  # noqa: E402
-from agent_memory import AgentMemoryStore  # noqa: E402
-from agent_runner import (  # noqa: E402
+import testsupport  # noqa: F401  (импорт ради порядка env)
+import agent_runner
+from agent_decision import AgentDecision, rule_based_decision
+from agent_memory import AgentMemoryStore
+from agent_runner import (
     MAX_CONTEXT_NOTE_CHARS,
     SubmissionUnconfirmed,
     _client_order_index,
     run_agent_step,
 )
-from api.agent import _market_constraints  # noqa: E402
-from risk_limits import RiskLimits, UserRiskState  # noqa: E402
+from api.agent import _market_constraints
+from risk_limits import RiskLimits, UserRiskState
 
 BTC = 100_000.0
 UP = [BTC, 103_000.0]  # momentum +3% -> long

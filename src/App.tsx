@@ -31,6 +31,7 @@ import {
 import {
   getOrderBooks,
   getAccountByL1Address,
+  isTradeable,
   listOwnFollows,
   createFollow,
   setFollowPaused,
@@ -85,6 +86,7 @@ import {
   avatarColor,
   shortHandle,
   toastVariant,
+  trialToast,
   usd,
   fmt,
 } from "./components/utils";
@@ -456,7 +458,11 @@ export default function App() {
 
   const currentMarket = markets.find((m) => m.symbol === asset);
 
+  /* Окно выбора рынка — тот же список, что рельс Терминала: снять рынок с торгов
+     значит оставить его в книге со свечами, но без заявок, и предлагать его здесь
+     означало бы «выбрал — получил пустой тикет». */
   const filteredMarkets = markets
+    .filter(isTradeable)
     .filter(
       (m) => marketCategory === "Все" || categorizeMarket(m) === marketCategory,
     )
@@ -850,9 +856,14 @@ export default function App() {
       return;
     }
     try {
-      await backendJson("/subscription/trial", { method: "POST" });
-      setSubscription(await backendJson<Subscription>("/subscription"));
-      setToast("Пробный период начат — 14 дней");
+      // Ответ /subscription/trial — это и есть подписка после записи, второй GET
+      // только добавил бы гонку: перечитанное могло бы уже отличаться от
+      // созданного этим же запросом.
+      const sub = await backendJson<Subscription>("/subscription/trial", {
+        method: "POST",
+      });
+      setSubscription(sub);
+      setToast(trialToast(sub));
     } catch (e) {
       setToast(`Бэкенд не отвечает: ${errorText(e)}`);
     }

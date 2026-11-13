@@ -1,7 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { BACKEND_URL, SIGNING_SERVICE_URL } from './config'
 import { jsonBody } from '../test/request'
-import { setNetwork, getNetwork, getOrderBooks, getCandles, getRecentTrades, getAccountByL1Address, getMarketOverview, listOwnFollows, createFollow, setFollowPaused, deleteFollow, getMirrorLog, registerLeader, getMyLeader, setLeaderActive, openInterestUsd, toBaseUnits, toPriceTicks, randomClientOrderIndex, placeOrderViaSigningService, getSignerHealth, SignerNetworkMismatch, depthLevels, getOrderBookDepth, depthSpread, type OrderBook, type SignerHealth } from './lighter'
+import { setNetwork, getNetwork, getOrderBooks, getCandles, getTicker, getRecentTrades, getAccountByL1Address, getMarketOverview, listOwnFollows, createFollow, setFollowPaused, deleteFollow, getMirrorLog, registerLeader, getMyLeader, setLeaderActive, openInterestUsd, toBaseUnits, toPriceTicks, randomClientOrderIndex, placeOrderViaSigningService, getSignerHealth, SignerNetworkMismatch, depthLevels, getOrderBookDepth, depthSpread, type OrderBook, type SignerHealth } from './lighter'
 
 describe('открытый интерес в долларах', () => {
   // Живой /orderBooks (mainnet, 2026-10-24) отдаёт open_interest_usd СТРОКОЙ
@@ -612,5 +612,70 @@ describe('отправка ордера в сервис подписи', () => {
     expect(calledUrlWithTimeout(global.fetch as ReturnType<typeof vi.fn>)).toContain('/health')
     expect(health.network).toBe('mainnet')
     expect(health.dry_run).toBe(false)
+  })
+})
+
+describe('кэш ценника списка', () => {
+  /* Один market_id — разные рынки в двух сетях. Замер /orderBooks?filter=all
+     (2026-11-13): mainnet — 246 книг, testnet — 9, общих номеров пять (4095…4099),
+     и под 4096 там OURA, а там BTC. Ключ без сети отдал бы цену одной площадки
+     в строке другой на весь TTL, а remount Терминала этого не лечит: Map живёт
+     на уровне модуля, сеть у него — часть адреса, из которого пришёл ответ. */
+  const candles = (close: number) => ({
+    ok: true,
+    json: () =>
+      Promise.resolve({
+        c: [{ t: 1, o: close, h: close, l: close, c: close, v: 1, V: close }],
+      }),
+  })
+
+  beforeEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  // Сеть — глобальное состояние модуля, и следующий describe читает её как
+  // есть: без возврата к mainnet чужие проверки начали бы брать testnet-адрес.
+  afterEach(() => setNetwork('mainnet'))
+
+  it('спрашивает свою сеть, а не ту, где этот id видели минуту назад', async () => {
+    const fetchMock = vi.fn()
+    fetchMock.mockImplementation((url: string) =>
+      Promise.resolve(candles(url.includes('testnet') ? 3000 : 12.34))
+    )
+    global.fetch = fetchMock
+
+    setNetwork('mainnet')
+    expect((await getTicker(4096))?.price).toBe(12.34)
+    setNetwork('testnet')
+    expect((await getTicker(4096))?.price).toBe(3000)
+    // Повтор в той же сети — без нового запроса: кэш на виток и существует для
+    // того, чтобы каждый скролл списка не спрашивал Lighter по тем же рынкам.
+    expect((await getTicker(4096))?.price).toBe(3000)
+    expect(fetchMock.mock.calls).toHaveLength(2)
+  })
+
+  it('не держит отказ: строка вернётся к жизни на следующем витке', async () => {
+    let up = false
+    const fetchMock = vi.fn()
+    fetchMock.mockImplementation(() =>
+      up
+        ? Promise.resolve(candles(77))
+        : Promise.resolve({ ok: false, status: 500, json: () => Promise.resolve({}) })
+    )
+    global.fetch = fetchMock
+    setNetwork('mainnet')
+
+    expect(await getTicker(4098)).toBeNull()
+    up = true
+    expect((await getTicker(4098))?.price).toBe(77)
+  })
+
+  it('пустой ряд свечей — прочерк, а не нулевая цена', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ c: [] }),
+    })
+    setNetwork('mainnet')
+    expect(await getTicker(4099)).toBeNull()
   })
 })

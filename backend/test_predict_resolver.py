@@ -96,7 +96,9 @@ class TestPredictResolver(unittest.TestCase):
         процесс: он приходит тиком позже, а не в ту же секунду."""
         self.create_price("trade-then-close", 120_000, ">=", self.now + 3600)
         cost = _run(
-            pdb.record_trade(str(uuid.uuid4()), "u1", "trade-then-close", "yes", 10)
+            pdb.record_trade(
+                str(uuid.uuid4()), "u1", "trade-then-close", "yes", 10, 1.0
+            )
         )
         self.assertGreater(cost, 0)
 
@@ -105,7 +107,9 @@ class TestPredictResolver(unittest.TestCase):
 
         with self.assertRaises(ValueError):
             _run(
-                pdb.record_trade(str(uuid.uuid4()), "u2", "trade-then-close", "yes", 1)
+                pdb.record_trade(
+                    str(uuid.uuid4()), "u2", "trade-then-close", "yes", 1, 1.0
+                )
             )
         self.assertEqual(
             _run(pdb.claim_winnings("u1", "trade-then-close")),

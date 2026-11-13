@@ -229,6 +229,34 @@ class TestCorruptBucketIsNotRedisOutage(unittest.TestCase):
             asyncio.run(rl.allow("k"))
 
 
+class TestPing(unittest.TestCase):
+    """/ready по ping — единственное, чем оператор узнаёт про мёртвый лимитер.
+    Голый `except Exception` делал из этого диагноз: собственная ошибка модуля
+    давала ровно тот же `redis: fail` и 503, что и отказ соединения, и чинили
+    тогда Redis, которого не было. Тот же разделитель, что уже стоит в allow()."""
+
+    def test_redis_failure_is_false_and_says_why(self):
+        rl = make_limiter()
+        rl.redis = _FailingRedis(ConnectionError("нет коннекта"))
+        records = _capture("wake.ratelimit")
+        try:
+            self.assertFalse(asyncio.run(rl.ping()))
+        finally:
+            records.stop()
+        text = "\n".join(r.getMessage() for r in records.records)
+        self.assertIn("ping", text)
+        self.assertIn("нет коннекта", text)
+
+    def test_our_own_bug_is_not_reported_as_redis(self):
+        rl = make_limiter()
+        rl.redis = _FailingRedis(AttributeError("у клиента нет такого метода"))
+        with self.assertRaises(AttributeError):
+            asyncio.run(rl.ping())
+
+    def test_live_redis_is_true(self):
+        self.assertTrue(asyncio.run(make_limiter().ping()))
+
+
 class _FailingRedis:
     """Замена клиента Redis, которая всегда бросает переданный исключение.
 
@@ -240,6 +268,9 @@ class _FailingRedis:
         self._error = error
 
     async def hmget(self, *args, **kwargs):
+        raise self._error
+
+    async def ping(self, *args, **kwargs):
         raise self._error
 
     async def transaction(self, *args, **kwargs):

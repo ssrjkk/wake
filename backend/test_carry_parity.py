@@ -198,20 +198,29 @@ class TestPanelUsesTheSharedRule(unittest.TestCase):
                 self.assertNotIn('endsWith("/USDC")', path.read_text(encoding="utf-8"))
 
     def test_carry_module_gates_both_legs_on_status(self):
-        """Обе ноги читают `status`, и читают в разных смыслах: перп берётся
+        """Обе ноги читают статус рынка, и читают в разных смыслах: перп берётся
         только активный, неактивный спот отвергается. Проверка по строкам
         правила, а не по поведению, нужна ровно потому, что поведение здесь
-        проверяет vitest, а этот гейт его не запускает."""
+        проверяет vitest, а этот гейт его не запускает.
+
+        Читается не литерал `status === "active"`, а вызов `isTradeable`: с
+        этого года торгуемость рынка решает одна функция в `src/lib/lighter.ts`,
+        и правило, повторённое строкой в панели, расходится с ней в тот день,
+        когда площадка добавит второй признак. Сырое сравнение с флагом внутри
+        модуля правила поэтому красное: оно и есть второй владелец правила."""
+        source = TS_CARRY.read_text(encoding="utf-8")
         gates = [
             line.strip()
-            for line in TS_CARRY.read_text(encoding="utf-8").splitlines()
-            if "market_type" in line and "status" in line
+            for line in source.splitlines()
+            if "market_type" in line and "isTradeable" in line
         ]
         self.assertEqual(len(gates), 2, gates)
         self.assertIn('market_type === "perp"', gates[0])
-        self.assertIn('status === "active"', gates[0])
+        self.assertIn("isTradeable(m)", gates[0])
         self.assertIn('market_type !== "spot"', gates[1])
-        self.assertIn('status !== "active"', gates[1])
+        self.assertIn("!isTradeable(m)", gates[1])
+        for bypass in ('status === "active"', 'status !== "active"'):
+            self.assertNotIn(bypass, source, f"второй владелец флага статуса: {bypass}")
 
 
 if __name__ == "__main__":

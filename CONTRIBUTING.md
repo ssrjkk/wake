@@ -11,7 +11,7 @@ PostgreSQL and Redis. There is no file database: `backend/database.py` opens an 
 | Tool | Version | Where it is pinned |
 | --- | --- | --- |
 | Node.js | 22 | `NODE_VERSION` in `.github/workflows/ci.yml`, `node:22-alpine` in compose |
-| Python | 3.12 | `PYTHON_VERSION` in CI; the runtime image is `python:3.14-slim` |
+| Python | 3.12 | `PYTHON_VERSION` in CI and `python:3.12-slim` in the Dockerfile — the same version, otherwise a green CI says nothing about the image that runs; `backend/test_deployment_manifest.py` enforces it |
 | PostgreSQL | 16 | `postgres:16-alpine` in CI services and in compose |
 | Redis | 8 | `redis:8-alpine` in CI and compose; the Python client is a separate version line — `redis>=8.1.0` in requirements |
 | Ruff | 0.15.8 | installed by the CI lint job; a different ruff disagrees with CI about formatting |
@@ -271,7 +271,7 @@ export WAKE_TEST_DATABASE_URL=postgresql+asyncpg://wake:wake@localhost:5432/wake
 
 **Python**
 
-- `ruff format` is the arbiter of formatting — run it instead of hand-matching its output. Line length 88, rules `E4`/`E7`/`E9`/`F`, all fixed in `backend/ruff.toml` so a ruff upgrade cannot silently change the rule set.
+- `ruff format` is the arbiter of formatting — run it instead of hand-matching its output. Line length 88, rules `E4`/`E7`/`E9`/`F` plus `RUF100` (a `# noqa` that suppresses nothing is itself an error, so a directive cannot outlive the rule it once silenced), all fixed in `backend/ruff.toml` so a ruff upgrade cannot silently change the rule set.
 - Type hints where they carry information.
 - Comments explain the constraint that makes a line non-obvious — why the pool is disposed inside its own loop, why a query avoids `IN` with a variable list. Code comments in the backend are in Russian; documentation and identifiers are in English.
 - No `print` in the request path — log through the module logger; Sentry is wired when `SENTRY_DSN` is set.
@@ -340,7 +340,7 @@ PostgreSQL и Redis. Файловой базы больше нет: `backend/dat
 | Инструмент | Версия | Где закреплено |
 | --- | --- | --- |
 | Node.js | 22 | `NODE_VERSION` в `.github/workflows/ci.yml`, `node:22-alpine` в compose |
-| Python | 3.12 | `PYTHON_VERSION` в CI; runtime-образ — `python:3.14-slim` |
+| Python | 3.12 | `PYTHON_VERSION` в CI и `python:3.12-slim` в Dockerfile — одна и та же версия, иначе зелёный CI ничего не знает про образ, который крутится в проде; сверяет `backend/test_deployment_manifest.py` |
 | PostgreSQL | 16 | `postgres:16-alpine` в CI и в compose |
 | Redis | 8 | `redis:8-alpine` в CI и compose; python-клиент — отдельная линейка версий, `redis>=8.1.0` в requirements |
 | Ruff | 0.15.8 | ставит CI-джоб линтера; другой ruff расходится с CI в форматировании |
@@ -604,7 +604,7 @@ export WAKE_TEST_DATABASE_URL=postgresql+asyncpg://wake:wake@localhost:5432/wake
 
 **Python**
 
-- Форматирование определяет `ruff format` — запускайте его, а не подгоняйте вид вручную. Длина строки 88, правила `E4`/`E7`/`E9`/`F` закреплены в `backend/ruff.toml`, чтобы апгрейд ruff не поменял набор правил молча.
+- Форматирование определяет `ruff format` — запускайте его, а не подгоняйте вид вручную. Длина строки 88, правила `E4`/`E7`/`E9`/`F` плюс `RUF100` (`# noqa`, который ничего не подавляет, сам становится ошибкой линтера, чтобы директива не переживала правило, которое когда-то заглушала), всё закреплено в `backend/ruff.toml`, чтобы апгрейд ruff не поменял набор правил молча.
 - Type hints там, где они несут информацию.
 - Комментарий объясняет ограничение, из-за которого строка неочевидна: почему пул освобождается внутри своего цикла, почему запрос обходит `IN` со списком переменного размера. Комментарии в бэкенде на русском; документация и идентификаторы на английском.
 - Никаких `print` в пути обработки запроса — логгер модуля; Sentry подключается, когда задан `SENTRY_DSN`.

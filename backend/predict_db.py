@@ -159,7 +159,12 @@ async def market_stats() -> dict[str, dict]:
 
 
 async def record_trade(
-    trade_id: str, user_id: str, market_id: str, outcome: str, shares: float
+    trade_id: str,
+    user_id: str,
+    market_id: str,
+    outcome: str,
+    shares: float,
+    limit_price: float,
 ) -> float:
     """Покупка (shares>0) или продажа (shares<0). Возвращает cost_usd (положительное —
     юзер платит, отрицательное — юзеру платят). Меняет q_yes/q_no рынка, позицию и
@@ -170,6 +175,19 @@ async def record_trade(
     PostgreSQL два параллельных трейда прочитали бы одинаковые q_yes/q_no, и второй
     записал бы цену, посчитанную от уже устаревшего пула — то есть продал бы shares
     по цене, которой рынок уже не имел.
+
+    limit_price — худшая цена одной доли ($0…$1), которую согласился принять
+    человек. Проверяется здесь, внутри блокировки, по факту исполненной кривой, а
+    не по ценам, которые фронт показывал в /preview: между показом карточки и POST
+    любой человек двигает пул, и без предела Wake исполнительно записал бы сделку по
+    цене, которую человек не видел. Направление сравнения зависит от знака shares:
+    покупка не имеет права выйти ДОРОЖЕ предела, продажа — ДЕШЕВЛЕ; однополее
+    сравнение отклоняло бы как раз выгодные сделки. «Любая цена» у двух сторон —
+    разные числа поля: верх (1.0) для покупки, низ (1e-6) для продажи.
+
+    Порядок проверок — сначала позиция, потом цена: отказ обязан называть
+    настоящую причину. Предел, проверяемый первым, рассказывал про цену человеку,
+    который просто пытался продать то, чего у него нет.
 
     Дедлайн закрывает приём сделок здесь, а не только в интерфейсе: исход
     price-рынка определён в resolve_at (оракул берёт цену на этот момент), а
@@ -193,11 +211,10 @@ async def record_trade(
                 "сделки не принимаются"
             )
 
-        amm = LMSRMarket(b=market.b, q_yes=market.q_yes, q_no=market.q_no)
-        cost = amm.trade(outcome, shares)
-        market.q_yes = amm.q_yes
-        market.q_no = amm.q_no
-
+        # Позиция проверяется до кривой. Продажа больше, чем человек держит, —
+        # отказ независимо от того, хорош ли его предел: проверка цены, стоящая
+        # здесь первой, выдавала бы «ниже предела» там, где настоящая причина —
+        # «нечего продавать».
         pos = await session.scalar(
             select(PredictPosition).where(
                 PredictPosition.user_id == user_id,
@@ -205,9 +222,36 @@ async def record_trade(
                 PredictPosition.outcome == outcome,
             )
         )
-        if pos is None:
-            if shares < 0:
+        if shares < 0:
+            if pos is None:
                 raise ValueError("нельзя продать shares без существующей позиции")
+            if pos.shares + shares < -1e-9:
+                raise ValueError(
+                    "нельзя продать больше shares, чем есть в позиции"
+                    f" (в позиции {pos.shares}, продают {abs(shares)})"
+                )
+
+        amm = LMSRMarket(b=market.b, q_yes=market.q_yes, q_no=market.q_no)
+        cost = amm.trade(outcome, shares)
+        # Цена одной доли по факту кривой. Отрицательный cost у продажи — это
+        # деньги человеку, поэтому модуль: сравнение идёт с той же ценой доли,
+        # только в разные стороны.
+        avg = abs(cost) / abs(shares)
+        if shares > 0 and avg > limit_price:
+            raise ValueError(
+                f"покупка {outcome} по {shares} shares вышла по {avg:.6f} за долю, "
+                f"что хуже предела {limit_price:.6f} — сделка не записана"
+            )
+        if shares < 0 and avg < limit_price:
+            raise ValueError(
+                f"продажа {outcome} по {abs(shares)} shares вышла по {avg:.6f} за долю, "
+                f"что ниже предела {limit_price:.6f} — сделка не записана"
+            )
+        market.q_yes = amm.q_yes
+        market.q_no = amm.q_no
+
+        if pos is None:
+            # Сюда доходят только покупки: продажа без позиции отклонена выше.
             session.add(
                 PredictPosition(
                     id=trade_id + "-pos",
@@ -218,10 +262,7 @@ async def record_trade(
                 )
             )
         else:
-            new_shares = pos.shares + shares
-            if new_shares < -1e-9:
-                raise ValueError("нельзя продать больше shares, чем есть в позиции")
-            pos.shares = max(new_shares, 0)
+            pos.shares = max(pos.shares + shares, 0)
 
         session.add(
             PredictTrade(

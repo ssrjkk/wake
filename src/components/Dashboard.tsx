@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { ArrowRight, BarChart3, Percent, RefreshCw, ShieldAlert, TriangleAlert, Users } from "lucide-react";
-import { getMarketOverview, type MarketOverview, type MarketOverviewRow, type OrderBook } from "../lib/lighter";
+import { getMarketOverview, isTradeable, type MarketOverview, type MarketOverviewRow, type OrderBook } from "../lib/lighter";
 import { getMarkets as getArcusMarkets, getMidPrices, isArcusOnline, arcusFundingHourly, arcusAnnualizedFunding, type ArcusMarket } from "../lib/arcus";
 import { errorText } from "../lib/backend";
 import { getPredictMarkets, predictTimeLeft, type PredictMarket } from "../lib/predict";
@@ -115,9 +115,11 @@ export default function Dashboard({ setTab, setAsset, markets }: DashboardProps)
   /* Тикеры Lighter по базовому активу: аркусная строка ведёт в Терминал, а тот
       ищет рынок по символу книги. Без проверки клик по «TSLA», которого на
       Lighter нет, открывал бы терминал с надписью «Рынок не загружен» —
-      выглядит как поломка Терминала, а не как отсутствие инструмента. */
+      выглядит как поломка Терминала, а не как отсутствие инструмента. Тот же
+      isTradeable, что фильтрует рельс Терминала: снятый с торгов рынок в этот
+      рельс не попадает, значит и вести строку на него некуда. */
   const lighterSymbols = useMemo(
-    () => new Set(markets.map((m) => m.symbol.toUpperCase())),
+    () => new Set(markets.filter(isTradeable).map((m) => m.symbol.toUpperCase())),
     [markets]
   );
 

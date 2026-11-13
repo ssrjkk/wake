@@ -34,7 +34,11 @@ class TestPredictLifecycle(unittest.TestCase):
         )
 
     def trade(self, user_id, outcome, shares):
-        return _run(pdb.record_trade(str(uuid.uuid4()), user_id, "m1", outcome, shares))
+        return _run(
+            pdb.record_trade(
+                str(uuid.uuid4()), user_id, "m1", outcome, shares, 1.0
+            )
+        )
 
     def test_full_lifecycle_from_creation_to_payout(self):
         # Трое торгуют до дедлайна — цена рынка (не Lighter, а вероятность YES)

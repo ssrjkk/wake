@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from "react";
 import { RefreshCw, Percent, ArrowUpRight } from "lucide-react";
-import { getFundingRates, getCandles, type FundingRateRow, type OrderBook } from "../lib/lighter";
+import { getFundingRates, getCandles, isTradeable, type FundingRateRow, type OrderBook } from "../lib/lighter";
 import { getMarkets as getArcusMarkets, isArcusPerp, type ArcusMarket } from "../lib/arcus";
 import { pairableCarryMarkets } from "../lib/carry";
 import { backendJson, errorText } from "../lib/backend";
@@ -83,7 +83,7 @@ export default function Funding({ markets, setToast }: FundingProps) {
     const carry = pairableCarryMarkets(markets);
     const perpById = new Map(
       markets
-        .filter((m) => m.market_type === "perp" && m.status === "active")
+        .filter((m) => m.market_type === "perp" && isTradeable(m))
         .map((m) => [m.market_id, m]),
     );
 

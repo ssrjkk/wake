@@ -82,6 +82,19 @@ export function openInterestUsd(m: OrderBook): number {
   return Number.isFinite(v) && v > 0 ? v : 0;
 }
 
+/** Рынок, на котором вообще что-то исполнится.
+ *
+ * Владельцем этого правила книга обязана быть одна: снять рынок с торгов —
+ * значит поставить status "inactive", НЕ убрать его из книги и НЕ обнулить
+ * свечи. Замер /orderBooks?filter=all (mainnet, 2026-11-13): 246 книг, из них
+ * 26 inactive; у HANMI (#148) свечевая лента выдаёт последнюю цену 293001 при
+ * пустой заявке (orderBookOrders → total_asks 0, total_bids 0). Значит «есть
+ * цена» о торгуемости не говорит ничего, и всякий список, откуда открывают
+ * тикет, обязан спросить статус — а где именно, решать панели, а не правилу. */
+export function isTradeable(m: Pick<OrderBook, "status">): boolean {
+  return m.status === "active";
+}
+
 export async function getOrderBooks(filter: "all" | "spot" | "perp" = "perp"): Promise<OrderBook[]> {
   const res = await timedFetch(`${BASE_URL()}/orderBooks?filter=${filter}`);
   if (!res.ok) throw new Error(`Lighter API ${res.status}`);
@@ -135,6 +148,50 @@ export async function getCandles(marketId: number, resolution: Resolution, count
   if (!res.ok) throw new Error(`Lighter API ${res.status}`);
   const data = await json<{ c?: Candle[] }>(res);
   return (data.c ?? []).slice(-count);
+}
+
+/** Одна строка ценника: цена закрытия последней часовой свечи, изменение за
+ *  окно и оборот. Своего «тикера» у Lighter нет (/tickers и /markets отвечают
+ *  403 — см. комментарий у TICKER_ROWS в Терминале), поэтому список строк
+ *  собирается из свечей, а не читается одним ответом. */
+export type Ticker = { price: number; changePct: number | null; volume24h: number };
+
+/* Виток, на котором держится кэш. Интервал наружу: опрос списка обязан совпадать
+   с TTL, иначе он либо спрашивает Lighter на каждом тике, либо год показывает
+   прошлогоднее число. */
+export const TICKER_TTL_MS = 60_000;
+
+// Кэш различает сети, и это не перестраховка: market_id у Lighter не уникален
+// между mainnet и testnet (замер /orderBooks?filter=all, 2026-11-13 — пять
+// общих номеров 4095…4099 под разными тикерами: 4096 — OURA там и BTC там).
+// Ключевать одним market_id означало бы показать цену одной площадки в строке
+// другой на целый TTL, а переключение сети remount'ом не лечит — Map живёт здесь.
+const tickerCache = new Map<string, { at: number; value: Ticker | null }>();
+
+export async function getTicker(marketId: number): Promise<Ticker | null> {
+  const key = `${getNetwork()}:${marketId}`;
+  const hit = tickerCache.get(key);
+  if (hit && Date.now() - hit.at < TICKER_TTL_MS) return hit.value;
+  try {
+    const candles = await getCandles(marketId, "1h", 24);
+    if (!candles.length) {
+      tickerCache.set(key, { at: Date.now(), value: null });
+      return null;
+    }
+    const last = candles[candles.length - 1];
+    const first = candles[0];
+    const value: Ticker = {
+      price: last.c,
+      changePct: first.o ? (last.c - first.o) / first.o : null,
+      volume24h: candles.reduce((sum, candle) => sum + candle.V, 0),
+    };
+    tickerCache.set(key, { at: Date.now(), value });
+    return value;
+  } catch {
+    // Просроченный ответ не должен выбивать цены из всего списка: строка
+    // остаётся с прочерком и обновится на следующем витке.
+    return null;
+  }
 }
 
 export type Trade = {

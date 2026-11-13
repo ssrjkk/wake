@@ -28,14 +28,14 @@ import re
 import unittest
 from pathlib import Path
 
-import testsupport  # noqa: F401,E402  (задаёт env раньше app и config)
-import lighter_rest  # noqa: E402
-from test_api_contract import (  # noqa: F401,E402
+import testsupport  # задаёт env раньше app и config
+import lighter_rest
+from test_api_contract import (
     _normalize as ts_pattern,  # служебные имена: тот же разбор вызова, вторая сверка
     _read_literal as read_string,
     matches as path_matches,
 )
-import test_api_smoke  # noqa: E402
+import test_api_smoke
 
 # Класс-посев берётся по имени, а сидящие рядом тесты — через модуль:
 # `from test_api_smoke import TestMarketsOverview` привязал бы чужой класс к
@@ -525,12 +525,23 @@ class Diff:
         self.check_value(payload, expr, path, where)
 
 
-def typed_get_calls():
-    """(путь, тип-аргумент) для каждого типизированного GET-вызова фронта."""
+def typed_calls(method: str):
+    """(путь, тип-аргумент) для каждого типизированного вызова фронта данным
+    методом.
+
+    Отдельно от GET-вида это не косметика: фронт начал читать ответ
+    `POST /subscription/trial` как данные, а не как «главное, что запрос дошёл»,
+    и сверять поля такого ответа невозможно, пока у `check` есть только
+    GET-список."""
     scan()
     return {
-        (call["path"], call["generic"]) for call in CALLS if call["method"] == "GET"
+        (call["path"], call["generic"]) for call in CALLS if call["method"] == method
     }
+
+
+def typed_get_calls():
+    """(путь, тип-аргумент) для каждого типизированного GET-вызова фронта."""
+    return typed_calls("GET")
 
 
 # Ключи, которые бэкенд отдаёт, а тип их не объявляет. Локатор —
@@ -708,18 +719,18 @@ class TestFieldContract(CopyTradingSeeding):
         "Content-Type": "application/json",
     }
 
-    async def check(self, request_path: str, response):
+    async def check(self, request_path: str, response, method: str = "GET"):
         """Сверка одного ответа со всеми типами, которыми фронт его объявил."""
         self.assertEqual(response.status_code, 200, response.text[:400])
         payload = response.json()
         declared = sorted(
             (route, generic)
-            for route, generic in typed_get_calls()
+            for route, generic in typed_calls(method)
             if path_matches(route, request_path)
         )
         self.assertTrue(
             declared,
-            f"{request_path}: фронт не объявляет этот ответ типом — сверка нечего не видит",
+            f"{method} {request_path}: фронт не объявляет этот ответ типом — сверка ничего не видит",
         )
         diff = Diff()
         for route, generic in declared:
@@ -853,7 +864,7 @@ class TestFieldContract(CopyTradingSeeding):
         headers, _ = await self.sign_in_wallet(1505)
         r = await self.client.post(
             f"/predict/markets/{market_id}/trade",
-            json={"outcome": "yes", "shares": 5},
+            json={"outcome": "yes", "shares": 5, "limit_price": 1.0},
             headers=headers,
         )
         self.assertEqual(r.status_code, 200, r.text[:200])
@@ -870,7 +881,14 @@ class TestFieldContract(CopyTradingSeeding):
 
     async def test_subscription_and_health_fields(self):
         headers, _ = await self.sign_in_wallet(1506)
-        await self.client.post("/subscription/trial", headers=headers)
+        # Ответ трайла сверяется так же, как ответ GET: фронт читает его телом,
+        # а не фактом «запрос дошёл» (App.tsx ставит в состояние именно его).
+        trial = await self.check(
+            "/subscription/trial",
+            await self.client.post("/subscription/trial", headers=headers),
+            method="POST",
+        )
+        self.assertEqual(trial["tier"], "free_trial")
         body = await self.check(
             "/subscription", await self.client.get("/subscription", headers=headers)
         )
@@ -916,6 +934,10 @@ class TestFieldContract(CopyTradingSeeding):
                 "/agent/memory",
             )
         }
+        # Метод другой, а тело то же: _subscription_body собирает одним вызовом,
+        # и посев над ним в test_subscription_and_health_fields сверяет ответ
+        # трайла полем в поле, а не записывает его «для галочки».
+        covered |= {("POST", "/subscription/trial")}
         reasons = {
             # POST отвечает на запрос тела, и его поля читаются в том тесте,
             # который этот запрос посылает: отдельный посев здесь удвоил бы
