@@ -114,23 +114,34 @@ export function Skeleton({
   return <div className="skeleton" style={{ height, width }} />;
 }
 
+// Вкладка обязана быть tab'ом, а не кнопкой с aria-current: `aria-selected`
+// валиден только вместе с role="tab" внутри role="tablist", поэтому атрибут
+// выбранного состояния живёт рядом с ролью, а не вместо неё. Ровно одна вкладка
+// остаётся в tab-последовательности (активная), остальные достигаются стрелками —
+// иначе девять подписей на телефоне дали бы девять остановок Tab подряд.
 export function NavTab({
   active,
   onClick,
   label,
   live,
+  id,
   icon: Icon,
 }: {
   active: boolean;
   onClick: () => void;
   label: string;
   live?: boolean;
+  id: string;
   icon?: LucideIcon;
 }) {
   return (
     <button
+      role="tab"
+      id={id}
+      aria-selected={active}
+      aria-controls="tab-panel"
+      tabIndex={active ? 0 : -1}
       onClick={onClick}
-      aria-current={active ? "page" : undefined}
       className={`nav-tab${active ? " nav-tab-active" : ""}`}
     >
       {/* Иконку показывает только нижняя панель (задаёт CSS): в строке подписей

@@ -85,8 +85,11 @@ test.describe("окно мини-аппа", () => {
   test("выемки экрана доезжают до стилей", async ({ page }) => {
     await page.goto("/");
     await expect(page.locator("html")).toHaveCSS("--tg-safe-bottom", "34px");
-    // Нижняя панель обязана поднять содержимое над жестом возврата.
-    await expect(page.locator("nav")).toHaveCSS("padding-bottom", "34px");
+    // Нижняя панель обязана поднять содержимое над жестом возврата. Отступ
+    // живёт на самой ленте (.tabbar), а не на `<nav>`: обёртка landmark'а —
+    // display: contents, коробки нет, и padding на ней был бы нулём при
+    // любом значении токена.
+    await expect(page.getByRole("tablist")).toHaveCSS("padding-bottom", "34px");
   });
 
   test("стрелка «назад» закрывает открытую панель, а не убивает мини-апп", async ({ page }) => {
@@ -138,7 +141,7 @@ test.describe("навигация на телефоне", () => {
 
   test("разделы живут внизу экрана и каждый переключается", async ({ page }) => {
     await page.goto("/?tab=terminal");
-    const nav = page.getByRole("navigation");
+    const nav = page.getByRole("tablist");
     await expect(nav).toHaveCSS("position", "fixed");
 
     const box = await nav.boundingBox();
@@ -147,13 +150,13 @@ test.describe("навигация на телефоне", () => {
 
     // Список берётся из того же реестра, что и остальной e2e: проверка одной
     // вкладки под заголовком «разделы переключаются» оставляла бы восемь
-    // непроверенными, а нижняя панель в мини-аппе — другой разметка, чем
+    // непроверенными, а нижняя панель в мини-аппе — другая разметка, чем
     // лента на обычном телефоне.
-    await expect(nav.getByRole("button")).toHaveCount(TABS.length);
+    await expect(nav.getByRole("tab")).toHaveCount(TABS.length);
     for (const label of TABS) {
-      const button = nav.getByRole("button", { name: label });
-      await button.click();
-      await expect(button).toHaveAttribute("aria-current", "page");
+      const tab = nav.getByRole("tab", { name: label });
+      await tab.click();
+      await expect(tab).toHaveAttribute("aria-selected", "true");
     }
   });
 
@@ -161,7 +164,13 @@ test.describe("навигация на телефоне", () => {
     await page.goto("/");
     const shell = page.locator(".app-shell");
     const padding = await shell.evaluate((element) => Number.parseFloat(getComputedStyle(element).paddingBottom));
-    const nav = await page.getByRole("navigation").boundingBox();
-    expect(padding).toBeGreaterThanOrEqual((nav?.height ?? 0) - 1);
+    // Высота берётся у ленты, а не у landmark'а: обёртка `<nav>` с
+    // display: contents коробки не имеет, и `boundingBox()` у неё — null.
+    // Оставаться в этом ассерте она могла бы только так: `null?.height ?? 0`
+    // даёт нуль, и «padding >= -1» проходит всегда, даже когда панель залезла
+    // на контент.
+    const bar = await page.getByRole("tablist").boundingBox();
+    expect(bar).not.toBeNull();
+    expect(padding).toBeGreaterThanOrEqual(bar!.height - 1);
   });
 });

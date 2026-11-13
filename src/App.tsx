@@ -157,7 +157,7 @@ export default function App() {
     }),
   );
   const [tab, setTab] = useState<Tab>(entry.tab);
-  const navRef = useRef<HTMLElement>(null);
+  const navRef = useRef<HTMLDivElement>(null);
   const [walletMenuOpen, setWalletMenuOpen] = useState(false);
   const [connectPickerOpen, setConnectPickerOpen] = useState(false);
   const [accountResult, setAccountResult] = useState<{
@@ -381,12 +381,37 @@ export default function App() {
     return () => window.removeEventListener("keydown", handleKey);
   }, []);
 
+  // Стрелки внутри ленты выбирают вкладку сразу (automatic activation из
+  // ARIA-паттерна tablist): фокус и выбранная панель должны сходиться в одном
+  // нажатии, иначе клавиатура показывала бы один раздел, а подсвечивала другой.
+  // Обход замыкается с обоих концов, Home и End ведут к краям ленты.
+  const selectTabByIndex = (index: number) => {
+    const next = (index + TABS.length) % TABS.length;
+    setTab(TABS[next].id);
+    const tabs = navRef.current?.querySelectorAll<HTMLElement>('[role="tab"]');
+    tabs?.[next]?.focus();
+  };
+
+  const moveTabByKeys = (event: ReactKeyboardEvent<HTMLElement>) => {
+    const current = TABS.findIndex((t) => t.id === tab);
+    if (current < 0) return;
+    const target = {
+      ArrowRight: current + 1,
+      ArrowLeft: current - 1,
+      Home: 0,
+      End: TABS.length - 1,
+    }[event.key];
+    if (target === undefined) return;
+    event.preventDefault();
+    selectTabByIndex(target);
+  };
+
   // Активная вкладка остаётся в поле зрения ленты. Девять подписей не влезают в
   // узкое окно, и переход по Alt-цифре или по ссылке из бота иначе показывал бы
   // экран без того, где сейчас человек.
   useEffect(() => {
     const bar = navRef.current;
-    const active = bar?.querySelector<HTMLElement>('[aria-current="page"]');
+    const active = bar?.querySelector<HTMLElement>('[aria-selected="true"]');
     if (!bar || !active) return;
     bar.scrollLeft = Math.max(
       0,
@@ -867,7 +892,7 @@ export default function App() {
     <ToastProvider toast={toastView}>
       <div className="min-h-screen w-full font-sans">
         <div className="app-shell max-w-6xl mx-auto px-3 sm:px-6">
-          <div className="mb-4">
+          <header className="mb-4">
             <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-3 mb-3">
               <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
                 <div className="flex items-center gap-2">
@@ -877,7 +902,7 @@ export default function App() {
                       strokeWidth={2.5}
                     />
                   </div>
-                  <span className="wordmark">Wake</span>
+                  <h1 className="wordmark">Wake</h1>
                 </div>
 
                 <div
@@ -933,6 +958,7 @@ export default function App() {
                   <button
                     onClick={() => setWalletMenuOpen((v) => !v)}
                     aria-expanded={walletMenuOpen}
+                    aria-controls="wallet-menu"
                     className="btn-ghost !py-1.5 !pl-1.5 font-mono"
                   >
                     <span
@@ -978,7 +1004,12 @@ export default function App() {
                       className="fixed inset-0 z-40"
                       onClick={() => setWalletMenuOpen(false)}
                     />
-                    <div className="menu-card animate-fade-in">
+                    <div
+                      id="wallet-menu"
+                      role="group"
+                      aria-label="Меню кошелька"
+                      className="menu-card animate-fade-in"
+                    >
                       <div className="text-xs text-[color:var(--text-muted)] mb-1">
                         {signedIn
                           ? `Вход через ${session?.via === "telegram" ? "Telegram" : "кошелёк"}`
@@ -1239,26 +1270,37 @@ export default function App() {
               </div>
             </div>
 
-            <nav
-              ref={navRef}
-              className={`tabbar scrollbar-hide${navOverflow ? " tabbar-overflow" : ""}${
-                navScroll.left ? " nav-scroll-left" : ""
-              }${navScroll.right ? " nav-scroll-right" : ""}`}
-              aria-label="Основная навигация"
-            >
-              {TABS.map((t) => (
-                <NavTab
-                  key={t.id}
-                  icon={t.icon}
-                  active={tab === t.id}
-                  onClick={() => setTab(t.id)}
-                  label={t.label}
-                  live={t.live}
-                />
-              ))}
+            {/* landmark остаётся на <nav>: role="tablist" на том же элементе
+                перебил бы неявную роль navigation, и способ перепрыгнуть к
+                разделам у диктора исчез бы вместе с ним. Обёртка — display:
+                contents, она не создаёт ни блока, ни containing block, поэтому
+                лента скроллится и закрепляется ровно там же, где до разделения. */}
+            <nav aria-label="Основная навигация" className="tabbar-shell">
+              <div
+                ref={navRef}
+                role="tablist"
+                aria-label="Разделы"
+                onKeyDown={moveTabByKeys}
+                className={`tabbar scrollbar-hide${navOverflow ? " tabbar-overflow" : ""}${
+                  navScroll.left ? " nav-scroll-left" : ""
+                }${navScroll.right ? " nav-scroll-right" : ""}`}
+              >
+                {TABS.map((t) => (
+                  <NavTab
+                    key={t.id}
+                    id={`tab-${t.id}`}
+                    icon={t.icon}
+                    active={tab === t.id}
+                    onClick={() => setTab(t.id)}
+                    label={t.label}
+                    live={t.live}
+                  />
+                ))}
+              </div>
             </nav>
-          </div>
+          </header>
 
+          <main>
           {backendChecked && !backend && (
             <div className="notice animate-fade-in">
               <ServerOff className="w-3.5 h-3.5 shrink-0" />
@@ -1336,7 +1378,12 @@ export default function App() {
               </div>
             }
           >
-            <div key={network}>
+            <div
+              key={network}
+              role="tabpanel"
+              id="tab-panel"
+              aria-labelledby={`tab-${tab}`}
+            >
               {tab === "dashboard" && (
                 <ErrorBoundary
                   fallback={
@@ -1550,6 +1597,7 @@ export default function App() {
               )}
             </div>
           </Suspense>
+          </main>
         </div>
 
         {marketPickerOpen && (

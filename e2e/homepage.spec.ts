@@ -5,8 +5,13 @@
 import { test, expect, type Page } from "@playwright/test";
 import { TABS } from "./design-audit";
 
+// Лента вкладок ищется по роли tablist: это и есть тот элемент, который
+// скроллится, подсвечивает край и несёт выбранную вкладку. Landmark `navigation`
+// остаётся на обёртке без собственной коробки — его проверяет отдельный гейт в
+// design-gate.spec.ts, здесь бы он только мешал: у display: contents нет
+// boundingBox, а ассерты ниже меряют scrollLeft и псевдоэлементы.
 function nav(page: Page) {
-  return page.getByRole("navigation");
+  return page.getByRole("tablist");
 }
 
 // Dev-сервер Playwright поднимает сам (см. baseURL в playwright.config.ts), поэтому
@@ -25,32 +30,46 @@ test.describe("Оболочка приложения", () => {
     await page.goto("/");
     await expect(page).toHaveTitle(/Wake/i);
     for (const label of TABS) {
-      await expect(nav(page).getByRole("button", { name: label, exact: true })).toBeVisible();
+      await expect(nav(page).getByRole("tab", { name: label, exact: true })).toBeVisible();
     }
   });
 
-  test("активная вкладка помечена как текущая и переключается", async ({ page }) => {
+  // Разметка страницы — единственная проверка, которую axe читал как ошибку
+  // landmark'ов и которая молчала, пока её никто не считал: без banner и main
+  // всё содержимое живёт вне регионов, а без единственного заголовка первого
+  // уровня у обхода нет точку входа. Гейт сверяет роли числом, а не
+  // скриншотом, и требует, чтобы панель лежала внутри main: иначе лента
+  // возвращает содержимое за разметку, и проверка остаётся зелёной.
+  test("разметка: banner, main и один заголовок первого уровня", async ({ page }) => {
     await page.goto("/");
-    await expect(nav(page).getByRole("button", { name: "Обзор" })).toHaveAttribute("aria-current", "page");
+    await expect(page.getByRole("banner")).toHaveCount(1);
+    await expect(page.getByRole("main")).toHaveCount(1);
+    await expect(page.getByRole("heading", { level: 1 })).toHaveCount(1);
+    await expect(page.locator("main [role=tabpanel]")).toHaveCount(1);
+  });
 
-    await nav(page).getByRole("button", { name: "Predict" }).click();
-    await expect(nav(page).getByRole("button", { name: "Predict" })).toHaveAttribute("aria-current", "page");
-    await expect(nav(page).getByRole("button", { name: "Обзор" })).not.toHaveAttribute("aria-current");
+  test("активная вкладка помечена как выбранная и переключается", async ({ page }) => {
+    await page.goto("/");
+    await expect(nav(page).getByRole("tab", { name: "Обзор" })).toHaveAttribute("aria-selected", "true");
+
+    await nav(page).getByRole("tab", { name: "Predict" }).click();
+    await expect(nav(page).getByRole("tab", { name: "Predict" })).toHaveAttribute("aria-selected", "true");
+    await expect(nav(page).getByRole("tab", { name: "Обзор" })).toHaveAttribute("aria-selected", "false");
   });
 
   test("ссылка с tab и asset открывает раздел и рынок, мусор — нет", async ({ page }) => {
     await page.goto("/?tab=funding&asset=ETH");
-    await expect(nav(page).getByRole("button", { name: "Funding" })).toHaveAttribute("aria-current", "page");
+    await expect(nav(page).getByRole("tab", { name: "Funding" })).toHaveAttribute("aria-selected", "true");
 
     await page.goto("/?tab=terminal&asset=eth");
-    await expect(nav(page).getByRole("button", { name: "Терминал" })).toHaveAttribute("aria-current", "page");
+    await expect(nav(page).getByRole("tab", { name: "Терминал" })).toHaveAttribute("aria-selected", "true");
     await expect(page.locator(".desk-symbol-name")).toHaveText("ETH");
 
     await page.goto("/?tab=..%2Fadmin&asset=%3Cscript%3E");
-    await expect(nav(page).getByRole("button", { name: "Обзор" })).toHaveAttribute("aria-current", "page");
+    await expect(nav(page).getByRole("tab", { name: "Обзор" })).toHaveAttribute("aria-selected", "true");
 
     await page.goto("/?tab=terminal&asset=%3Cscript%3E");
-    await expect(nav(page).getByRole("button", { name: "Терминал" })).toHaveAttribute("aria-current", "page");
+    await expect(nav(page).getByRole("tab", { name: "Терминал" })).toHaveAttribute("aria-selected", "true");
     await expect(page.locator(".desk-symbol-name")).toHaveText("BTC");
   });
 
@@ -68,8 +87,8 @@ test.describe("Оболочка приложения", () => {
   test("все вкладки открываются без ошибки рендера", async ({ page }) => {
     await page.goto("/");
     for (const label of TABS) {
-      await nav(page).getByRole("button", { name: label }).click();
-      await expect(nav(page).getByRole("button", { name: label })).toHaveAttribute("aria-current", "page");
+      await nav(page).getByRole("tab", { name: label }).click();
+      await expect(nav(page).getByRole("tab", { name: label })).toHaveAttribute("aria-selected", "true");
       await expect(page.getByText(/Ошибка загрузки|Что-то пошло не так/)).toHaveCount(0);
     }
   });
@@ -77,7 +96,7 @@ test.describe("Оболочка приложения", () => {
   test("настройка reduced motion отключает анимацию индикаторов", async ({ page }) => {
     await page.emulateMedia({ reducedMotion: "reduce" });
     await page.goto("/");
-    const indicator = nav(page).getByRole("button", { name: "Обзор" }).locator('span[title="Данные обновляются без бэкенда Wake"]');
+    const indicator = nav(page).getByRole("tab", { name: "Обзор" }).locator('span[title="Данные обновляются без бэкенда Wake"]');
     const duration = await indicator.evaluate((element) => Number.parseFloat(getComputedStyle(element).animationDuration));
     expect(duration).toBeLessThan(0.001);
   });
@@ -86,8 +105,8 @@ test.describe("Оболочка приложения", () => {
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto("/");
     for (const label of TABS) {
-      await nav(page).getByRole("button", { name: label }).click();
-      await expect(nav(page).getByRole("button", { name: label })).toHaveAttribute("aria-current", "page");
+      await nav(page).getByRole("tab", { name: label }).click();
+      await expect(nav(page).getByRole("tab", { name: label })).toHaveAttribute("aria-selected", "true");
       await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(1);
     }
   });
@@ -121,9 +140,9 @@ test.describe("Оболочка приложения", () => {
     // ручная прокрутка: активная вкладка центрируется, и до правого края
     // оставшийся зазор не должен подсвечиваться подсказкой.
     await page.keyboard.press("Alt+9");
-    await expect(nav(page).getByRole("button", { name: TABS[TABS.length - 1], exact: true })).toHaveAttribute(
-      "aria-current",
-      "page",
+    await expect(nav(page).getByRole("tab", { name: TABS[TABS.length - 1], exact: true })).toHaveAttribute(
+      "aria-selected",
+      "true",
     );
     await expect.poll(() => opacity("before")).toBe("1");
     await expect.poll(() => opacity("after")).toBe("0");
@@ -158,7 +177,7 @@ test.describe("Оболочка приложения", () => {
       await route.fulfill({ json: { dry_run: true, tx_hash: null } });
     });
     await page.goto("/");
-    await nav(page).getByRole("button", { name: "Терминал" }).click();
+    await nav(page).getByRole("tab", { name: "Терминал" }).click();
     await expect(page.locator("svg.recharts-surface")).toBeVisible();
     await expect(page.locator(".recharts-xAxis .recharts-cartesian-axis-tick")).not.toHaveCount(0);
     await expect(page.locator(".recharts-yAxis .recharts-cartesian-axis-tick")).not.toHaveCount(0);
@@ -211,7 +230,7 @@ test.describe("Оболочка приложения", () => {
 
     const switcher = page.getByRole("button", { name: "Публиковать мои сделки" });
     await page.goto("/");
-    await nav(page).getByRole("button", { name: "Терминал" }).click();
+    await nav(page).getByRole("tab", { name: "Терминал" }).click();
 
     await expect(switcher).toHaveAttribute("aria-pressed", "false");
     await switcher.click();
@@ -250,7 +269,7 @@ test.describe("Оболочка приложения", () => {
       });
     });
     await page.goto("/");
-    await nav(page).getByRole("button", { name: "Терминал" }).click();
+    await nav(page).getByRole("tab", { name: "Терминал" }).click();
 
     const chip = page.getByRole("button", { name: /подписание:/ });
     await expect(chip).toHaveText("подписание: не проверялось");
@@ -289,7 +308,7 @@ test.describe("Оболочка приложения", () => {
     });
 
     await page.goto("/");
-    await nav(page).getByRole("button", { name: "Терминал" }).click();
+    await nav(page).getByRole("tab", { name: "Терминал" }).click();
     await expect(page.locator("svg.recharts-surface")).toBeVisible();
 
     await page.getByRole("button", { name: /^Открыть long/ }).click();
@@ -330,7 +349,7 @@ test.describe("Оболочка приложения", () => {
 
   test("без ответа Lighter в Терминале — сообщение об отсутствии данных, а не пустые цифры", async ({ page }) => {
     await page.goto("/");
-    await nav(page).getByRole("button", { name: "Терминал" }).click();
+    await nav(page).getByRole("tab", { name: "Терминал" }).click();
     await expect(page.getByText("Lighter API не отвечает")).toBeVisible();
     await expect(page.getByText(/\.zklighter\.elliot\.ai —/)).toBeVisible();
   });
@@ -359,7 +378,7 @@ test.describe("Predict", () => {
       await route.fulfill({ json: { cost_usd: shares / 2 } });
     });
     await page.goto("/");
-    await nav(page).getByRole("button", { name: "Predict" }).click();
+    await nav(page).getByRole("tab", { name: "Predict" }).click();
     await page.getByRole("button", { name: /^Купить YES/ }).click();
     const dialog = page.getByRole("dialog", { name: /Купить YES/ });
     await dialog.getByRole("button", { name: /Купить 10 за/ }).click();
@@ -411,7 +430,7 @@ test.describe("Вход", () => {
 
   test("Escape закрывает выбор рынка прямо из поля поиска", async ({ page }) => {
     await page.goto("/");
-    await nav(page).getByRole("button", { name: "Терминал" }).click();
+    await nav(page).getByRole("tab", { name: "Терминал" }).click();
     const picker = page.getByRole("button", { name: "Выбрать рынок" });
     await picker.click();
     const dialog = page.getByRole("dialog", { name: "Выбор рынка" });
@@ -427,5 +446,72 @@ test.describe("Вход", () => {
     await openPicker(page);
     await page.getByRole("button", { name: "Injected" }).click();
     await expect(page.getByRole("dialog", { name: "Войти в Wake" }).getByRole("status")).toContainText(/Кошелёк не подключился/);
+  });
+});
+
+// Меню кошелька — единственное раскрытие в шапке: у него нет диалога, поэтому
+// вся его проверка — в связке атрибутов с живым деревом. Панель монтируется
+// только открытой, поэтому `id` существует ровно тогда, когда на него ссылаются;
+// сверять `aria-controls` с литералом было бы самообманом — проверка берёт `id`
+// отрисованного элемента и сравнивает с атрибутом триггера. Тогда разъехавшиеся
+// ссылки краснеют, а две буквы, продублированные в двух местах, — нет.
+test.describe("меню кошелька — раскрытие", () => {
+  async function signInAsWallet(page: Page) {
+    await page.addInitScript(() => {
+      localStorage.setItem(
+        "wake.session.v1",
+        JSON.stringify({
+          token: "wk1.probe.probe",
+          userId: "0x" + "11".repeat(20),
+          expiresAt: Math.floor(Date.now() / 1000) + 3600,
+          lighterAccountIndex: 4242,
+          label: "test",
+          via: "wallet",
+        }),
+      );
+    });
+    await page.route("**/health", (route) => route.fulfill({ json: { status: "ok", network: "testnet", dry_run: true } }));
+    await page.route("**/ready", (route) => route.fulfill({ json: { status: "ready" } }));
+    await page.route("**/follows", (route) => route.fulfill({ json: [] }));
+    await page.route("**/subscription", (route) =>
+      route.fulfill({ json: { tier: "free", has_ai_agent: false, has_copy_trading: true, has_predict_markets: true } }),
+    );
+    await page.route("**/api/v1/account?*", (route) => route.fulfill({ json: { sub_accounts: [] } }));
+    await page.route("**/api/v1/orderBooks?*", (route) => route.fulfill({ json: { order_books: [] } }));
+    await page.route("**/api/v1/candles?*", (route) => route.fulfill({ json: { c: [] } }));
+    await page.route("**/api/v1/funding-rates", (route) => route.fulfill({ json: { funding_rates: [] } }));
+    await page.route("**/leaders*", (route) => route.fulfill({ json: { leader_id: null, active: false } }));
+  }
+
+  const trigger = (page: Page) => page.locator('button[aria-controls="wallet-menu"]');
+  const panel = (page: Page) => page.getByRole("group", { name: "Меню кошелька" });
+
+  test("триггер, панель и Escape сходятся", async ({ page }) => {
+    await signInAsWallet(page);
+    await page.goto("/");
+    await expect(trigger(page)).toHaveAttribute("aria-expanded", "false");
+    await expect(panel(page)).toHaveCount(0);
+
+    await trigger(page).click();
+    await expect(panel(page)).toBeVisible();
+    await expect(trigger(page)).toHaveAttribute("aria-expanded", "true");
+    await expect(trigger(page)).toHaveAttribute(
+      "aria-controls",
+      await panel(page).evaluate((node) => node.id),
+    );
+
+    await page.keyboard.press("Escape");
+    await expect(panel(page)).toHaveCount(0);
+    await expect(trigger(page)).toHaveAttribute("aria-expanded", "false");
+  });
+
+  test("клик по затемнению закрывает меню, а не только выглядит фоном", async ({ page }) => {
+    await signInAsWallet(page);
+    await page.goto("/");
+    await trigger(page).click();
+    await expect(panel(page)).toBeVisible();
+    await page.locator("div.fixed.inset-0").click({ position: { x: 8, y: 300 } });
+    await expect(panel(page)).toHaveCount(0);
+    await expect(trigger(page)).toHaveAttribute("aria-expanded", "false");
   });
 });

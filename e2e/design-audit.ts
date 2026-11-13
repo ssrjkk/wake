@@ -448,9 +448,26 @@ export function reportOffenders(name: string, offenders: Offender[], limit = 10)
 }
 
 export async function visitTab(page: Page, tab: string) {
-  await page.getByRole("navigation").getByRole("button", { name: tab, exact: true }).click();
-  await expect(page.getByRole("navigation").getByRole("button", { name: tab, exact: true })).toHaveAttribute("aria-current", "page");
-  await page.waitForTimeout(900);
+  const item = page.getByRole("tablist").getByRole("tab", { name: tab, exact: true });
+  await item.click();
+  await expect(item).toHaveAttribute("aria-selected", "true");
+  // Панель обязана доехать до замера. Раньше здесь стоял `waitForTimeout(900)`,
+  // и это был fail-open с двух сторон: на медленной машине девять вкладок
+  // складывались в восемь секунд навесных ожиданий, а если данные не приехали,
+  // гейт мерил скелетон или вообще вчерашнюю панель и оставался зелёным.
+  //
+  // `id` вкладки берётся из отрисованного элемента, а не пишется здесь вторым
+  // экземпляром: React при смене ленивой панели оставляет в DOM предыдущую
+  // (заглушка `Suspense` показывается только при первом монтаже), поэтому
+  // «панель есть» и «скелетонов нет» — это про прошлый раздел. Панель текущего
+  // узнаётся по `aria-labelledby`, которое совпадает с `id` вкладки, и ждётся
+  // именно она; дальше — отсутствие `.skeleton`, тем, чем `ui.tsx` открывает
+  // «ещё едет». Если панель не дошла, краснеет она с внятным сообщением, а не
+  // таймер прогона.
+  const tabId = await item.evaluate((node) => node.id);
+  const panel = page.locator(`[role="tabpanel"][aria-labelledby="${tabId}"]`);
+  await expect(panel).toHaveCount(1);
+  await expect(panel.locator(".skeleton")).toHaveCount(0, { timeout: 15_000 });
 }
 
 /** Вход сессией + фикстуры + первая загрузка: общий preamble всех проверок. */

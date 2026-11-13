@@ -72,7 +72,7 @@ client IP.
 
 ### What is public, and why
 
-`/health`, `/ready`, the `/auth/*` endpoints, `/leaders`,
+`/health`, `/ready`, the `/auth/*` endpoints, `/leaders`, `/leaders/hydrated`,
 `/follows/by-leader/{leader_id}`, `/predict/markets*` listings,
 `/funding/*`, `/markets/overview`, `/portfolio/risk`, `/portfolio/hedge`,
 `/funding-arb/*`. These are market data reads and stateless arithmetic: they
@@ -94,8 +94,9 @@ filters on, which is the single query the mirror engine reads a leader's
 followers from, so turning it off is what actually stops other people's accounts
 from trading on his signals.
 
-Curator operations — market creation and resolution, manual copy-engine runs —
-require `X-Curator-Token` compared with `hmac.compare_digest` over bytes, and
+Curator operations — market creation and resolution, manual copy-engine runs,
+the subscription upgrade, and the `GET /audit` read — require
+`X-Curator-Token` compared with `hmac.compare_digest` over bytes, and
 answer 503 (`CURATOR_NOT_CONFIGURED`) when the server has no token configured
 rather than running anonymously. 503 and not 403 because the reason is server
 configuration: a client cannot fix it by logging in again, and one language with
@@ -466,15 +467,17 @@ dry-run-инстанс), видимый эффект, предложение п�
 
 ### Что открыто и почему
 
-`/health`, `/ready`, `/auth/*`, `/leaders`, `/follows/by-leader/{leader_id}`,
-списки `/predict/markets*`, `/funding/*`, `/markets/overview`,
-`/portfolio/risk`, `/portfolio/hedge`, `/funding-arb/*`. Это чтение рыночных
-данных и арифметика без состояния: ни чужих записей, ни записей в базу. Всё, что
-читает или меняет чужое состояние, требует bearer-токен.
+`/health`, `/ready`, `/auth/*`, `/leaders`, `/leaders/hydrated`,
+`/follows/by-leader/{leader_id}`, списки `/predict/markets*`, `/funding/*`,
+`/markets/overview`, `/portfolio/risk`, `/portfolio/hedge`, `/funding-arb/*`.
+Это чтение рыночных данных и арифметика без состояния: ни чужих записей, ни
+записей в базу. Всё, что читает или меняет чужое состояние, требует
+bearer-токен.
 
-Операторские операции (создание и резолюция рынков, ручной прогон копи-движка)
-требуют `X-Curator-Token`, сравнивают его через `hmac.compare_digest` по байтам и
-отвечают 503 (`CURATOR_NOT_CONFIGURED`), когда токен на сервере не настроен,
+Операторские операции (создание и резолюция рынков, ручной прогон копи-движка,
+апгрейд подписки и чтение `GET /audit`) требуют `X-Curator-Token`, сравнивают
+его через `hmac.compare_digest` по байтам и отвечают 503
+(`CURATOR_NOT_CONFIGURED`), когда токен на сервере не настроен,
 вместо анонимного исполнения. 503, а не 403: причина — конфигурация сервера, и
 клиент не может исправить её повторным входом. `X-Curator-Token` входит в CORS
 `allow_headers`, поэтому операторский веб-интерфейс действительно может его

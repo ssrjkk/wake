@@ -7,8 +7,9 @@ require_user отдаёт субъект подписанного токена (
 не то, что пришло в теле.
 
 require_curator — машинный токен оператора: создание и резолюция рынков, ручной
-прогон копи-движка. Это не пользователь, поэтому и держится отдельно от сессий:
-сравнение по hmac.compare_digest, значение — в WAKE_CURATOR_TOKEN.
+прогон копи-движка, апгрейд подписки и чтение GET /audit. Это не пользователь,
+поэтому и держится отдельно от сессий: сравнение по hmac.compare_digest,
+значение — в WAKE_CURATOR_TOKEN.
 """
 
 import hmac
@@ -27,7 +28,8 @@ _bearer = HTTPBearer(auto_error=False)
 _curator = APIKeyHeader(
     name="X-Curator-Token",
     auto_error=False,
-    description="Значение WAKE_CURATOR_TOKEN: рынки, резолюция, прогон копи-движка.",
+    description="Значение WAKE_CURATOR_TOKEN: рынки, резолюция, копи-движок, "
+    "апгрейд подписки, GET /audit.",
 )
 
 

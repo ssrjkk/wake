@@ -106,6 +106,21 @@ test.describe("дизайн-инварианты на живом объёме д
     }
   });
 
+  // Шапка — единственная панель, которую гейт не открывал: обход вкладок и
+  // модалок мерил контраст везде, кроме раскрытия кошелька, поэтому его текст и
+  // его кнопки оставались ниже порога, пока их никто не раскрывал. Проверка
+  // открывает панель и меряет живое дерево теми же числами, что и всё остальное.
+  test("меню кошелька: контраст в раскрытой панели", async ({ page }) => {
+    await page.locator('button[aria-controls="wallet-menu"]').click();
+    await expect(page.getByRole("group", { name: "Меню кошелька" })).toBeVisible();
+    // Замер берётся из auditDesign: он на время промера выключает анимации и
+    // переходы, поэтому `fade-in` панели не отдаёт отношение, которого человек
+    // на экране не видит.
+    const offenders = (await auditDesign(page)).contrast;
+    reportOffenders("wallet menu contrast", offenders);
+    expect(offenders, "текст и кнопки меню кошелька читаемы на своём фоне").toEqual([]);
+  });
+
   test("мобильный 390: цели касания", async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     const offenders: Offender[] = [];
@@ -345,5 +360,85 @@ test.describe("дизайн-инварианты на худших данных"
     }
     reportOffenders("touch@390-stress", offenders, 20);
     expect(offenders, "крайние числа не уменьшают цели касания").toEqual([]);
+  });
+});
+
+// Паттерн вкладок проверяется структурой, а не глазам по скриншоту: `aria-selected`
+// на кнопке без role="tab" диктор не читает, ни один computed-стиль на этот
+// атрибут не завязан, и расхождение «атрибут есть, роли нет» зелёным прогоном не
+// ловится вообще ничем, кроме самой структуры.
+//
+// Отдельно здесь — landmark. `role="tablist"` на том же элементе, что и <nav>,
+// перебивает неявную роль navigation: лента выглядит идеальной tablist'ом, а
+// способа перепрыгнуть к разделам у человека с диктором больше нет. Это ровно
+// тот класс, где молчат обе остальные проверки, поэтому проверок две: tablist
+// обязан быть, landmark обязан остаться, и элементы у них обязаны быть разные.
+test.describe("лента вкладок — паттерн tablist", () => {
+  test.beforeEach(async ({ page }) => {
+    const origin = new URL(test.info().project.use?.baseURL ?? "http://127.0.0.1:5173").origin;
+    await page.route("**/*", (route) =>
+      new URL(route.request().url()).origin === origin ? route.continue() : route.abort(),
+    );
+  });
+
+  test("роли, выбранный таб, панель и обход стрелками сходятся", async ({ page }) => {
+    await page.goto("/");
+
+    // Landmark живёт на обёртке: у неё display: contents, коробки нет, но роль
+    // navigation остаётся — и это единственный способ проверить, что tablist её
+    // не съел.
+    await expect(page.getByRole("navigation")).toHaveCount(1);
+    const bar = page.getByRole("tablist");
+    await expect(bar).toHaveCount(1);
+
+    const tabs = bar.getByRole("tab");
+    await expect(tabs).toHaveCount(TABS.length);
+    const state = await tabs.evaluateAll((nodes) =>
+      nodes.map((node) => ({
+        id: node.id,
+        selected: node.getAttribute("aria-selected"),
+        controls: node.getAttribute("aria-controls"),
+        tabIndex: node.getAttribute("tabindex"),
+      })),
+    );
+
+    // Ровно одна выбранная вкладка, и она же — единственная остановка Tab.
+    // Девять tabindex="0" означали бы, что по лентам девять разов надо пройти
+    // Tab'ом, чтобы попасть в контент; ноль — что разделы недостижимы.
+    const selected = state.filter((row) => row.selected === "true");
+    expect(selected, `выбранных табов: ${JSON.stringify(selected)}`).toHaveLength(1);
+    expect(state.filter((row) => row.tabIndex === "0"), "tabindex=0 обязан быть у одной вкладки").toEqual(selected);
+    expect(state.filter((row) => row.controls !== "tab-panel"), "каждый таб указывает на единственную панель").toEqual([]);
+
+    const panel = page.getByRole("tabpanel");
+    await expect(panel).toHaveCount(1);
+    await expect(panel).toHaveAttribute("aria-labelledby", selected[0].id);
+
+    const byName = (label: string) => bar.getByRole("tab", { name: label, exact: true });
+    const start = state.findIndex((row) => row.selected === "true");
+
+    // Стрелки двигают и фокус, и выбор: расхождение дали бы «подсвечена одна
+    // вкладка, открыта другая».
+    await byName(TABS[start]).focus();
+    const next = TABS[(start + 1) % TABS.length];
+    await page.keyboard.press("ArrowRight");
+    await expect(byName(next)).toHaveAttribute("aria-selected", "true");
+    await expect(byName(next)).toBeFocused();
+    await expect(panel).toHaveAttribute("aria-labelledby", await byName(next).getAttribute("id") ?? "");
+
+    await page.keyboard.press("End");
+    await expect(byName(TABS[TABS.length - 1])).toHaveAttribute("aria-selected", "true");
+    await page.keyboard.press("ArrowRight");
+    await expect(byName(TABS[0]), "правый конец ленты обязан замыкаться на первый раздел").toHaveAttribute("aria-selected", "true");
+    await page.keyboard.press("ArrowLeft");
+    await expect(byName(TABS[TABS.length - 1]), "и левый — на последний").toHaveAttribute("aria-selected", "true");
+    await page.keyboard.press("Home");
+    await expect(byName(TABS[0])).toHaveAttribute("aria-selected", "true");
+
+    // Панель следует за выбором, а не остаётся с прошлой вкладки: id панели
+    // обязан совпасть с id только что открытого раздела, каким бы он ни был.
+    const predict = byName("Predict");
+    await predict.click();
+    await expect(panel).toHaveAttribute("aria-labelledby", (await predict.getAttribute("id")) ?? "");
   });
 });
