@@ -4,7 +4,7 @@ import { listHydratedLeaders } from "../lib/lighter";
 import { errorText } from "../lib/backend";
 import { leaderFromHydrated } from "../lib/leaders";
 import { setIntervalWhenVisible } from "../lib/visibleInterval";
-import { fmt, shortHandle, usd, avatarColor } from "./utils";
+import { fmt, shortHandle, stamp, usd, avatarColor } from "./utils";
 import type { Leader } from "./types";
 
 interface DiscoverProps {
@@ -54,7 +54,7 @@ export default function Discover({ setCopyModal }: DiscoverProps) {
                 className="push-right section-note"
                 title="Список лидеров и ответ Lighter обновляются раз в 20 секунд"
               >
-                обновлено {lastUpdated.toLocaleTimeString("ru-RU", { hour12: false })}
+                обновлено {stamp(lastUpdated)}
               </span>
             )}
           </div>
@@ -70,7 +70,7 @@ export default function Discover({ setCopyModal }: DiscoverProps) {
               <>
                 Список не перечитался: {error}. Показаны данные{" "}
                 <span className="num">
-                  {lastUpdated ? `на ${lastUpdated.toLocaleTimeString("ru-RU", { hour12: false })}` : "без свежей отметки"}
+                  {lastUpdated ? `на ${stamp(lastUpdated)}` : "без свежей отметки"}
                 </span>
                 .
               </>

@@ -381,15 +381,14 @@
 
   /* ── Строка рынка ─────────────────────────────────────────────────────── */
   /* Строка рынка — сетка с явными областями, а не flex-wrap: символ, число и
-     чип стоят одной строкой, цифры — своей, лента — последней. На flex-wrap
-     цифры втискивались в остаток и рвались на два ряда в случайном месте. */
+     чип стоят одной строкой, цифры — своей. На flex-wrap цифры втискивались в
+     остаток и рвались на два ряда в случайном месте. */
   .terminal-asset-header {
     display: grid;
     grid-template-columns: minmax(0, auto) minmax(0, auto) minmax(0, 1fr);
     grid-template-areas:
       "sym quote ."
-      "stats stats stats"
-      "tape tape tape";
+      "stats stats stats";
     align-items: end;
     column-gap: 18px;
     row-gap: 10px;
@@ -400,7 +399,6 @@
   .terminal-asset-header > .desk-symbol { grid-area: sym; }
   .terminal-asset-header > .desk-quote { grid-area: quote; }
   .terminal-asset-header > .desk-stats { grid-area: stats; }
-  .terminal-asset-header > .desk-tape { grid-area: tape; }
 
   .desk-quote {
     display: flex;
@@ -482,49 +480,10 @@
     100% { background: transparent; }
   }
 
-  /* ── Лента тиков ─────────────────────────────────────────────────────────
-     Ряд часовых баров под ценой: высота — |close − open| часа, нормированная по
-     максимальному ходу в окне, цвет — направление часа. Это тот же массив
-     свечей, что уже отдан под график, новых запросов лента не просит. Смысл —
-     увидеть, как шёл день, не читая четыре числа: прибор, а не украшение. */
-  /* Лента занимает всю ширину строки рынка: 48 часовых баров на всю полосу
-     читаются как «как прошёл день» одним движением глаза, а в колонке 300px они
-     превращались в шум. */
-  .desk-tape {
-    display: flex;
-    align-items: flex-end;
-    gap: 2px;
-    flex: 1 1 100%;
-    min-width: 0;
-    height: 44px;
-    overflow: hidden;
-    border-bottom: 1px solid var(--line);
-  }
-
-  .tape-bar {
-    flex: 1 1 0;
-    min-width: 2px;
-    min-height: 3px;
-    border-radius: 1px 1px 0 0;
-    transform-origin: bottom;
-    animation: tapeRise 0.26s cubic-bezier(0.2, 0.8, 0.2, 1) both;
-  }
-
-  .tape-bar.up { background: var(--up-soft); }
-  .tape-bar.down { background: var(--down-soft); }
-
-  /* Последний бар — текущий, ещё формирующийся час: он помечен акцентом, чтобы
-     глаз не принимал незакрытый интервал за закрытый. */
-  .tape-bar.current { background: var(--accent); }
-
-  @keyframes tapeRise {
-    from { transform: scaleY(0); opacity: 0.35; }
-    to { transform: scaleY(1); opacity: 1; }
-  }
-
-  /* Проявление графика: кривая рисуется слева направо один раз на смену рынка.
-     clip-path по контейнеру, а не по SVG-пути — recharts перерисовывает путь сам,
-     и анимация штриха зависела бы от длины пути, которой у нас нет. */
+  /* ── Движение ─────────────────────────────────────────────────────────── */
+  /* Проявление графика: полотно вскрывается слева направо один раз на смену
+     рынка. clip-path по контейнеру, а не по содержимому: библиотека перерисовывает
+     canvas сама, и анимация штриха зависела бы от длины пути, которого нет. */
   .chart-wipe { animation: chartWipe 0.52s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
 
   @keyframes chartWipe {
@@ -540,6 +499,14 @@
   }
 
   .trade-row { animation: rowIn 0.18s ease-out both; }
+
+  /* Знак агрессора в ленте: у стороны есть свой глиф, а не только цвет, поэтому
+     строку можно прочитать и без различения оттенков. Узкий, чтобы колонка цены
+     не разъехала ленту на телефоне. */
+  .tape-side {
+    font-size: var(--fs-label);
+    margin-right: 4px;
+  }
 
   /* Цифры растянуты по всей ширине своей строки: четыре значения, разнесённые
      поровну, читаются как шкала, а не как правый угол шапки. */
@@ -754,15 +721,25 @@
   .venue-row:hover { background: var(--bg-2); }
 
   /* ── Стакан ─────────────────────────────────────────────────────────────
-     Полоса глубины красит строку, а не отдельную колонку: сторону книги читают
-     по длине полосы, и колонка с числами для этого слишком узка. Полоса лежит
-     в первой ячейке, но мерится от строки — position:relative у .book-row
-     делает его containing block, ячейка остаётся static. Порядок покраски тот
-     же, что у .row-vol: полоса первая в DOM, числа после неё, оба positioned,
-     поэтому числа рисуются поверх без единого z-index. */
+     Панель — отдельный компонент (src/components/OrderBookPanel.tsx), и порядок в
+     ней биржевой: продажи перевёрнуты, покупки идут от лучшей цены, середина
+     книги и баланс сторон лежат над прокруткой. Полоса глубины красит строку,
+     а не отдельную колонку: сторону книги читают по длине полосы, и колонка с
+     числами для этого слишком узка. Полоса лежит в первой ячейке, но мерится от
+     строки — position:relative у .book-row делает его containing block, ячейка
+     остаётся static. Порядок покраски тот же, что у .row-vol: полоса первая в
+     DOM, числа после неё, оба positioned, поэтому числа рисуются поверх без
+     единого z-index. */
+  .book-panel {
+    min-width: 0;
+    background: var(--bg-1);
+  }
+
   .book-table td { border-bottom: none; padding: 3px 12px; }
   /* Строка книги — не действие: подсветка наведения обещала бы клик, которого
-     нет, а на тринадцать строк это ещё и тринадцать ложных приглашений. */
+     нет, а на сорок строк это ещё и сорок ложных приглашений. Кликабельной
+     строка станет вместе с полем цены в тикете (лимит по клику), а до тех пор
+     обещать нечего. */
   .book-table tbody tr:hover { background: none; }
 
   .book-row { position: relative; }
@@ -781,13 +758,103 @@
   .book-row.bid .book-bar { background: var(--up-faint); }
   .book-row td > span { position: relative; }
 
-  .book-spread td {
-    padding: 6px 12px;
-    font-size: var(--fs-data);
-    color: var(--fg-2);
-    background: var(--bg-2);
-    text-align: center;
+  /* Лучшая покупка, середина, лучшая продажа и спред — одной строкой над
+     лестницей, а не подписью под ней: на двадцати уровнях с каждой стороны
+     середина книги уехала бы под прокрутку, а следить принято за ней. */
+  .book-mid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 6px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .book-mid-cell {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .book-mid-cell b {
+    font-size: var(--fs-ui);
+    font-weight: 600;
     overflow-wrap: anywhere;
+  }
+
+  /* Баланс сторон по накопленному USDC: полоса — доля, числа — та же доля и
+     глубина каждой стороны. Правая колонка прижата к правому краю, чтобы
+     «продажи» стояли над продажной половиной полосы. */
+  .book-imb {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-areas: "bid ask" "bar bar";
+    gap: 4px 8px;
+    padding: 6px 12px;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .book-imb-cell {
+    display: grid;
+    gap: 2px;
+    min-width: 0;
+  }
+
+  .book-imb-bid-cell { grid-area: bid; }
+
+  .book-imb-ask-cell {
+    grid-area: ask;
+    justify-items: end;
+    text-align: right;
+  }
+
+  .book-imb-bar {
+    grid-area: bar;
+    display: flex;
+    height: 3px;
+    overflow: hidden;
+    border-radius: 2px;
+  }
+
+  .book-imb-bid { width: var(--w, 0%); background: var(--up); }
+  .book-imb-ask { width: var(--w, 0%); background: var(--down); }
+
+  /* Лестница скроллится внутри панели: 20 + 20 уровней — это около 760 px, и
+     без потолка она вытеснила бы ленту сделок и тикет за экран. Заголовок
+     столбцов обязан оставаться на месте — тот же приём, что у .log-scroll. */
+  .book-scroll {
+    max-height: clamp(180px, 30vh, 360px);
+    overflow-y: auto;
+    background: var(--bg-1);
+  }
+
+  .book-scroll thead th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: var(--bg-1);
+  }
+
+  /* Вспышка ячейки: заявка на этой цене выросла или сжалась. Мигает только
+     число, как у .desk-price, и цветом своей стороны книги: подсветка строки
+     выглядела бы уведомлением, а не изменением размера. Global reduced-motion
+     правило выше выключает её целиком. */
+  .book-flash-up, .book-flash-down {
+    padding: 1px 4px;
+    margin: -1px -4px;
+    border-radius: 3px;
+  }
+
+  .book-flash-up { animation: bookFlashUp 0.5s ease-out both; }
+  .book-flash-down { animation: bookFlashDown 0.5s ease-out both; }
+
+  @keyframes bookFlashUp {
+    0%, 55% { background: var(--up-faint); }
+    100% { background: transparent; }
+  }
+
+  @keyframes bookFlashDown {
+    0%, 55% { background: var(--down-faint); }
+    100% { background: transparent; }
   }
 
   .book-side-empty td {
@@ -980,11 +1047,26 @@
 
   .muted { color: var(--fg-3); font-size: var(--fs-data); }
 
-  /* Высота задана явно: в grid-строке 1fr ResponsiveContainer на полноэкранном
-     снимке сжимался, и подписи оси X ложились поверх ленты сделок. */
+  /* Высота задана явно: в grid-строке 1fr полотно на полноэкранном снимке
+     сжималось, и подписи оси X ложились поверх ленты сделок. */
   .desk-chart {
     height: clamp(220px, 40vh, 420px);
-    padding: 4px 0 0;
+  }
+
+  /* lightweight-charts вешает на график обязательную ссылку на tradingview.com:
+     библиотека распространяется по Apache-2.0 с NOTICE, который требует видимой
+     ссылки (README библиотеки, раздел про attributionLogo), поэтому снять её
+     нельзя. Осталась вторая половина вопроса: библиотека задаёт ей 35×19, а
+     нижняя граница попадания — 24 px указателем и 44 px пальцем. Сам знак
+     трогать нельзя (это чужая графика), поэтому расширяем только область
+     нажатия: 19-пиксельный логотип остаётся в левом нижнем углу своих размеров,
+     а вокруг него растёт прозрачная полоса. */
+  .price-chart #tv-attr-logo {
+    display: flex;
+    align-items: flex-end;
+    justify-content: flex-start;
+    min-width: 35px;
+    min-height: 24px;
   }
 
   .kv {
@@ -1022,36 +1104,83 @@
 
   .fineprint code { color: var(--fg-2); }
 
-  .chart-tip {
-    background: var(--bg-3);
-    border: 1px solid var(--line-strong);
-    border-radius: 3px;
-    padding: 5px 8px;
-    display: flex;
-    flex-direction: column;
-    gap: 1px;
+  /* ── График ───────────────────────────────────────────────────────────── */
+  .chart-panel {
+    position: relative;
+    min-height: 260px;
+    background: var(--bg-1);
   }
 
-  .chart-tip b {
+  /* Строка OHLC-считывания над полотном, а не поверх него: на 220 px высоты
+     перекрытие съело бы половину свечей, а на 390 px ширины подписи обязаны
+     перенестись, а не вылезти за экран. */
+  .price-chart {
+    position: relative;
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+    height: 100%;
+  }
+
+  .ohlc-legend {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 2px 12px;
+    padding: 6px 14px 4px;
+    font-size: var(--fs-label);
+    color: var(--fg-3);
+  }
+
+  .ohlc-time {
     font-family: var(--font-mono);
     font-variant-numeric: tabular-nums;
-    font-size: var(--fs-data);
-    font-weight: 600;
-    color: var(--fg);
+    color: var(--fg-2);
   }
 
-  .chart-tip span { font-size: var(--fs-label); color: var(--fg-3); }
+  .ohlc-pair {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 4px;
+    min-width: 0;
+  }
 
-  /* Подписи осей recharts: библиотека кладёт font-size презентационным
-     атрибутом числом, и панель не может передать в SVG токен. Правило CSS
-     перебивает презентационный атрибут — так метки графика начинают жить
-     шкалой, а не «10» в конфиге чарта. */
-  .desk-chart .recharts-cartesian-axis-tick text { font-size: var(--fs-label); }
+  .ohlc-pair i {
+    font-style: normal;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--fg-3);
+  }
 
-  /* Невидимый эталон размера подписи: по нему Терминал меряет шкалу и
-     пересчитывает ширину оси. Обязан иметь собственный бокс, поэтому смещён за
-     край, а не display:none (у такого элемента нет размеров, и ResizeObserver
-     на смену шрифта не отреагирует). */
+  /* Закрытое и открытое часа — одна и та же величина, что в чипе изменения и в
+     линии последней цены, поэтому и направление красится тем же слоем: текст
+     статуса идёт по --down-hi, а не по --down. */
+  .ohlc-pair b { font-size: var(--fs-data); font-weight: 500; color: var(--fg); }
+  .ohlc-pair b.is-up { color: var(--up); }
+  .ohlc-pair b.is-down { color: var(--down-hi); }
+
+  /* Полотно: библиотека вставляет в этот div свой canvas и живёт его размером
+     (autoSize), поэтому строка обязана быть minmax(0, 1fr) — иначе высота
+     считается от содержимого и растёт на каждую перерисовку. */
+  .chart-host {
+    position: relative;
+    min-height: 0;
+  }
+
+  .chart-empty {
+    position: absolute;
+    inset: 0;
+    display: grid;
+    place-content: center;
+    margin: 0;
+    font-size: var(--fs-data);
+    color: var(--fg-3);
+  }
+
+  /* Невидимый эталон размера подписи: по нему график пересчитывает кегль осей,
+     которые библиотека рисует числом на canvas. Обязан иметь собственный бокс,
+     поэтому смещён за край, а не display:none (у такого элемента нет размеров,
+     и ResizeObserver на смену шрифта не отреагирует). */
   .axis-probe {
     position: absolute;
     left: -9999px;
@@ -1790,10 +1919,10 @@
   @media (max-width: 1024px) {
     .terminal-layout { grid-template-columns: minmax(0, 1fr); }
     .terminal-header, .terminal-asset-header { gap: 10px 12px; padding: 10px 12px; }
-    /* Одна колонка: символ, число, цифры, лента — в порядке чтения. */
+    /* Одна колонка: символ, число, цифры — в порядке чтения. */
     .terminal-asset-header {
       grid-template-columns: minmax(0, 1fr);
-      grid-template-areas: "sym" "quote" "stats" "tape";
+      grid-template-areas: "sym" "quote" "stats";
       align-items: start;
     }
   }
@@ -1804,6 +1933,10 @@
     .btn-primary { padding: 12px 18px; min-height: 44px; }
     .btn-action { padding: 14px; }
     .input-mono { padding: 12px 14px; font-size: var(--fs-title); }
+
+    /* Под пальцем область нажатия обязательной ссылки графика — 44×44: знак
+       остаётся своих 35×19 в углу, прозрачной полосе добавляется по 9 и 25 px. */
+    .price-chart #tv-attr-logo { min-width: 44px; min-height: 44px; }
 
     /* Девять вкладок под пальцем, а не над контентом: в верхней полосе они
        уезжали при первом же скролле, а в мини-аппе Telegram ещё и сама шапка

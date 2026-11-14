@@ -198,7 +198,8 @@ export type Trade = {
   id: string | number;
   price: number;
   size: number;
-  isAsk: boolean; // true = last trade was a sell hitting the bid
+  /** true = сделка сняла продажу, то есть агрессором был покупатель. */
+  takerBuy: boolean;
   timestamp?: number;
 };
 
@@ -206,6 +207,14 @@ export type Trade = {
 // { code, trades: [ { trade_id, price, size, is_maker_ask, timestamp, ... } ] }
 // where price/size come back as STRINGS, so they must be Number()-coerced before math.
 // Params per https://apidocs.lighter.xyz/reference/recenttrades (market_id int16, limit 1-100).
+//
+// Про знак стороны. Поле называется is_maker_ask, а не «сторона сделки»: maker —
+// это чья заявка лежала в книге и была снята, значит агрессор — противоположная
+// сторона. maker=ask ⇒ снимали продажу ⇒ купил тейкер. Живой замер mainnet
+// 2026-11-14 (по 100 сделок, market_id 0/1/2) это подтверждает ценами: средняя
+// цена группы true выше группы false (1926.42 против 1926.13, 68166.54 против
+// 68164.30, 77.94 против 77.93), то есть сделки с флагом true печатаются по
+// цене продажи — а покупка по цене продажи это uptick.
 // Raw trade row: the payload fields noted above; extras are ignored.
 type RawTrade = {
   trade_id?: string | number;
@@ -224,7 +233,7 @@ export async function getRecentTrades(marketId: number, limit = 20): Promise<Tra
     id: t.trade_id ?? i,
     price: Number(t.price),
     size: Number(t.size),
-    isAsk: !!t.is_maker_ask,
+    takerBuy: !!t.is_maker_ask,
     timestamp: t.timestamp,
   }));
 }
@@ -254,8 +263,6 @@ export type DepthLevel = {
   price: number;
   /** Сумма remaining_base_amount всех заявок этой цены, в базовом активе. */
   size: number;
-  /** Накопленный размер от лучшей цены к краю книги — по нему рисуется полоса. */
-  total: number;
 };
 
 export type OrderBookDepth = { asks: DepthLevel[]; bids: DepthLevel[] };
@@ -264,7 +271,12 @@ export type OrderBookDepth = { asks: DepthLevel[]; bids: DepthLevel[] };
  *
  *  Мусор и неположительные числа не доходят до лестницы: NaN в сортировке ведёт
  *  себя как «больше всех» и переставляет уровни, а нулевая заявка рисует строку
- *  без объёма. Ключ — число, а не строка: "69417.8" и "69417.80" — одна цена. */
+ *  без объёма. Ключ — число, а не строка: "69417.8" и "69417.80" — одна цена.
+ *
+ *  Накопленного объёма здесь нет нарочно: полоса глубины и колонка «Всего»
+ *  меряются накопленным USDC (size × price), а не накопленным базовым, и
+ *  держать оба накопления в двух местах означало бы два ответа на вопрос
+ *  «сколько стоит пройти книгу до этой цены». Владелец накопления — OrderBook. */
 export function depthLevels(orders: RawBookOrder[], side: "ask" | "bid", levels: number): DepthLevel[] {
   const byPrice = new Map<number, number>();
   for (const order of orders) {
@@ -273,12 +285,10 @@ export function depthLevels(orders: RawBookOrder[], side: "ask" | "bid", levels:
     if (!Number.isFinite(price) || price <= 0 || !Number.isFinite(size) || size <= 0) continue;
     byPrice.set(price, (byPrice.get(price) ?? 0) + size);
   }
-  const sorted = [...byPrice.entries()].sort((a, b) => (side === "ask" ? a[0] - b[0] : b[0] - a[0]));
-  let total = 0;
-  return sorted.slice(0, levels).map(([price, size]) => {
-    total += size;
-    return { price, size, total };
-  });
+  return [...byPrice.entries()]
+    .sort((a, b) => (side === "ask" ? a[0] - b[0] : b[0] - a[0]))
+    .slice(0, levels)
+    .map(([price, size]) => ({ price, size }));
 }
 
 export async function getOrderBookDepth(marketId: number, levels: number): Promise<OrderBookDepth> {
@@ -292,16 +302,19 @@ export async function getOrderBookDepth(marketId: number, levels: number): Promi
   };
 }
 
-export type DepthSpread = { ask: number; bid: number; gap: number; bps: number };
+export type DepthSpread = { ask: number; bid: number; mid: number; gap: number; bps: number };
 
 /** Спред по лучшим ценам книги. null, пока одной из сторон нет: спред от нуля
- *  был бы числом, которого рынок не показывал. */
+ *  был бы числом, которого рынок не показывал. mid отдаётся наружу, а не
+ *  остаётся внутренним знаменателем bps: панель печатает его в строке между
+ *  лучшей покупкой и лучшей продажей, и второй пересказ этой формулы означал бы
+ *  второе определение середины книги. */
 export function depthSpread(depth: OrderBookDepth): DepthSpread | null {
   const ask = depth.asks[0]?.price;
   const bid = depth.bids[0]?.price;
   if (ask == null || bid == null) return null;
   const mid = (ask + bid) / 2;
-  return { ask, bid, gap: ask - bid, bps: ((ask - bid) / mid) * 10_000 };
+  return { ask, bid, mid, gap: ask - bid, bps: ((ask - bid) / mid) * 10_000 };
 }
 
 // GET /api/v1/funding-rates returns one row per (market, venue): the Lighter funding rate

@@ -54,11 +54,22 @@ function auditInBrowser(opts: { minTarget: number; root: string | null }): Desig
     b: Math.round(fg.b * fg.a + bg.b * (1 - fg.a)),
     a: 1,
   });
+  /* Узел без текста (ссылка-иконка, пустой контрол) описывался как «a.» —
+     нарушение находилось, а где оно живёт, приходилось угадывать отдельным
+     прогоном. Поэтому для пустых узлов называются distinguishing-атрибуты и
+     ближайшая подписанная область. */
   const describe = (el: Element): string => {
     const own = el.textContent?.trim().slice(0, 36) ?? "";
     const cls = ((el.getAttribute("class") ?? "") as string).split(" ")[0] ?? "";
     const tag = el.tagName.toLowerCase();
-    return own ? `${tag}.${cls} «${own}»` : `${tag}.${cls}`;
+    if (own) return `${tag}.${cls} «${own}»`;
+    const hints = ["href", "aria-label", "title", "type", "id"]
+      .map((name) => el.getAttribute(name))
+      .filter((value): value is string => !!value)
+      .map((value) => value.slice(0, 40));
+    const region = el.closest("[aria-label], [role='tabpanel'], dialog");
+    const area = region?.getAttribute("aria-label") ?? region?.getAttribute("id") ?? "";
+    return `${tag}.${cls}${hints.length ? ` [${hints.join(" ")}]` : ""}${area ? ` в «${area}»` : ""}`;
   };
   const hasText = (el: Element) => el.children.length === 0 && (el.textContent ?? "").trim().length > 0;
   const onScreen = (el: Element) => {

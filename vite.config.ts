@@ -8,7 +8,7 @@ import react from "@vitejs/plugin-react";
 // видна только если посмотреть в бандл. Так что петлю запрещаем на сборке —
 // тем же разбором адреса, которым панель решает, называть ли адрес в тексте
 // ошибки (src/lib/loopback.ts): два пересказа правила разошлись бы тихо.
-import { loopbackBuildProblem } from "./src/lib/loopback";
+import { loopbackBuildProblem } from "./src/lib/loopback.ts";
 
 // Единственный внешний узел, шум про который мы глушим: wagmi тянет viem/tempo,
 // ox/tempo/internal/virtualMasterPool.js импортирует node:worker_threads, и
@@ -88,7 +88,7 @@ export default defineConfig(({ mode }) => {
               if (id.includes("wagmi") || id.includes("@wagmi")) {
                 return "vendor-wagmi";
               }
-              if (id.includes("recharts")) {
+              if (id.includes("lightweight-charts")) {
                 return "vendor-charts";
               }
               if (id.includes("lucide-react")) {

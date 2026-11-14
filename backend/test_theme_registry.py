@@ -31,6 +31,11 @@
 аппа через `setProperty`, причём именем из шаблона. Все четыре способа
 объявления находятся сканированием, а не списком в этом файле: список руками
 устарел бы ровно так же, как устарели шестнадцать алиасов.
+
+Чтение устроено так же. Кроме `var(--x)` код берёт значение из темы через
+`getPropertyValue` и его обёртки — так график красит свечи и шрифт подписей.
+Токен, который так и читается, не мёртвый: проверка названия это различает,
+иначе первая же правка цвета свечей «почистила» бы `--up-soft` за ненадобностью.
 """
 
 import re
@@ -44,6 +49,15 @@ THEME_GATE = ROOT / "src" / "components" / "theme.gate.test.ts"
 COMMENT = re.compile(r"/\*.*?\*/", re.S)
 DECLARATION = re.compile(r"(--[a-z0-9-]+)\s*:\s*([^;{}]+);")
 USE = re.compile(r"var\((--[a-z0-9-]+)")
+# Чтение из JS: `getPropertyValue` — единственный DOM-API, которое отдаёт
+# значение токена, а `token` и `cssColor` — обёртки над ним в PriceChart и
+# telegram.ts. Без этой строки гейт считал мёртвыми `--up-soft` и `--down-soft`,
+# которые PriceChart читает через обёртку и красит ими фон свечей). Новая обёртка
+# со своим именем не спрячет токен: она даст ложную «мёртвость», то есть
+# сломается громко, а не замолчит.
+JS_READ = re.compile(
+    r"""(?:getPropertyValue|token|cssColor)\(\s*["'](--[a-z0-9-]+)["']"""
+)
 INLINE_CUSTOM = re.compile(r"""["'](--[a-z0-9-]+)["']\s*:""")
 SET_LITERAL = re.compile(r"""setProperty\(\s*["'](--[a-z0-9-]+)["']""")
 SET_TEMPLATE = re.compile(r"setProperty\(\s*`(--[a-z0-9-]*?)\$\{")
@@ -107,7 +121,11 @@ class TokenRegistry(unittest.TestCase):
         cls.declared_code = set(INLINE_CUSTOM.findall(cls.code)) | set(
             SET_LITERAL.findall(cls.code)
         )
-        cls.used = set(USE.findall(cls.css)) | set(USE.findall(cls.code))
+        cls.used = (
+            set(USE.findall(cls.css))
+            | set(USE.findall(cls.code))
+            | set(JS_READ.findall(cls.code))
+        )
 
     def _is_declared(self, name: str) -> bool:
         return (

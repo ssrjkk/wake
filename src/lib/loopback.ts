@@ -12,7 +12,7 @@
 // хостом, и проверка петли на ней просто молчала) дают один и тот же ответ.
 // Слово «localhost» в пути или в query чужого адреса местным его не делает.
 
-import { urlHost } from "./url";
+import { urlHost } from "./url.ts";
 
 /** Уже разобранное имя хоста: петля это она или нет. */
 export function isLoopbackHost(host: string | null): boolean {

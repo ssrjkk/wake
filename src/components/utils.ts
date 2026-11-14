@@ -80,6 +80,13 @@ export function fmtPct(fraction: number): string {
   return `${v >= 0 ? "+" : ""}${pct}%`;
 }
 
+// Подпись «обновлено» есть в Терминале (свечи, стакан, лента) и в Лидерах. Пока
+// формат держался по месту, четыре копии разошлись: Discover не печатал прочерк
+// при null, а Terminal печатал, и человек видел «обновлено » с пустым временем.
+export function stamp(d: Date | null | undefined): string {
+  return d ? d.toLocaleTimeString("ru-RU", { hour12: false }) : "—";
+}
+
 export function categorizeMarket(m: OrderBook): MarketCategory {
   if (m.market_type === "spot") return "Spot";
   if (FOREX_SYMBOLS.has(m.symbol)) return "Forex";
@@ -146,34 +153,4 @@ export function trialToast(sub: Subscription): string {
       // ни «активен» в этом случае сказать нечем.
       return "Пробный период не выдан: бэкенд вернул ответ без подписки";
   }
-}
-
-// ── Подписи оси цен ─────────────────────────────────────────────────────────
-//
-// Ось — шкала, а не отсчёт: точное значение человек видит крупным числом в
-// шапке и в подсказке графика. Полное «78 901.400138» в оси — это не точность,
-// а шум разряда, который к тому же не влезает в box оси: на крупном тексте
-// подпись выползала за правый край экрана (ловит e2e/design-gate.spec.ts).
-
-/** Компактная цена для оси: тысячи и миллионы читаются суффиксом, а не шестью
- *  знаками после запятой. */
-export function fmtAxisPrice(value: number, decimals: number): string {
-  const abs = Math.abs(value);
-  if (abs >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(1)}B`;
-  if (abs >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
-  if (abs >= 10_000) return `${(value / 1_000).toFixed(1)}K`;
-  return fmt(value, decimals);
-}
-
-/** Сколько знаков после запятой может позволить себе ось.
- *
- *  `maxChars` считается от измеренной ширины подписи, поэтому ответ зависит и
- *  от шрифта рынка (decimals), и от того, насколько крупно человек читает. */
-export function axisDecimals(values: number[], marketDecimals: number, maxChars: number): number {
-  const digits = Math.max(0, Math.floor(marketDecimals));
-  for (let d = digits; d > 0; d--) {
-    const widest = Math.max(0, ...values.map((v) => fmt(v, d).length));
-    if (widest <= maxChars) return d;
-  }
-  return 0;
 }

@@ -193,25 +193,57 @@ describe('lighter', () => {
   })
 
   describe('getRecentTrades', () => {
-    it('fetches recent trades', async () => {
-      const mockData = {
-        trades: [{ id: 1, price: 100, size: 1, isAsk: false }]
-      }
+    // Сырой ответ площадки, а не «удобный» объект: price и size приходят
+    // строками, флаг называется is_maker_ask, и именно на нём висит сторона
+    // сделки в ленте.
+    const raw = {
+      code: 0,
+      trades: [
+        { trade_id: '11', price: '77.94', size: '0.125', is_maker_ask: true, timestamp: 1762000000 },
+        { trade_id: '12', price: '77.90', size: '0.5', is_maker_ask: false, timestamp: 1762000005 },
+        { trade_id: '13', price: '77.91', size: '1.25', is_maker_ask: 1, timestamp: 1762000009 },
+      ],
+    }
+
+    it('reads the documented payload and turns maker=ask into a taker buy', async () => {
       global.fetch = vi.fn().mockResolvedValue({
         ok: true,
-        json: () => Promise.resolve(mockData)
+        json: () => Promise.resolve(raw),
       })
 
-      const result = await getRecentTrades(1, 10)
-      expect(result).toBeDefined()
+      expect(await getRecentTrades(2, 10)).toEqual([
+        { id: '11', price: 77.94, size: 0.125, takerBuy: true, timestamp: 1762000000 },
+        { id: '12', price: 77.9, size: 0.5, takerBuy: false, timestamp: 1762000005 },
+        // Флаг приходит и boolean, и number: 1 — это тоже «maker был продацом».
+        { id: '13', price: 77.91, size: 1.25, takerBuy: true, timestamp: 1762000009 },
+      ])
+    })
+
+    it('keeps the request inside the documented limit range', async () => {
+      global.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () => Promise.resolve({ trades: [] }),
+      })
+
+      await getRecentTrades(1, 10)
       const url = calledUrlWithTimeout(global.fetch as ReturnType<typeof vi.fn>)
       expect(url).toContain('market_id=1')
       expect(url).toContain('limit=10')
+
+      // Потолок ответа — 100 сделок: больше Lighter не отдаёт, и просить 500
+      // бессмысленно, поэтому limit режется на стороне клиента.
+      await getRecentTrades(1, 500)
+      expect(calledUrlWithTimeout(global.fetch as ReturnType<typeof vi.fn>, 1)).toContain('limit=100')
+    })
+
+    it('throws instead of returning an empty tape when the API refuses', async () => {
+      global.fetch = vi.fn().mockResolvedValue({ ok: false, status: 429 })
+      await expect(getRecentTrades(1, 10)).rejects.toThrow('Lighter API 429')
     })
   })
 
   describe('стакан', () => {
-    it('складывает заявки одной цены в уровень и копит размер от лучшей цены', () => {
+    it('складывает заявки одной цены в уровень и ставит лучшую цену первым', () => {
       const levels = depthLevels(
         [
           { price: '100', remaining_base_amount: '0.5' },
@@ -222,8 +254,8 @@ describe('lighter', () => {
         6
       )
       expect(levels).toEqual([
-        { price: 99, size: 1, total: 1 },
-        { price: 100, size: 0.75, total: 1.75 },
+        { price: 99, size: 1 },
+        { price: 100, size: 0.75 },
       ])
     })
 
@@ -250,7 +282,7 @@ describe('lighter', () => {
         'ask',
         6
       )
-      expect(levels).toEqual([{ price: 100, size: 2, total: 2 }])
+      expect(levels).toEqual([{ price: 100, size: 2 }])
     })
 
     it('цена — число, поэтому «69417.8» и «69417.80» сливаются в один уровень', () => {
@@ -262,7 +294,7 @@ describe('lighter', () => {
         'bid',
         6
       )
-      expect(levels).toEqual([{ price: 69417.8, size: 3, total: 3 }])
+      expect(levels).toEqual([{ price: 69417.8, size: 3 }])
     })
 
     it('читает книгу с limit=100 и собирает уровни из строк-ордеров', async () => {
@@ -281,8 +313,8 @@ describe('lighter', () => {
           }),
       })
       const depth = await getOrderBookDepth(7, 6)
-      expect(depth.asks).toEqual([{ price: 100, size: 3, total: 3 }])
-      expect(depth.bids).toEqual([{ price: 99, size: 4, total: 4 }])
+      expect(depth.asks).toEqual([{ price: 100, size: 3 }])
+      expect(depth.bids).toEqual([{ price: 99, size: 4 }])
       const url = calledUrlWithTimeout(global.fetch as ReturnType<typeof vi.fn>)
       expect(url).toContain('/orderBookOrders')
       expect(url).toContain('market_id=7')
@@ -302,14 +334,15 @@ describe('lighter', () => {
       await expect(getOrderBookDepth(7, 6)).rejects.toThrow('Lighter API 403')
     })
 
-    it('спред считается от лучших цен, а без одной стороны его нет', () => {
+    it('спред и середина книги считаются от лучших цен, без одной стороны их нет', () => {
       const spread = depthSpread({
-        asks: [{ price: 100, size: 1, total: 1 }],
-        bids: [{ price: 99, size: 1, total: 1 }],
+        asks: [{ price: 100, size: 1 }],
+        bids: [{ price: 99, size: 1 }],
       })
       expect(spread?.gap).toBe(1)
+      expect(spread?.mid).toBe(99.5)
       expect(spread?.bps).toBeCloseTo(100.5025, 3)
-      expect(depthSpread({ asks: [], bids: [{ price: 99, size: 1, total: 1 }] })).toBeNull()
+      expect(depthSpread({ asks: [], bids: [{ price: 99, size: 1 }] })).toBeNull()
     })
   })
 

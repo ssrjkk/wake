@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { avatarColor, categorizeMarket, fmt, fmtPrice, fmtPct, fmtUsdCompact, shortHandle, toastVariant, trialToast, usd } from './utils'
+import { avatarColor, categorizeMarket, fmt, fmtPrice, fmtPct, fmtUsdCompact, shortHandle, stamp, toastVariant, trialToast, usd } from './utils'
 import type { ToastVariant } from './utils'
 import type { Subscription } from './types'
 import { COMMODITY_SYMBOLS, FOREX_SYMBOLS, STOCK_SYMBOLS } from './types'
@@ -282,5 +282,32 @@ describe('trialToast', () => {
     // «начат» — единственный смысл, которого у этой функции нет: она не знает,
     // создана строка этим кликом или лежала до него.
     for (const { sub: s } of cases) expect(trialToast(s)).not.toMatch(/начат/)
+  })
+})
+
+// Подпись «обновлено» — одно правило на четыре панели (свечи, стакан, лента,
+// лидеры). Пока формат держался по месту, Discover не печатал прочерк при null,
+// и плашка «обновлено » висела с пустым временем.
+describe('stamp', () => {
+  it('печатает время без 12-часового формата', () => {
+    // Час 18 обязан остаться 18: hour12 по умолчанию для ru-RU дал бы
+    // «6:04:05 PM» — в русской панели это не время, а обломок локали.
+    const text = stamp(new Date('2026-11-13T18:04:05'))
+    expect(text).toContain('18:04')
+    expect(text).not.toMatch(/AM|PM/)
+  })
+
+  it('null и undefined дают прочерк, а не пустую строку', () => {
+    expect(stamp(null)).toBe('—')
+    expect(stamp(undefined)).toBe('—')
+  })
+
+  it('одна и та же дата печатается одинаково во всех панелях', () => {
+    // Вокзал: Терминал и лидеры берут метку из одной функции, поэтому расхождение
+    // возможно только если кто-то вернёт локальный формат на место.
+    for (const iso of ['2026-11-13T00:30:00', '2026-11-13T09:07:08', '2026-11-13T23:59:59']) {
+      const d = new Date(iso)
+      expect(stamp(d)).toBe(d.toLocaleTimeString('ru-RU', { hour12: false }))
+    }
   })
 })

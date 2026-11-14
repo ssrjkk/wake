@@ -1,13 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { Search } from "lucide-react";
-import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ReferenceLine, ResponsiveContainer } from "recharts";
 import {
   getCandles,
   getTicker,
   getRecentTrades,
   getFundingRates,
   getOrderBookDepth,
-  depthSpread,
   getApiHost,
   getSignerHealth,
   isTradeable,
@@ -25,8 +23,10 @@ import {
 import { SIGNING_SERVICE_URL } from "../lib/config";
 import { errorText } from "../lib/backend";
 import { setIntervalWhenVisible } from "../lib/visibleInterval";
-import { axisDecimals, fmt, fmtAxisPrice, usd } from "./utils";
+import { fmt, fmtUsdCompact, stamp, usd } from "./utils";
 import { Modal, Skeleton } from "./ui";
+import OrderBookPanel from "./OrderBookPanel";
+import PriceChart from "./PriceChart";
 
 interface TerminalProps {
   asset: string;
@@ -50,32 +50,24 @@ interface TerminalProps {
    которой они привязаны. */
 const TICKER_ROWS = 12;
 
-/* Сколько часовых свечей берёт график. Подпись над графиком обязана печатать
-   это же число: вписанное рядом вторым экземпляром оно расходится с запросом
-   молча — запрос правят, подпись остаётся. */
+/* Сколько часовых свечей берёт график. Подпись над графиком печатает фактическое
+   число прочитанных свечей, а не эту константу: правка аргумента запроса или
+   короткий хвост у нового рынка оставляли бы подпись с чужим числом — ровно та
+   находка, из-за которой подпись «48 шт» уже краснела в прошлом. */
 const CANDLE_COUNT = 48;
 
-/* Сколько уровней цены показывает стакан с каждой стороны. Шесть строк на
-   сторону помещаются между графиком и лентой сделок без прокрутки, а более
-   глубокая книга всё равно не читается одним взглядом: за лучшей ценой следят
-   по спреду, а не по двадцатому уровню. */
-const DEPTH_LEVELS = 6;
+/* Сколько уровней цены показывает стакан с каждой стороны. 20 — это уже не
+   «всё влезает без прокрутки»: лестница скроллится внутри панели (см.
+   .book-scroll), а середина книги и баланс сторон вынесены над прокруткой,
+   поэтому за best bid / best ask следят, не доходя до двадцатого уровня.
+   Больше 20 нет смысла и в ответе: глубина за ними на живых рынках Lighter
+   измеряется сотыми долями оборота, а 40 строк в панели никто не читает. */
+const DEPTH_LEVELS = 20;
 
 /* Виток опроса книги. Чаще свечей (20 с) и реже ленты сделок (4 с): заявки
    переставляются быстрее, чем закрывается час, но каждый виток стоит 45 КБ
    ответа — см. DEPTH_ORDERS в src/lib/lighter.ts. */
 const DEPTH_POLL_MS = 5000;
-
-/* Ось цен. Ширина подписи = знаков × ширина цифры, поэтому box оси
-   считается из измеренного размера подписи, а не зашит в 72 px: на базовой
-   шкале 72 хватало, на удвоенной та же строка выползла за правый край
-   экрана. 0.62em — табличная моногрань темы; запас 12 px — место под
-   десятичную точку и разряды. */
-const AXIS_CHAR_EM = 0.62;
-const AXIS_PAD_PX = 12;
-const AXIS_MIN_PX = 56;
-const AXIS_MAX_PX = 128;
-const AXIS_FALLBACK_FONT_PX = 10.5;
 
 // Ответ GET /health сервиса подписи. Спрашиваем его ТОЛЬКО по действию
 // пользователя: сервис живёт на машине самого человека, и запрос к нему при
@@ -300,35 +292,6 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
     ? (lastCandle.c - windowStart.o) / windowStart.o
     : null;
   const up = (change ?? 0) >= 0;
-  const chartData = candles.map((c, i) => ({ i, t: c.t, v: c.c }));
-
-  const timeTicks = useMemo(() => {
-    if (candles.length < 2) return [];
-    // Три метки, не четыре: подписи стоят по центру своей точки, и на 390px
-    // ширина поля под график ≈ 250px, где четыре метки «21.10 17:00» уже лепились
-    // друг к другу. Четыре метки на десктопе читались так же, а на телефоне —
-    // ничто.
-    const n = Math.min(3, candles.length);
-    return Array.from({ length: n }, (_, k) => candles[Math.round((k * (candles.length - 1)) / (n - 1))].t);
-  }, [candles]);
-
-  const multiDay = (candles[candles.length - 1]?.t ?? 0) - (candles[0]?.t ?? 0) > 86_400_000;
-  // Окно цены с запасом 15% от диапазона: без него recharts берёт [0, max],
-  // и кривая при 80k прилипает к верху.
-  const priceDomain = useMemo<[number, number]>(() => {
-    if (candles.length < 2) return [0, 1];
-    const values = candles.map((c) => c.c);
-    const min = Math.min(...values);
-    const max = Math.max(...values);
-    const pad = Math.max((max - min) * 0.15, max * 0.0005);
-    return [min - pad, max + pad];
-  }, [candles]);
-  const two = (n: number) => String(n).padStart(2, "0");
-  const tickTime = (t: number) => {
-    const d = new Date(t);
-    const hm = `${two(d.getHours())}:${two(d.getMinutes())}`;
-    return multiDay ? `${two(d.getDate())}.${two(d.getMonth() + 1)} ${hm}` : hm;
-  };
 
   const stats24h = useMemo(() => {
     if (candles.length < 2) return null;
@@ -342,35 +305,6 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
       hours: last24.length,
     };
   }, [candles]);
-
-  /* Лента тиков: величина часа относительно максимального хода в окне. Берётся
-     из тех же свечей, что и график, — отдельных запросов лента не делает.
-     Степень 0.7, а не линейная доля: один час с ходом в 3% на линейной шкале
-     прижимает остальные к нулю, и «как шёл день» перестаёт читаться; в чистом
-     квадрате наоборот — тихие часы кричат так же, как громкие. */
-  const tape = useMemo(() => {
-    if (candles.length < 2) return [];
-    const mags = candles.map((c) => Math.abs(c.c - c.o));
-    const max = Math.max(...mags);
-    return mags.map((m, i) => ({
-      height: max > 0 ? Math.max(0.08, Math.pow(m / max, 0.7)) : 0.5,
-      up: candles[i].c >= candles[i].o,
-      current: i === mags.length - 1,
-    }));
-  }, [candles]);
-
-  const tapeLabel = useMemo(() => {
-    if (!tape.length || !lastCandle) return null;
-    const hour = lastCandle.c - lastCandle.o;
-    // Делить на открытие часа можно, только если открытие есть: на (o || 1)
-    // рынок с ценой в доли доллара получал выдуманное «+0.16%» вместо правдивого
-    // «неизвестно» — и отличить это от настоящего числа было нельзя.
-    const pctHour = lastCandle.o > 0 ? Math.abs((hour / lastCandle.o) * 100) : null;
-
-    return `Ход цены по часам: ${tape.length} шт, последний час ${
-      hour >= 0 ? "рост" : "падение"
-    } на ${pctHour == null ? "неизвестно (нет открытия часа)" : `${fmt(pctHour, 2)}%`}`;
-  }, [tape, lastCandle]);
 
   const maxVolume = visibleMarkets.reduce((acc, m) => Math.max(acc, tickers[m.market_id]?.volume24h ?? 0), 0);
   /* Полоса оборота — логарифм, а не доля от максимума: обороты видимых рынков
@@ -386,37 +320,10 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
   }, [price, leverage, side]);
 
   const decimals = currentMarket?.supported_price_decimals ?? 2;
-
-  /* Размер подписи оси задаёт токен темы, а не число в конфиге чарта, поэтому и
-     box оси считается от фактического значения токена. Значение читается в
-     колбэке подписки на невидимый эталон (span с `0` на --fs-label): шкала
-     меняется не только при загрузке страницы — человек может читать интерфейс
-     крупнее, и ось обязана пересчитаться вместе с ней. */
-  const [axisFontPx, setAxisFontPx] = useState(AXIS_FALLBACK_FONT_PX);
-  const measureAxisProbe = useCallback((node: HTMLSpanElement | null) => {
-    if (!node) return;
-    const observer = new ResizeObserver(() => {
-      const px = parseFloat(getComputedStyle(node).fontSize);
-      if (Number.isFinite(px) && px > 0) setAxisFontPx(px);
-    });
-    observer.observe(node);
-    return () => observer.disconnect();
-  }, []);
-
-  // Сколько знаков влезет в box, который мы вообще готовы отдать оси, и width
-  // из фактической подписи: ось обязан рисоваться внутри своей колонки, а не
-  // поверх правого края вьюпорта.
-  const axisCharBudget = Math.max(
-    4,
-    Math.floor((AXIS_MAX_PX - AXIS_PAD_PX) / (axisFontPx * AXIS_CHAR_EM))
-  );
-  const axisDec = axisDecimals(priceDomain, decimals, axisCharBudget);
-  const axisLabel = (v: number) => fmtAxisPrice(v, axisDec);
-  const axisChars = Math.max(...priceDomain.map((v) => axisLabel(v).length));
-  const axisWidth = Math.min(
-    AXIS_MAX_PX,
-    Math.max(AXIS_MIN_PX, Math.ceil(axisChars * axisFontPx * AXIS_CHAR_EM) + AXIS_PAD_PX)
-  );
+  /* Размер тоже печатается знаками площадки: «0.7500» на рынке с
+   * supported_size_decimals=5 — это не округление, а потерянные два разряда,
+   * и по ним как раз считается минимальный ордер (min_base_amount). */
+  const sizeDecimals = currentMarket?.supported_size_decimals ?? 4;
 
   async function requestOrder() {
     if (!currentMarket || price == null) {
@@ -503,24 +410,9 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
     }
   }
 
-  const stamp = (d: Date | null) => (d ? d.toLocaleTimeString("ru-RU", { hour12: false }) : "—");
-  const lineColor = up ? "var(--up)" : "var(--down)";
   /* Пока не ответила сама книга, свечей просить не у чего: рынок не выбран.
      Причина тогда общая — dataError, а не ошибка несуществующего запроса. */
   const chartError = candles.length ? null : candlesError ?? (currentMarket ? null : dataError);
-
-  const spread = depthSpread(depth);
-  const bookEmpty = depth.asks.length === 0 && depth.bids.length === 0;
-  /* Полоса глубины мерится от общего края обеих сторон, а не от своей: иначе
-     толстая продажа и тонкая покупка рисовали бы одинаковую длину, и сравнить
-     стороны между собой было бы нельзя. Край — последний уровень, он же самый
-     глубокий из прочитанных. */
-  const bookScale = Math.max(
-    depth.asks[depth.asks.length - 1]?.total ?? 0,
-    depth.bids[depth.bids.length - 1]?.total ?? 0
-  );
-  const barWidth = (total: number) =>
-    `${bookScale > 0 ? ((total / bookScale) * 100).toFixed(1) : "0.0"}%`;
 
   return (
     <div className="terminal-layout">
@@ -562,28 +454,12 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
               <b>{fundingRate == null ? "нет ставки" : `${(fundingRate * 100).toFixed(4)}%/ч`}</b>
             </div>
           </div>
-
-          {/* Лента — последняя в потоке: на узком экране числа должны вестись
-              первыми, а полоса хода дорисковывается под них. */}
-          {tape.length > 1 && (
-            <div className="desk-tape" role="img" aria-label={tapeLabel ?? "Ход цены по часам"}>
-              {tape.map((b, i) => (
-                <span
-                  key={i}
-                  className={`tape-bar ${b.current ? "current" : b.up ? "up" : "down"}`}
-                  style={{ height: `${Math.round(b.height * 100)}%`, animationDelay: `${Math.min(i * 5, 220)}ms` }}
-                />
-              ))}
-            </div>
-          )}
         </div>
 
         {/* ── График ───────────────────────────────────────────────────── */}
-        <div style={{ background: "var(--bg-1)", position: "relative", minHeight: "260px" }}>
-          {/* Эталон размера подписи: по нему считается box оси (см. axisFontPx). */}
-          <span ref={measureAxisProbe} className="axis-probe" aria-hidden="true">0</span>
+        <div className="chart-panel">
           <div className="panel-caption">
-            <span className="label">Свечи 1ч · {CANDLE_COUNT} шт · Lighter</span>
+            <span className="label">Свечи 1ч · Lighter</span>
             <span className="num muted">обновлено {stamp(lastCandlesUpdate)}</span>
           </div>
 
@@ -596,131 +472,21 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
             </div>
           ) : (
             <div className="desk-chart chart-wipe" key={`chart-${asset}`}>
-            <ResponsiveContainer width="100%" height="100%" minWidth={200} minHeight={200}>
-              {/* Отступ слева — под половину ширины первой подписи оси: метки
-                  стоят по центру своей точки, и на 30px «21.10 01:00» обрезалось
-                  по «1.10 01:00». */}
-              <AreaChart data={chartData} margin={{ top: 26, right: 30, bottom: 18, left: 42 }}>
-                <defs>
-                  <linearGradient id="deskFill" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor={lineColor} stopOpacity={0.18} />
-                    <stop offset="100%" stopColor={lineColor} stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid stroke="var(--line)" strokeDasharray="0" vertical={false} />
-                <XAxis
-                  dataKey="t"
-                  ticks={timeTicks}
-                  tickFormatter={tickTime}
-                  stroke="var(--line)"
-                  tick={{ fill: "var(--fg-3)", fontFamily: "var(--font-mono)" }}
-                  tickLine={false}
-                  axisLine={{ stroke: "var(--line)" }}
-                  interval={0}
-                  tickMargin={8}
-                />
-                <YAxis
-                  orientation="right"
-                  width={axisWidth}
-                  domain={priceDomain}
-                  tickFormatter={axisLabel}
-                  stroke="var(--line)"
-                  tick={{ fill: "var(--fg-3)", fontFamily: "var(--font-mono)" }}
-                  tickLine={false}
-                />
-                {price != null && (
-                  <ReferenceLine y={price} stroke={lineColor} strokeDasharray="3 3" strokeWidth={1} />
-                )}
-                <Tooltip
-                  content={({ active, payload }) => {
-                    if (!active || !payload?.length) return null;
-                    const point = payload[0].payload as { t: number; v: number };
-                    const d = new Date(point.t);
-                    return (
-                      <div className="chart-tip">
-                        <b>{fmt(point.v, decimals)}</b>
-                        <span>{d.toLocaleString("ru-RU", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", hour12: false })}</span>
-                      </div>
-                    );
-                  }}
-                />
-                <Area type="monotone" dataKey="v" stroke={lineColor} strokeWidth={1.5} fill="url(#deskFill)" isAnimationActive={false} />
-              </AreaChart>
-            </ResponsiveContainer>
+              <PriceChart candles={candles} decimals={decimals} />
             </div>
           )}
         </div>
 
         {/* ── Стакан ───────────────────────────────────────────────────── */}
-        <div>
-          <div className="panel-caption" style={{ background: "var(--bg-1)" }}>
-            <span className="label">Стакан · {DEPTH_LEVELS} уровней</span>
-            <span className="num muted">обновлено {stamp(lastDepthUpdate)}</span>
-          </div>
-
-          <div className="table-scroll" style={{ background: "var(--bg-1)" }}>
-            {depthError && bookEmpty ? (
-              <p className="book-note" style={{ color: "var(--down)" }}>{depthError}</p>
-            ) : bookEmpty ? (
-              <p className="book-note">
-                {depthLoading ? "загрузка…" : chartError ? "Заявок нет: Lighter не ответил." : "Заявок в книге нет."}
-              </p>
-            ) : (
-              <table className="data-table book-table">
-                <thead>
-                  <tr>
-                    <th>Цена</th>
-                    <th className="right">Размер</th>
-                    <th className="right">Всего</th>
-                  </tr>
-                </thead>
-                {/* Продажа стоит сверху и перевёрнута: лучшая цена лежит у
-                    спреда, худшая — у края панели, как в книге биржи. */}
-                <tbody>
-                  {depth.asks.length === 0 ? (
-                    <tr className="book-side-empty"><td colSpan={3}>Продавцов нет</td></tr>
-                  ) : (
-                    [...depth.asks].reverse().map((l) => (
-                      <tr key={`ask-${l.price}`} className="book-row ask">
-                        <td className="num book-price">
-                          <i className="book-bar" style={{ "--w": barWidth(l.total) } as CSSProperties} aria-hidden="true" />
-                          <span style={{ color: "var(--down-hi)" }}>{fmt(l.price, decimals)}</span>
-                        </td>
-                        <td className="num right"><span style={{ color: "var(--fg-2)" }}>{fmt(l.size, 4)}</span></td>
-                        <td className="num right"><span style={{ color: "var(--fg-3)" }}>{fmt(l.total, 4)}</span></td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-                <tbody>
-                  <tr className="book-spread">
-                    <td colSpan={3}>
-                      {spread
-                        ? `Спред ${fmt(spread.gap, decimals)} · ${spread.bps.toFixed(2)} bps`
-                        : "Спред не посчитать: одной стороны нет"}
-                    </td>
-                  </tr>
-                </tbody>
-                <tbody>
-                  {depth.bids.length === 0 ? (
-                    <tr className="book-side-empty"><td colSpan={3}>Покупателей нет</td></tr>
-                  ) : (
-                    depth.bids.map((l) => (
-                      <tr key={`bid-${l.price}`} className="book-row bid">
-                        <td className="num book-price">
-                          <i className="book-bar" style={{ "--w": barWidth(l.total) } as CSSProperties} aria-hidden="true" />
-                          <span style={{ color: "var(--up)" }}>{fmt(l.price, decimals)}</span>
-                        </td>
-                        <td className="num right"><span style={{ color: "var(--fg-2)" }}>{fmt(l.size, 4)}</span></td>
-                        <td className="num right"><span style={{ color: "var(--fg-3)" }}>{fmt(l.total, 4)}</span></td>
-                      </tr>
-                    ))
-                  )}
-                </tbody>
-              </table>
-            )}
-          </div>
-        </div>
+        <OrderBookPanel
+          depth={depth}
+          decimals={decimals}
+          sizeDecimals={sizeDecimals}
+          loading={depthLoading}
+          error={depthError}
+          unavailable={chartError}
+          updated={lastDepthUpdate}
+        />
 
         {/* ── Лента сделок ─────────────────────────────────────────────── */}
         <div>
@@ -737,23 +503,29 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
                 {tradesLoading ? "загрузка…" : chartError ? "Сделок нет: Lighter не ответил." : "Сделок в окне выборки нет."}
               </p>
             ) : (
-              <table className="data-table">
+              <table className="data-table tape-table">
                 <thead>
                   <tr>
                     <th>Цена</th>
                     <th className="right">Размер</th>
+                    <th className="right">Всего</th>
                     <th className="right">Время</th>
                   </tr>
                 </thead>
                 <tbody>
                   {trades.map((t) => (
                     <tr key={`${t.id}-${t.timestamp}`} className="trade-row">
-                      <td className="num right" style={{ color: t.isAsk ? "var(--down)" : "var(--up)", textAlign: "left" }}>
+                      <td className="num tape-price" style={{ color: t.takerBuy ? "var(--up)" : "var(--down)" }}>
+                        {/* Сторона держится не только на цвете (WCAG 1.4.1):
+                            у символа свой знак, а диктор читает слово. */}
+                        <span className="tape-side" aria-hidden="true">{t.takerBuy ? "▲" : "▼"}</span>
+                        <span className="sr-only">{t.takerBuy ? "покупка" : "продажа"}</span>
                         {fmt(t.price, decimals)}
                       </td>
-                      <td className="num right" style={{ color: "var(--fg-2)" }}>{t.size}</td>
+                      <td className="num right" style={{ color: "var(--fg-2)" }}>{fmt(t.size, sizeDecimals)}</td>
+                      <td className="num right" style={{ color: "var(--fg-3)" }}>{fmtUsdCompact(t.size * t.price)}</td>
                       <td className="num right" style={{ color: "var(--fg-3)" }}>
-                        {t.timestamp ? new Date(t.timestamp).toLocaleTimeString("ru-RU", { hour12: false }) : "—"}
+                        {stamp(t.timestamp ? new Date(t.timestamp) : null)}
                       </td>
                     </tr>
                   ))}

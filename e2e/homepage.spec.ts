@@ -178,9 +178,14 @@ test.describe("Оболочка приложения", () => {
     });
     await page.goto("/");
     await nav(page).getByRole("tab", { name: "Терминал" }).click();
-    await expect(page.locator("svg.recharts-surface")).toBeVisible();
-    await expect(page.locator(".recharts-xAxis .recharts-cartesian-axis-tick")).not.toHaveCount(0);
-    await expect(page.locator(".recharts-yAxis .recharts-cartesian-axis-tick")).not.toHaveCount(0);
+    /* Ряд лежит на canvas: в DOM нет ни осей, ни подписей, поэтому проверка
+       поверхности — это сам холст, а наличие данных берётся из сводки, которую
+       график отдаёт скринридеру (48 свечей = 48 шт), и из последнего чтения
+       OHLC. Так же видно, что до графика доехали decimals рынка: 88 050.0 —
+       один знак, как в supported_price_decimals выше. */
+    await expect(page.locator(".price-chart canvas").first()).toBeVisible();
+    await expect(page.getByRole("img", { name: /Свечи 1ч, 48 шт/ })).toBeVisible();
+    await expect(page.locator(".ohlc-legend")).toContainText("88,050.0");
     await page.getByRole("button", { name: /^Открыть long/ }).click();
     await page.getByRole("dialog", { name: "Подтверждение ордера" }).getByRole("button", { name: "Подтвердить", exact: true }).click();
     await expect(page.getByRole("button", { name: "Отправка…", exact: true })).toBeDisabled();
@@ -220,21 +225,161 @@ test.describe("Оболочка приложения", () => {
     const bids = page.locator(".book-row.bid");
     await expect(asks).toHaveCount(2);
     await expect(bids).toHaveCount(1);
-    // Продажа перевёрнута: худшая цена сверху, лучшая — у спреда.
+    // Продажа перевёрнута: худшая цена сверху, лучшая — у середины книги.
     await expect(asks.nth(0)).toContainText("101.0");
     await expect(asks.nth(1)).toContainText("100.0");
-    await expect(asks.nth(1)).toContainText("0.7500");
+    // Пять знаков у размера взяты из supported_size_decimals рынка, а не из
+    // константы панели.
+    await expect(asks.nth(1)).toContainText("0.75000");
     await expect(bids.nth(0)).toContainText("99.0");
-    await expect(page.locator(".book-spread td")).toHaveText("Спред 1.0 · 100.50 bps");
 
-    // Полоса глубины мерится от общего края обеих сторон: край здесь — покупка
-    // с размером 2, поэтому худшая продажа (1.75) рисует 87.5% строки.
+    /* «Всего» — накопленный USDC от лучшей цены: 0,75×100 = 75 и 75+1×101 = 176,
+       у покупки 2×99 = 198. Это та сумма, которую надо пройти, чтобы закрыть
+       объём до этого уровня; в базовых монетах накопление ничего не значит. */
+    await expect(asks.nth(0).locator("td").nth(2)).toHaveText("$176.00");
+    await expect(asks.nth(1).locator("td").nth(2)).toHaveText("$75.00");
+    await expect(bids.nth(0).locator("td").nth(2)).toHaveText("$198.00");
+
+    // Середина книги и спред — четырьмя числами над прокруткой, а не подписью
+    // под лестницей: best bid / best ask обязаны остаться на экране.
+    const mid = page.locator(".book-mid");
+    await expect(mid).toBeVisible();
+    await expect(mid).toContainText("99.0");
+    await expect(mid).toContainText("99.5");
+    await expect(mid).toContainText("100.0");
+    await expect(mid).toContainText("1.0 · 100.50 bps");
+    await expect(page.locator(".book-scroll .book-mid")).toHaveCount(0);
+
+    /* Баланс сторон считается по деньгам, а не по числу строк: покупки 198 против
+       продаж 176 → 53% на 47%, и рядом глубина каждой стороны. */
+    const imb = page.locator(".book-imb");
+    await expect(imb).toContainText("покупки 53%");
+    await expect(imb).toContainText("продажи 47%");
+    await expect(imb).toContainText("1 ур. · $198.00");
+    await expect(imb).toContainText("2 ур. · $176.00");
+
+    // Полоса мерится от общего края обеих сторон: край здесь — покупка (198),
+    // поэтому накопление худшей продажи 176 рисует 176/198 = 88,9% строки.
     const ratio = await page.evaluate(() => {
       const row = document.querySelectorAll(".book-row.ask")[0] as HTMLElement;
       const bar = row.querySelector(".book-bar") as HTMLElement;
       return bar.getBoundingClientRect().width / row.getBoundingClientRect().width;
     });
-    expect(ratio).toBeCloseTo(0.875, 2);
+    expect(ratio).toBeCloseTo(176 / 198, 2);
+
+    // Заголовок столбцов прижат к верху прокрутки: на длинной лестнице
+    // «Цена / Размер / Всего» обязан читаться, а не уезжать за край.
+    const sticky = await page.evaluate(() =>
+      getComputedStyle(document.querySelector(".book-scroll thead th") as HTMLElement).position
+    );
+    expect(sticky).toBe("sticky");
+  });
+
+  test("стакан режет лишние уровни и оставляет середину книги на экране", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.route("**/api/v1/orderBooks?*", (route) => route.fulfill({ json: { order_books: [{
+      symbol: "BTC", market_id: 1, market_type: "perp", status: "active", taker_fee: "0", maker_fee: "0",
+      min_base_amount: "0.00001", min_quote_amount: "10", supported_price_decimals: 1,
+      supported_size_decimals: 5, open_interest: "370.84",
+    }] } }));
+    await page.route("**/api/v1/candles?*", (route) => route.fulfill({ json: { c: [] } }));
+    await page.route("**/api/v1/recentTrades?*", (route) => route.fulfill({ json: { trades: [] } }));
+    await page.route("**/api/v1/funding-rates", (route) => route.fulfill({ json: { funding_rates: [] } }));
+    /* Lighter отдаёт до ста заявок на сторону. Показывать их все — значит убрать
+       с экрана и ленту сделок, и тикет, поэтому уровней ровно двадцать, а
+       лестница скроллится внутри панели. */
+    await page.route("**/api/v1/orderBookOrders?*", (route) => route.fulfill({ json: {
+      code: 200,
+      total_asks: 30,
+      asks: Array.from({ length: 30 }, (_, i) => ({
+        price: String(100 + i),
+        remaining_base_amount: "1",
+      })),
+      total_bids: 30,
+      bids: Array.from({ length: 30 }, (_, i) => ({
+        price: String(99 - i),
+        remaining_base_amount: "1",
+      })),
+    } }));
+    await page.goto("/");
+    await nav(page).getByRole("tab", { name: "Терминал" }).click();
+
+    await expect(page.locator(".book-row.ask")).toHaveCount(20);
+    await expect(page.locator(".book-row.bid")).toHaveCount(20);
+    // Двадцатый уровень продажи — 119; двадцать первый (120) отрезан.
+    await expect(page.locator(".book-row.ask").first()).toContainText("119.0");
+    await expect(page.locator(".book-row.ask", { hasText: "120.0" })).toHaveCount(0);
+    await expect(page.locator(".book-row.bid").last()).toContainText("80.0");
+    await expect(page.locator(".book-mid")).toContainText("1.0 · 100.50 bps");
+
+    const scrolls = await page.evaluate(() => {
+      const el = document.querySelector(".book-scroll") as HTMLElement;
+      return { over: el.scrollHeight > el.clientHeight, midTop: (document.querySelector(".book-mid") as HTMLElement).getBoundingClientRect().top, bookTop: el.getBoundingClientRect().top };
+    });
+    expect(scrolls.over).toBe(true);
+    expect(scrolls.midTop).toBeLessThan(scrolls.bookTop);
+  });
+
+  test("лента сделок называет агрессию словом и знаком, а не только цветом", async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await page.route("**/api/v1/orderBooks?*", (route) => route.fulfill({ json: { order_books: [{
+      symbol: "BTC", market_id: 1, market_type: "perp", status: "active", taker_fee: "0", maker_fee: "0",
+      min_base_amount: "0.00001", min_quote_amount: "10", supported_price_decimals: 1,
+      supported_size_decimals: 5, open_interest: "370.84",
+    }] } }));
+    await page.route("**/api/v1/candles?*", (route) => route.fulfill({ json: { c: [] } }));
+    await page.route("**/api/v1/funding-rates", (route) => route.fulfill({ json: { funding_rates: [] } }));
+    await page.route("**/api/v1/orderBookOrders?*", (route) =>
+      route.fulfill({ json: { code: 200, total_asks: 0, asks: [], total_bids: 0, bids: [] } })
+    );
+    /* Ответ держим живым по форме: price и size — СТРОКИ, флаг — is_maker_ask.
+       maker=ask означает, что в книге лежала продажа, значит снял её покупатель:
+       первая сделка — покупка по цене продажи, вторая — продажа по цене покупки. */
+    await page.route("**/api/v1/recentTrades?*", (route) => route.fulfill({ json: {
+      code: 200,
+      trades: [
+        { trade_id: "a1", price: "100.0", size: "0.5", is_maker_ask: true, timestamp: 1762000000 },
+        { trade_id: "a2", price: "99.5", size: "2", is_maker_ask: false, timestamp: 1762000001 },
+      ],
+    } }));
+    await page.goto("/");
+    await nav(page).getByRole("tab", { name: "Терминал" }).click();
+
+    const rows = page.locator(".trade-row");
+    await expect(rows).toHaveCount(2);
+    // Размер — знаками площадки (5), как в стакане, а не сырое число из ответа.
+    await expect(rows.nth(0)).toContainText("100.0");
+    await expect(rows.nth(0).locator("td").nth(1)).toContainText("0.50000");
+    await expect(rows.nth(1).locator("td").nth(1)).toContainText("2.00000");
+    // «Всего» — нотионал сделки: 0,5 × 100 = 50 и 2 × 99,5 = 199 USDC.
+    await expect(rows.nth(0).locator("td").nth(2)).toHaveText("$50.00");
+    await expect(rows.nth(1).locator("td").nth(2)).toHaveText("$199.00");
+
+    // Сторона названа дважды: глифом для глаз (в том числе тех, кто не различает
+    // оттенки) и словом для диктора.
+    await expect(rows.nth(0).locator(".tape-price")).toContainText("▲");
+    await expect(rows.nth(0).locator(".sr-only")).toHaveText("покупка");
+    await expect(rows.nth(1).locator(".tape-price")).toContainText("▼");
+    await expect(rows.nth(1).locator(".sr-only")).toHaveText("продажа");
+
+    /* Цвет сверяется не с литералом, а с самим токеном: проверка обязана
+       краснеть, если покупки закрасят проёмом, — ровно та инверсия, которую
+       давало чтение is_maker_ask как «сделка была продажей». */
+    const colors = await page.evaluate(() => {
+      const probe = (token: string) => {
+        const el = document.createElement("span");
+        el.style.color = `var(${token})`;
+        document.body.appendChild(el);
+        const value = getComputedStyle(el).color;
+        el.remove();
+        return value;
+      };
+      const read = (index: number) =>
+        getComputedStyle(document.querySelectorAll(".tape-price")[index] as HTMLElement).color;
+      return { up: probe("--up"), down: probe("--down"), first: read(0), second: read(1) };
+    });
+    expect(colors.first, "покупка красится в рост").toBe(colors.up);
+    expect(colors.second, "продажа красится в падение").toBe(colors.down);
   });
 
   test("смена рынка не оставляет чужих заявок в стакане", async ({ page }) => {
@@ -428,7 +573,7 @@ test.describe("Оболочка приложения", () => {
 
     await page.goto("/");
     await nav(page).getByRole("tab", { name: "Терминал" }).click();
-    await expect(page.locator("svg.recharts-surface")).toBeVisible();
+    await expect(page.locator(".price-chart canvas").first()).toBeVisible();
 
     await page.getByRole("button", { name: /^Открыть long/ }).click();
     await expect(page.getByRole("dialog", { name: "Подтверждение ордера" })).toHaveCount(0);
