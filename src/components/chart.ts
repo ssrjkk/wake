@@ -82,7 +82,10 @@ export function fullTimeLabel(ms: number): string {
  *  (supported_price_decimals), то есть из ответа внешнего узла. */
 export function priceFormat(decimals: number): { precision: number; minMove: number } {
   const precision = Math.min(8, Math.max(0, Math.floor(decimals) || 0));
-  return { precision, minMove: Math.pow(10, -precision) };
+  // Не Math.pow(10, -n): libm платформы даёт последний ULP наугад
+  // (0.0001 против 0.00009999999999999999). Парсинг десятичной записи
+  // обязателно округляется по IEEE одинаково везде.
+  return { precision, minMove: Number(`1e-${precision}`) };
 }
 
 /** Сводка для скринридера: ряд лежит на canvas, текста в DOM у него нет. */
