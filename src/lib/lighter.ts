@@ -492,15 +492,33 @@ export async function deleteFollow(followId: string): Promise<void> {
 }
 
 // mirror_log — то, чем закончился каждый прогон копи-движка (leader_listener.py).
-// Статусы фиксированы схемой: planned | skipped | dry_run | sent | failed.
+// planned | skipped | dry_run | sent | failed — исход задумки; filled |
+// partially_filled | unfilled | unconfirmed — что сверка прочитала в ленте
+// сделок площадки по отправленной заявке (mirror_fill.py). `sent` живёт отдельно
+// и значит «заявка ушла, исполнение не сверялось»: строки до сверки и процесс,
+// умерший посреди неё.
 export type MirrorLogRow = {
   id: string;
   follow_id: string;
   market_id: number;
   side: "long" | "short";
+  // Заказанный размер — то, сколько листенер попросил поставить.
   base_amount: number;
+  // Исполненный базовый размер по строкам ленты: null — «не сверялось или не
+  // прочитано», 0 — «IOC снят с цены, ни одной сделки». Пусто и ноль — разные
+  // утверждения, и учёт двигает только число, а null не двигает ничего.
+  filled_base_amount: number | null;
   reduce_only: number;
-  status: "planned" | "skipped" | "dry_run" | "sent" | "failed";
+  status:
+    | "planned"
+    | "skipped"
+    | "dry_run"
+    | "sent"
+    | "failed"
+    | "filled"
+    | "partially_filled"
+    | "unfilled"
+    | "unconfirmed";
   reason: string | null;
   tx_hash: string | null;
   created_at: number;

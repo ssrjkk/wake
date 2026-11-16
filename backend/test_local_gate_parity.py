@@ -1283,6 +1283,156 @@ class TestEndpointIsNamedForTheProbe(unittest.TestCase):
                 self.assertEqual(self._call(self.body, url, default), f"{host} {port}")
 
 
+class TestUnexecutableStepIsNotAFailedStep(unittest.TestCase):
+    """Шаг, команда которого не поднялась, не имеет права называться упавшим.
+
+    Повод — замер 2026-11-16 на Windows: `alembic upgrade head` из gate.sh даёт
+    126 «Permission denied» на шиме в `Python312/Scripts`, хотя сам alembic жив
+    и через `python -m alembic` доходит до «No new upgrade operations detected».
+    Гейт записал это как FAIL, и сводка сказала «упало шагов: 2 — это не гейт»
+    про две проверки, которые не выполнялись вовсе. Красный, который значит
+    «сломана машина», обучает не верить красному, который значит «сломан код»,
+    — а этим двум шагам доверять надо: они единственные, кто сверяет миграции со
+    схемой, на которой живёт учёт зеркалок.
+
+    Поэтому: 126 и 127 идут в НЕТ_ИНСТР (прогон по-прежнему не зелёный, код 3),
+    а там, где у команды есть запасная форма, шаг исполняется через неё и в
+    сводке названа причина подмены. Настоящий провал (exit 1) обязан остаться
+    FAIL'ом — если классификацию сломать в обратную сторону, этот тест краснеет
+    на строке `FAILED=1`.
+
+    Тело `step` исполняется оболочкой, а не пересказывается: пересказ ловит
+    только те коды, о которых подумал автор пересказа.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        text = GATE_FILE.read_text(encoding="utf-8")
+        cls.names = ("record", "step", "unavailable")
+        cls.bodies = {name: shell_function(text, name) for name in cls.names}
+        cls.source = "\n".join(cls.bodies[name] for name in cls.names)
+
+    def _run(self, script: str) -> str:
+        if not shutil.which("bash"):
+            self.fail("без bash классификацию шагов нечем проверить")
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = subprocess.run(
+                ["bash", "-c", script, tmp],
+                cwd=ROOT,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+            )
+        self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
+        return proc.stdout
+
+    def test_function_bodies_are_found(self):
+        for name, body in self.bodies.items():
+            with self.subTest(name=name):
+                self.assertTrue(
+                    body.startswith(f"{name}() {{"),
+                    f"разбор не нашёл {name} в gate.sh: шаг классифицируется нечем",
+                )
+
+    def _classification(self) -> str:
+        """Сводка четырёх шагов, задуманных так, чтобы покрыть каждый исход.
+
+        Живой вывод шагов уходит в файл: `record` печатает строку и одновременно
+        кладёт её в SUMMARY, и без перенаправления каждая сводка встречалась бы
+        дважды — проверка «строк ровно одна» тогда краснела бы на собственной
+        болтовне, а не на поломке классификации. Фигурные скобки — не подоболочка,
+        поэтому FAILED и UNAVAILABLE из группы доживают до печати.
+        """
+        return self._run(
+            f"""
+set -uo pipefail
+TMPDIR_GATE="$0"
+SUMMARY=()
+FAILED=0
+UNAVAILABLE=0
+GATE_LIST=0
+{self.source}
+{{
+step t "no such command" 'definitely_not_a_command_zzz'
+step t "genuine failure" 'exit 1'
+step t "refused but rescued" 'echo "Permission denied" >&2; exit 126' 'echo ok'
+step t "refused and alone" 'echo "Permission denied" >&2; exit 126'
+}} >"$TMPDIR_GATE/live.out" 2>&1
+printf '%s\\n' "${{SUMMARY[@]}}"
+echo "FAILED=$FAILED UNAVAILABLE=$UNAVAILABLE"
+"""
+        )
+
+    def _line(self, out: str, name: str) -> str:
+        """Строка сводки про шаг с таким именем — одна, иначе ассерт повиснет на
+        чужой строке и молча проверит не то."""
+        hits = [line for line in out.splitlines() if f"t / {name}" in line]
+        self.assertEqual(len(hits), 1, f"строк про {name!r}: {hits}")
+        return hits[0].strip()
+
+    def test_every_case_lands_in_its_own_bucket(self):
+        out = self._classification()
+        self.assertTrue(self._line(out, "no such command").startswith("НЕТ_ИНСТР"), out)
+        self.assertTrue(
+            self._line(out, "refused and alone").startswith("НЕТ_ИНСТР"), out
+        )
+        self.assertTrue(self._line(out, "genuine failure").startswith("FAIL"), out)
+        self.assertTrue(self._line(out, "refused but rescued").startswith("OK"), out)
+
+    def test_the_rescue_names_why_it_happened(self):
+        """Подмена способа вызвать программу обязана быть видна: иначе «OK»
+        скрывает, что на этой машине шаг пошёл не той командой, что в CI, и не
+        называет причину, по которой обычная форма не поднялась."""
+        out = self._classification()
+        line = self._line(out, "refused but rescued")
+        self.assertIn("запасным способом", line)
+        self.assertIn("Permission denied", line)
+
+    def test_only_the_genuine_failure_counts_as_failed(self):
+        """Спасённый шаг не попадает ни в один из счётчиков беды: он прогнан, и
+        его результат стоит столько же, сколько результат шага в CI. Не прогнаны
+        только те два, которым нечем было исполниться."""
+        out = self._classification()
+        tail = out.strip().splitlines()[-1]
+        self.assertEqual(tail, "FAILED=1 UNAVAILABLE=2", out)
+
+    def test_missing_binary_still_leaves_the_reason_from_the_tool(self):
+        out = self._classification()
+        self.assertIn(
+            "definitely_not_a_command_zzz", out, "причина не названа — чинить вслепую"
+        )
+
+    def test_fallbacks_differ_from_ci_commands_only_by_python_dash_m(self):
+        """Запасная форма не имеет права проверить меньше: тот же модуль, те же
+        аргументы, отличие ровно в способе его вызвать.
+
+        Переносы с обратным слэшем склеиваются в одну строку: вызов `step` в
+        скрипте читается с нескольких строк, а регулярка, которая этого не
+        знает, находит ноль совпадений и называет это «всё в порядке».
+        """
+        joined = re.sub(r"\\\s*\n\s*", " ", GATE_FILE.read_text(encoding="utf-8"))
+        calls = re.findall(
+            r'step "[^"]+" "[^"]+"[ \t]+("[^"]*")[ \t]+("[^"]*")',
+            joined,
+        )
+        self.assertEqual(
+            len(calls),
+            2,
+            f"шагов с запасной формой ожидалось 2, найдено {len(calls)}",
+        )
+        for primary, fallback in calls:
+            self.assertIn(
+                "alembic",
+                primary,
+                f"запасная форма завелась у не-alembic шага: {primary}",
+            )
+            self.assertEqual(
+                fallback.replace("python -m ", "", 1),
+                primary,
+                f"запасная команда разошлась с основной: {primary!r} против {fallback!r}",
+            )
+
+
 class TestGateExitCodesAreQuoted(unittest.TestCase):
     """Документ, шапка скрипта и учёт в скрипте обещают одни и те же коды.
 

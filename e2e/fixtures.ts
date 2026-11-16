@@ -302,21 +302,65 @@ function followRows(n: number, leaderId: string) {
   }));
 }
 
+// Строки журнала после сверки (backend/mirror_fill.py): чем кончилась заявка и
+// сколько площадка подтвердила по ней. Форму берём не «на глаз», а по исходам
+// движка: filled — вся заявка, partially_filled/unfilled — IOC с остатком,
+// unconfirmed/sent — сверки нет (разница в том, что unconfirmed её пытался
+// сделать, а sent — строка, написанная до неё или процессом, умершим на сверке).
+const MIRROR_OUTCOMES = [
+  { status: "filled", filled: 1, reason: null },
+  {
+    status: "partially_filled",
+    filled: 0.4,
+    reason: "IOC снят с цены на остатке: заявка исполнилась частично",
+  },
+  {
+    status: "unfilled",
+    filled: 0,
+    reason: "IOC снят с цены: ни одной сделки по этой заявке",
+  },
+  {
+    status: "unconfirmed",
+    filled: null,
+    reason: "лента сделок Lighter не прочитана за 4 попыток: timed out",
+  },
+  { status: "sent", filled: null, reason: null },
+  { status: "dry_run", filled: null, reason: null },
+  { status: "skipped", filled: null, reason: "маржа не позволяет" },
+  { status: "failed", filled: null, reason: "Lighter отклонил ордер" },
+] as const;
+
+// Заявка на площадку уходила только у этих исходов — у остальных её не было.
+const MIRROR_SENT = new Set([
+  "filled",
+  "partially_filled",
+  "unfilled",
+  "unconfirmed",
+  "sent",
+]);
+
 function mirrorRows(n: number) {
-  const statuses = ["sent", "dry_run", "skipped", "failed"] as const;
-  return Array.from({ length: n }, (_, i) => ({
-    id: `log-${i}`,
-    follow_id: `follow-${i % 10}`,
-    market_id: (i % 40) + 1,
-    side: i % 2 ? "long" : "short",
-    base_amount: stress ? 123_456.789012 : (i % 17) / 10,
-    reduce_only: i % 5 === 0 ? 1 : 0,
-    status: statuses[i % 4],
-    reason: i % 4 === 3 ? (stress ? "equity_below_mirror_floor_after_fee_rounding" : "margin_unverified") : null,
-    tx_hash: i % 4 === 0 ? `0x${"ab".repeat(32)}` : null,
-    created_at: Math.floor(Date.now() / 1000) - i * 60,
-    leader_handle: stress ? `zeus-of-the-perp-vault-${i % 10}` : `nike${i % 10}`,
-  }));
+  return Array.from({ length: n }, (_, i) => {
+    const outcome = MIRROR_OUTCOMES[i % MIRROR_OUTCOMES.length];
+    const ordered = stress ? 123_456.789012 : (i % 17) / 10;
+    return {
+      id: `log-${i}`,
+      follow_id: `follow-${i % 10}`,
+      market_id: (i % 40) + 1,
+      side: i % 2 ? "long" : "short",
+      base_amount: ordered,
+      filled_base_amount:
+        outcome.filled === null || outcome.filled === 1 ? outcome.filled : ordered * outcome.filled,
+      reduce_only: i % 5 === 0 ? 1 : 0,
+      status: outcome.status,
+      // В стресс-режиме причина — самый длинный технический текст, какой журнал
+      // показывает: колонка обязана выдержать его, а не вымышленный short code.
+      reason: stress && MIRROR_SENT.has(outcome.status) ? "equity_below_mirror_floor_after_fee_rounding" : outcome.reason,
+      tx_hash: MIRROR_SENT.has(outcome.status) ? `0x${"ab".repeat(32)}` : null,
+      created_at: Math.floor(Date.now() / 1000) - i * 60,
+      leader_handle: stress ? `zeus-of-the-perp-vault-${i % 10}` : `nike${i % 10}`,
+    };
+  });
 }
 
 function predictMarketRows(n: number) {

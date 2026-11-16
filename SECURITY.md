@@ -180,6 +180,20 @@ Lighter account index (403 `LIGHTER_ACCOUNT_NOT_LINKED`), because an unlinked
 subscriber is a row that cannot be verified, mirrored or unsubscribed from real
 money.
 
+`sent` in that journal is not a fill. `create_order` answers with a transaction
+hash, and a MARKET + IOC cancelled by price answers *successfully*, so before
+this check the row claimed an execution the venue had never reported and
+`mirror_positions` moved by the ordered size. After sending, the engine reads the
+venue's own tape (`/api/v1/trades`, anonymous, filtered by the follower's
+`account_index`, `market_id`, `role=taker`, `type=trade`) and attributes rows to
+the order by the `client_order_index` sent with it — derived from the mirror row's
+UUID, so it is an id, not a secret. The row then says `filled`,
+`partially_filled`, `unfilled` or `unconfirmed` and stores the executed size; the
+account moves by that number and by nothing else, and `unconfirmed` — the tape
+could not be read — moves it not at all. Reconciling takes no second use of the
+follower's key: the tape is public, and signing stays in the one place that held
+it before.
+
 `/place-order` has no authentication. A secret bundled into a public browser
 build is not a secret, so access control is placement: in the Compose stack its
 port is published on `127.0.0.1` only, and containers reach it on the internal
@@ -554,6 +568,19 @@ Lighter, и из него нет ни одного пути к `/place-order`: �
 у которого wallet-вход не дал индекса аккаунта Lighter (403
 `LIGHTER_ACCOUNT_NOT_LINKED`): строка без привязки — это запись, которую нельзя
 ни проверить, ни зеркалить, ни отменить.
+
+`sent` в этом журнале — не исполненная сделка. `create_order` отвечает хэшем
+транзакции, а MARKET + IOC, снятый с цены, отвечает УСПЕШНО, поэтому до появления
+сверки строка утверждала исполнение, которого площадка не сообщала, а
+`mirror_positions` двигался на заказанный размер. После отправки движок читает
+ленту площадки (`/api/v1/trades`, анонимную, с фильтром по `account_index`,
+`market_id`, `role=taker`, `type=trade` подписчика) и относит сделки к заявке по
+`client_order_index`, отправленному вместе с ней, — он выводится из UUID строки
+журнала, то есть это идентификатор, а не секрет. Строка получает `filled`,
+`partially_filled`, `unfilled` или `unconfirmed` и исполненный размер; учёт
+двигается на это число и больше ни на что, а `unconfirmed` — ленту не прочитали —
+не двигает его вовсе. Сверка не использует ключ подписчика второй раз: лента
+публична, а подпись остаётся там, где и была.
 
 У `/place-order` нет аутентификации. Секрет, вшитый в публичную браузерную
 сборку, секретом не является, поэтому граница — это размещение: в Compose его порт

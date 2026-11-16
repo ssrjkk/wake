@@ -37,32 +37,29 @@ apidocs.lighter.xyz/docs/websocket-reference — включая разворот
     market_id события; рынка, которого нет в полученной книге, событие логируется
     как skip и не исполняется. Книга берётся один раз на старте процесса — новые
     рынки Lighter потребуют перезапуска листенера.
-  - mirror_positions (follow_id, market_id) — учёт того, что движок ОТПРАВИЛ, а
-    не того, что показывает биржа: после отправленного MARKET+IOC размер этого
-    рынка двигается на base_amount ордера, отдельного цикла сверки с позициями
-    подписчика нет. Пока заявка исполняется целиком, расхождения не возникает;
-    частичное исполнение (или сделка подписчика руками в том же рынке) накопит
-    дрейф, и следующий reduce пойдёт от числа листенера, а не от реальной
-    позиции на Lighter. Подтверждения филла у этого пути нет в принципе:
-    `create_order` возвращает хэш заявки, а не отчёт об исполнении, а IOC,
-    отменённый из-за цены, отвечает УСПЕШНО — то есть `sent` в журнале означает
-    «заявка принята площадкой», и только.
+  - mirror_positions (follow_id, market_id) — учёт ИСПОЛНЕННОГО на площадке, а не
+    того, что движок отправил. `create_order` возвращает хэш заявки, а не отчёт об
+    исполнении, и MARKET+IOC, снятый с цены, отвечает УСПЕШНО — поэтому после
+    отправки заявка сверяется по ленте сделок `/api/v1/trades` по
+    client_order_index (mirror_fill.py и _confirm_fill ниже): исход строки
+    журнала — `filled` / `partially_filled` / `unfilled` / `unconfirmed`, а
+    размер рынка двигается на прочитанное исполнение, и ни на что больше. `sent`
+    остаётся у строк, написанных до сверки, и у тех, чей процесс умер посреди неё.
 
-    Почему сверка не сделана «капом по позиции с биржи»: снимок аккаунта
-    кэшируется (ttl у `@cached` в lighter_rest.py), и сразу после собственного
-    mirror-ордера он отстаёт от нас же — закрытие, пришедшее через 30 секунд
-    после открытия,
+    Чего сверка НЕ видит. Ликвидации и deleverage (type != "trade") в сумму не
+    берутся осознанно: их размер — не исполнение зеркального ордера, и сложить его
+    значило бы записать подписчику позицию, которую он не заказывал. Рука самого
+    подписчика в том же рынке остаётся дрейфом, и кап по снимку аккаунта этот
+    дрейф не лечит: снапшот кэшируется и сразу после собственного mirror-ордера
+    отстаёт от нас же — закрытие, пришедшее через полминуты после открытия,
     капнул бы в ноль и подписал `no_mirrored_position_to_reduce` навсегда (база
-    для повтора не ведётся: at-most-once). Сначала нужен источник размера без
-    этого lag — отчёт по client_order_index или позиционный канал подписчика, —
-    и только потом кап.
+    для повтора не ведётся: at-most-once). Сверка журнала с позициями подписчика
+    на Lighter — следующая задача, а не сделанная.
 
     Учёт per-market по той же причине: у подписчика с позициями в BTC и ETH
     закрытие BTC не вычитается из общей суммы и не теряет ETH. Сумма по рынкам
     (её отдаёт follows_for_leader под именем current_mirrored_size) остаётся
-    только числом для отображения. Дрейф от ручных сделок отсутствие сверки не
-    лечит и здесь — сверка с позициями подписчика на Lighter остаётся следующей
-    задачей, а не сделанной.
+    только числом для отображения.
 
 Запуск:
     pip install lighter-sdk websockets
@@ -89,6 +86,7 @@ from mirror_engine import (
     is_buy_order,
     marketable_limit_price,
 )
+import mirror_fill
 from quant import is_finite, scale_to_int
 import lighter_rest
 from config import DRY_RUN, LIGHTER_BASE_URL, LIGHTER_NETWORK, LIGHTER_WS_URL
@@ -142,11 +140,13 @@ def build_order_args(
       client_order_index. Уникален на каждый реальный замысел и выводим из id
       строки mirror_log: по нему ордер потом ищется в Lighter, а две разные
       сделки лидера не делят один индекс (в отличие от time-ms % 1e6, где
-      коллизия на горизонте часа — норма).
+      коллизия на горизонте часа — норма). Теперь ищется по-настоящему: та же
+      функция отдаёт индекс сверке (mirror_fill.client_order_index), и разъездись
+      они, листенер не находил бы в ленте собственные ордера.
     """
     return {
         "market_index": order.market_id,
-        "client_order_index": int(uuid.UUID(order_uid).int % 2**31),
+        "client_order_index": mirror_fill.client_order_index(order_uid),
         "base_amount": scale_to_int(order.base_amount, constraints.size_decimals),
         "price": scale_to_int(limit_price, constraints.price_decimals),
         "is_ask": not is_buy_order(order),
@@ -200,6 +200,73 @@ async def _event_mark_price(market_id: int) -> tuple[float | None, str | None]:
         )
         return None, f"некорректное значение {mark!r}"
     return mark, None
+
+
+# Сколько раз и с каким шагом перечитывать ленту сделок, прежде чем сказать
+# «филла нет». Замер mainnet 2026-11-16: между двумя запросами с паузой в 1 с
+# в `/api/v1/trades` появляется новый trade_id, то есть лента отстаёт от события
+# на секунды, а не на минуты. Четыре попытки по 1.5 с — ~4.5 с на ордер: за это
+# окно IOC либо исполнился, либо снят с цены. Окно живёт здесь, а не в mirror_fill,
+# потому что это вопрос про сеть, а не про деньги: чистая функция обязана отвечать
+# на «что говорят строки», сколько бы строк ей ни принесли.
+CONFIRM_ATTEMPTS = 4
+CONFIRM_DELAY_S = 1.5
+
+
+async def _confirm_fill(
+    order: MirrorOrder, *, account_index: int, order_uid: str
+) -> mirror_fill.FillReport:
+    """Чем закончилась отправленная заявка — по данным самой площадки.
+
+    Единственный вопрос, на который `create_order` не отвечает: IOC, снятый с
+    цены, приходит УСПЕШНЫМ хэшем. До этой функции «заявка принята» означала в
+    журнале «сделка состоялась», а `mirror_positions` двигался на заказанный
+    размер — то есть учёт знал позицию, которой на аккаунте могло не быть.
+
+    Пустая лента переспрашивается до конца окна, найденное исполнение — нет.
+    Отказ чтения НЕ сворачивается в пустоту: у `unconfirmed` нет права двигать
+    учёт, и у `unfilled` нет, но причины у них разные, и по причине человек
+    решает, идти ли смотреть счёт руками.
+
+    HTTP идёт через run_in_threadpool, как mark-цена: запрос синхронный, и в
+    цикле подписчиков он держал бы event loop на таймаут каждого обращения,
+    останавливая и вебсокет, и остальных подписчиков этого события.
+    """
+    report = None
+    last_error = None
+    for attempt in range(CONFIRM_ATTEMPTS):
+        try:
+            fills = await run_in_threadpool(
+                lighter_rest.get_account_taker_fills,
+                account_index,
+                order.market_id,
+                LIGHTER_NETWORK,
+            )
+        except (RuntimeError, ValueError) as e:
+            # Единственный язык отказа lighter_rest — RuntimeError (см. _get);
+            # ValueError остаётся за неизвестной сетью, и она тоже не «филлов
+            # нет». Ошибка не обрывает сверку: следующие попытки могут пройти.
+            last_error = str(e)
+        else:
+            report = mirror_fill.fill_report(
+                fills,
+                account_index=account_index,
+                market_id=order.market_id,
+                order_uid=order_uid,
+                ordered_base=order.base_amount,
+            )
+            if report.status != mirror_fill.UNFILLED:
+                return report
+        if attempt < CONFIRM_ATTEMPTS - 1:
+            await asyncio.sleep(CONFIRM_DELAY_S)
+    if report is not None:
+        return report
+    return mirror_fill.FillReport(
+        mirror_fill.UNCONFIRMED,
+        None,
+        f"лента сделок Lighter не прочитана за {CONFIRM_ATTEMPTS} попыток: "
+        f"{last_error}",
+    )
 
 
 async def handle_leader_event(
@@ -484,6 +551,10 @@ async def handle_leader_event(
             )
             continue
 
+        # Строка уходит в журнал ДО сверки, а не после: между отправкой и
+        # подтверждением до 4.5 с, и процесс, умерший в этом окне, обязан
+        # оставить след «заявка отправлена, исполнение не сверялось», а не
+        # пустоту там, где у подписчика мог появиться реальный филл.
         await db.log_mirror_result(
             log_id,
             follow_row["follow_id"],
@@ -495,8 +566,30 @@ async def handle_leader_event(
             None,
             tx_hash,
         )
-        delta = order.base_amount if not order.reduce_only else -order.base_amount
-        await db.add_mirrored_size(follow_row["follow_id"], order.market_id, delta)
+        report = await _confirm_fill(
+            order,
+            account_index=follow_row["follower_account_index"],
+            order_uid=log_id,
+        )
+        await db.set_mirror_fill(
+            log_id, report.status, report.executed_base, report.reason
+        )
+        if report.status != mirror_fill.FILLED:
+            logger.warning(
+                "follower=%s заявка %s: %s — %s",
+                order.follower_id,
+                log_id,
+                report.status,
+                report.reason,
+            )
+        # Учёт двигается ИСПОЛНЕННЫМ размером, а не заказанным: у частичного
+        # филла остаток не существует, у снятой с цены заявки не существует
+        # ничего, и вера в ордер здесь ровно то же, что и в отказе выше —
+        # навсегда разъехавшийся с биржей учёт.
+        executed = report.executed_base or 0.0
+        if executed:
+            delta = executed if not order.reduce_only else -executed
+            await db.add_mirrored_size(follow_row["follow_id"], order.market_id, delta)
 
 
 def build_constraints(books: list) -> dict:

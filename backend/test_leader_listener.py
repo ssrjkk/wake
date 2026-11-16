@@ -12,6 +12,7 @@ import sys
 import types
 import unittest
 import uuid
+from decimal import Decimal
 from unittest import mock
 
 import testsupport
@@ -509,6 +510,21 @@ class _KeyStore:
 KEY = {"api_key_index": 3, "private_key": "0xpriv"}
 
 
+def tape_row(client, size="0.01", account=900, market=8, trade_id=1, type="trade"):
+    """Строка ленты ровно той формы, которую отдаёт
+    lighter_rest.get_account_taker_fills: сторона тейкера уже выбрана по
+    `is_maker_ask`, размер — float (None = строка, в которой размера нет),
+    client id — то, что ушло с заявкой."""
+    return {
+        "trade_id": trade_id,
+        "market_id": market,
+        "type": type,
+        "taker_account_index": account,
+        "taker_client_order_index": client,
+        "size": None if size is None else float(size),
+    }
+
+
 class TestKeyStoreAccess(unittest.TestCase):
     """`_key_store()` — место, где конфигурация процесса встречается с живым
     стримом. Её зовёт цикл вебсокета, и исключение здесь равносильно обрыву
@@ -568,14 +584,30 @@ class TestLiveExecution(ListenerDbCase):
         )
 
     async def live(
-        self, event, *, store, result=None, raises=None, mark=MARK, mark_error=None
+        self,
+        event,
+        *,
+        store,
+        result=None,
+        raises=None,
+        mark=MARK,
+        mark_error=None,
+        fills=None,
+        fills_error=None,
     ):
         """Событие при выключенном dry_run: подставные `lighter`, хранилище
-        ключей и mark-цена вместо сети, всё остальное — настоящий код.
+        ключей, mark-цена и лента сделок вместо сети, всё остальное — настоящий код.
 
         `mark=None` — рынок без ответа (свечей нет), `mark_error` — рынок
         отвечает ОТКАЗОМ: так проверяется, что причина отказа доходит до
         mirror_log, а не остаётся в логе процесса.
+
+        `fills` — лента `/api/v1/trades` после нашего ордера: None = площадка
+        исполнила заявку целиком (обычный случай, и прежние проверки остаются
+        про то же), [] = IOC снят с цены, список = ровно он. `fills_error` —
+        ленту не удалось прочитать вовсе; это НЕ то же самое, что пустой список.
+        Различимость этих двух исходов и есть смысл сверки: одно двигает учёт,
+        другое нет.
 
         Различимость цен проверяется здесь, а не в отдельном тесте: ожидание
         цены выводилось из `MARK`, и подмена `MARK` на цену события оставляла
@@ -595,6 +627,9 @@ class TestLiveExecution(ListenerDbCase):
         module, clients = _fake_lighter(result=result, raises=raises)
         self.addCleanup(_patch_module(leader_listener, "DRY_RUN", False))
         self.addCleanup(_patch_module(leader_listener, "_key_store", lambda: store))
+        # Окно повторов свёрнуто в ноль: проверяются исходы и количество
+        # обращений к ленте, а не то, как долго листенер ждал бы биржу.
+        self.addCleanup(_patch_module(leader_listener, "CONFIRM_DELAY_S", 0.0))
 
         def get_mark_price(market_id, network=None):
             if mark_error is not None:
@@ -603,11 +638,43 @@ class TestLiveExecution(ListenerDbCase):
                 raise RuntimeError("нет свечей")
             return mark
 
+        calls: list[dict] = []
+
+        def get_account_taker_fills(account_index, market_id, network=None, limit=100):
+            calls.append({"account_index": account_index, "market_id": market_id})
+            if fills_error is not None:
+                raise fills_error
+            if fills is not None:
+                return fills(clients[-1].calls[-1]) if callable(fills) else fills
+            # Обычный случай: заявка исполнена целиком. Строка выводится из
+            # аргументов того самого create_order, который листенер отправил,
+            # поэтому подмена client order index в отправке краснеет здесь, а не
+            # молча превращается в «филла нет».
+            call = clients[-1].calls[-1]
+            return [
+                {
+                    "trade_id": 1,
+                    "market_id": call["market_index"],
+                    "type": "trade",
+                    "taker_account_index": account_index,
+                    "taker_client_order_index": call["client_order_index"],
+                    "size": float(Decimal(call["base_amount"]).scaleb(-3)),
+                }
+            ]
+
         self.addCleanup(_patch_module(lighter_rest, "get_mark_price", get_mark_price))
+        self.addCleanup(
+            _patch_module(
+                lighter_rest, "get_account_taker_fills", get_account_taker_fills
+            )
+        )
         with mock.patch.dict(sys.modules, {"lighter": module}):
             await leader_listener.handle_leader_event(
                 self.leader_id, event, self.market()
             )
+        # Возврат остаётся списком клиентов — он у всех проверок уже есть;
+        # обращения к ленте лежат рядом, чтобы тест повторов не считал их сам.
+        self.tape_calls = calls
         return clients
 
     async def mirrored(self, follow_id: str, market_id: int = 8):
@@ -685,17 +752,25 @@ class TestLiveExecution(ListenerDbCase):
         slip = MAX_SLIPPAGE_BPS / 10_000
         return scale_to_int(self.MARK * (1 + slip if is_buy else 1 - slip), 2)
 
-    async def test_success_records_the_hash_and_moves_the_size(self):
+    async def test_success_is_confirmed_on_the_tape_and_moves_that_size(self):
         follower_id = await self.add_follower(1000.0)
         clients = await self.live(raw_event(), store=_KeyStore({follower_id: KEY}))
 
         rows = await self.mirror_log(follower_id)
-        self.assertEqual(rows[0]["status"], "sent")
+        self.assertEqual(rows[0]["status"], "filled")
         self.assertEqual(rows[0]["tx_hash"], "0xtx-ok")
         self.assertIsNone(rows[0]["reason"])
         self.assertAlmostEqual(
             await self.mirrored(self.follow_ids[follower_id]), rows[0]["base_amount"]
         )
+        self.assertEqual(rows[0]["filled_base_amount"], rows[0]["base_amount"])
+        self.assertEqual(
+            self.tape_calls[0],
+            {"account_index": 900, "market_id": 8},
+            "спрашивать ленту надо счёта и рынка этого подписчика, а не чего-то "
+            "рядом: по этим двум параметрам и отдаются его собственные сделки",
+        )
+        self.assertEqual(len(self.tape_calls), 1, "исполненный ордер не перечитывают")
         client = clients[0]
         self.assertEqual(client.init["api_private_keys"], {3: "0xpriv"})
         self.assertEqual(client.init["account_index"], 900)
@@ -720,6 +795,138 @@ class TestLiveExecution(ListenerDbCase):
             "account_index", call, "index уходит в конструктор, а не в create_order"
         )
         self.assertTrue(client.closed)
+
+    async def test_ioc_cancelled_by_price_leaves_the_record_where_it_was(self):
+        """Деньги этого теста раньше не было: MARKET+IOC, снятый с цены, отвечает
+        УСПЕШНО, и журнал писал `sent`, а учёт двигался на заказанный размер.
+        Подписчик оставался с позицией, которой на площадке нет, и следующий
+        reduce планировался от выдуманного числа."""
+        follower_id = await self.add_follower(1000.0)
+        await self.live(raw_event(), store=_KeyStore({follower_id: KEY}), fills=[])
+
+        rows = await self.mirror_log(follower_id)
+        self.assertEqual(rows[0]["status"], "unfilled")
+        self.assertEqual(rows[0]["filled_base_amount"], 0.0)
+        self.assertIn("IOC", rows[0]["reason"])
+        self.assertEqual(rows[0]["tx_hash"], "0xtx-ok", "заявка-то ушла")
+        self.assertEqual(
+            await self.mirrored(self.follow_ids[follower_id]),
+            0.0,
+            "сделок нет — зеркальный размер не двигается",
+        )
+
+    async def test_partial_fill_moves_the_record_by_the_executed_size(self):
+        follower_id = await self.add_follower(1000.0)
+        await self.live(
+            raw_event(),
+            store=_KeyStore({follower_id: KEY}),
+            fills=lambda call: [tape_row(call["client_order_index"], size="0.004")],
+        )
+
+        rows = await self.mirror_log(follower_id)
+        self.assertEqual(rows[0]["status"], "partially_filled")
+        self.assertEqual(rows[0]["filled_base_amount"], 0.004)
+        self.assertLess(rows[0]["filled_base_amount"], rows[0]["base_amount"])
+        self.assertAlmostEqual(
+            await self.mirrored(self.follow_ids[follower_id]),
+            0.004,
+            "учёт знает ровно то, что исполнилось, а не то, что заказывали",
+        )
+
+    async def test_reduce_is_credited_by_the_executed_size_only(self):
+        """Закрытие наполовину: с 0.5 зеркального размера ушло ровно 0.1, значит
+        осталось 0.4, а не 0 и не 0.5."""
+        follower_id = await self.add_follower(1000.0, mirrored={8: 0.5})
+        await self.live(
+            raw_event(is_increase=False, size_delta=0.4, leader_position_before=0.5),
+            store=_KeyStore({follower_id: KEY}),
+            fills=lambda call: [tape_row(call["client_order_index"], size="0.1")],
+        )
+
+        rows = await self.mirror_log(follower_id)
+        self.assertEqual(rows[0]["status"], "partially_filled")
+        self.assertAlmostEqual(await self.mirrored(self.follow_ids[follower_id]), 0.4)
+
+    async def test_fill_of_another_order_is_not_credited_to_this_one(self):
+        """Сделка того же аккаунта в том же рынке, но с чужим client order index,
+        — не исполнение этой заявки. Иначе одна ручная сделка подписчика
+        закрывала бы ему зеркальную позицию, которой движок не видел."""
+        follower_id = await self.add_follower(1000.0)
+        await self.live(
+            raw_event(),
+            store=_KeyStore({follower_id: KEY}),
+            fills=lambda call: [tape_row(call["client_order_index"] + 1, size="0.01")],
+        )
+
+        rows = await self.mirror_log(follower_id)
+        self.assertEqual(rows[0]["status"], "unfilled")
+        self.assertEqual(await self.mirrored(self.follow_ids[follower_id]), 0.0)
+
+    async def test_unreadable_row_in_the_tape_is_unknown_not_zero(self):
+        """Лента прочитана, но из строки нельзя вытащить размер: это «неизвестно»,
+        а не «не исполнилось». Учёт не двигается, а журнал называется так, чтобы
+        человек понял: надо смотреть аккаунт руками."""
+        follower_id = await self.add_follower(1000.0)
+        await self.live(
+            raw_event(),
+            store=_KeyStore({follower_id: KEY}),
+            fills=lambda call: [tape_row(call["client_order_index"], size=None)],
+        )
+
+        rows = await self.mirror_log(follower_id)
+        self.assertEqual(rows[0]["status"], "unconfirmed")
+        self.assertIsNone(rows[0]["filled_base_amount"])
+        self.assertEqual(await self.mirrored(self.follow_ids[follower_id]), 0.0)
+
+    async def test_tape_that_cannot_be_read_is_unconfirmed_not_unfilled(self):
+        """Отказ ленты — не пустая лента. Разница в том, что пишет журнал:
+        «IOC снят с цены» там, где мы не смогли спросить, — это ложь о сделке
+        за $100, и она же перестала бы двигать учёт навсегда."""
+        follower_id = await self.add_follower(1000.0)
+        await self.live(
+            raw_event(),
+            store=_KeyStore({follower_id: KEY}),
+            fills_error=RuntimeError("Lighter API недоступен: connection refused"),
+        )
+
+        rows = await self.mirror_log(follower_id)
+        self.assertEqual(rows[0]["status"], "unconfirmed")
+        self.assertIsNone(rows[0]["filled_base_amount"])
+        self.assertIn("connection refused", rows[0]["reason"])
+        self.assertEqual(rows[0]["tx_hash"], "0xtx-ok")
+        self.assertEqual(await self.mirrored(self.follow_ids[follower_id]), 0.0)
+        self.assertGreaterEqual(
+            len(self.tape_calls), 2, "прочитать ленту листенер пробует не один раз"
+        )
+
+    async def test_confirmation_rereads_until_the_fill_shows_up(self):
+        """Лента отстаёт от заявки примерно на секунду (замер mainnet
+        2026-11-16), поэтому первый пустой ответ — ещё не приговор: пустоту
+        переспрашивают, а найденный филл больше не переспрашивают."""
+        seen: list[int] = []
+
+        def fills(call):
+            seen.append(1)
+            return (
+                []
+                if len(seen) == 1
+                else [
+                    tape_row(
+                        call["client_order_index"],
+                        size=str(float(Decimal(call["base_amount"]).scaleb(-3))),
+                    )
+                ]
+            )
+
+        follower_id = await self.add_follower(1000.0)
+        await self.live(raw_event(), store=_KeyStore({follower_id: KEY}), fills=fills)
+
+        rows = await self.mirror_log(follower_id)
+        self.assertEqual(rows[0]["status"], "filled")
+        self.assertEqual(len(seen), 2, "исполненное не перечитывают ещё N раз")
+        self.assertAlmostEqual(
+            await self.mirrored(self.follow_ids[follower_id]), rows[0]["base_amount"]
+        )
 
     async def test_close_is_priced_below_market_in_the_sent_order(self):
         """Закрытие лонга уходит sell-лимитом НИЖЕ рынка — ровно тем ордером,
@@ -842,7 +1049,7 @@ class TestLiveExecution(ListenerDbCase):
         )
 
         rows = await self.mirror_log(follower_id)
-        self.assertEqual(rows[0]["status"], "sent")
+        self.assertEqual(rows[0]["status"], "filled")
         self.assertEqual(rows[0]["reduce_only"], 1)
         self.assertAlmostEqual(
             await self.mirrored(self.follow_ids[follower_id]),

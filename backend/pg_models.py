@@ -178,6 +178,15 @@ class MirrorLog(Base):
     market_id: Mapped[int] = mapped_column(Integer, nullable=False)
     side: Mapped[str] = mapped_column(String, nullable=False)
     base_amount: Mapped[float] = mapped_column(Float, nullable=False)
+    filled_base_amount: Mapped[float | None] = mapped_column(Float)
+    """Сколько базового актива площадка подтвердила по этой заявке.
+
+    NULL — «исполнение не сверялось»: строки, написанные до сверки, dry_run,
+    отказ ленты. 0.0 при этом означает ровно «Lighter ответил пустой лентой по
+    нашей заявке», то есть IOC снят с цены. Сводить эти два смысла в одно число
+    нельзя: первое значит «мы не знаем», второе — «мы знаем, что ничего», и
+    учёт не двигается в обоих случаях, а вот человек в журнале идёт смотреть
+    счёт только в первом."""
     reduce_only: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     status: Mapped[str] = mapped_column(String, nullable=False)
     reason: Mapped[str | None] = mapped_column(Text)

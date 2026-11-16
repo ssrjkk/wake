@@ -102,9 +102,17 @@ record() {
     printf '%s  %s%s\n' "$status" "$label" "${detail:+ — $detail}"
 }
 
-# step <job> <name> <команда> — прогон шага под его CI-именем.
+# step <job> <name> <команда> [запасная команда]
+#
+# Запасная команда нужна там, где CI зовёт консольный шим, а эта машина не может
+# его исполнить: на Windows `alembic` из Scripts/ отдаёт 126 «Permission denied»,
+# хотя сам alembic стоит и работает через `python -m alembic`. 126 и 127 — это
+# «команда не поднялась», а не «проверка не прошла», и красить их FAIL'ом
+# значит учить не верить красному. Поэтому: сначала та же программа запасным
+# способом (с пометкой в сводке), а если и она не поднялась — строка НЕТ_ИНСТР,
+# которая всё равно стоит прогону код 3, а не ноль.
 step() {
-    local job="$1" name="$2" cmd="$3"
+    local job="$1" name="$2" cmd="$3" fallback="${4:-}"
     local label="$job / $name"
     if [ "$GATE_LIST" = "1" ]; then
         echo "$label"
@@ -112,15 +120,33 @@ step() {
     fi
     echo ""
     echo "=== $label"
-    if (eval "$cmd") >"$TMPDIR_GATE/step.log" 2>&1; then
+    # Статус снимается через `|| code=$?`, а не `$?` после `fi`: if с ложным
+    # условием и без else отдаёт ноль, и тогда любая упавшая команда выглядела бы
+    # как exit=0 — сводка назвала бы её FAILED, а разбор кода 126 и причина
+    # подмены не включились бы вовсе.
+    local code=0
+    (eval "$cmd") >"$TMPDIR_GATE/step.log" 2>&1 || code=$?
+    if [ "$code" = "0" ]; then
         tail -n 5 "$TMPDIR_GATE/step.log"
         record "OK" "$label"
-    else
-        local code=$?
+        return 0
+    fi
+    if [ "$code" != "126" ] && [ "$code" != "127" ]; then
         tail -n 25 "$TMPDIR_GATE/step.log"
         record "FAIL" "$label" "exit=$code"
         FAILED=$((FAILED + 1))
+        return 0
     fi
+    local why
+    why="$(tail -n 1 "$TMPDIR_GATE/step.log")"
+    if [ -n "$fallback" ] && (eval "$fallback") >"$TMPDIR_GATE/step.log" 2>&1; then
+        tail -n 5 "$TMPDIR_GATE/step.log"
+        record "OK" "$label" "исполнено запасным способом ($why)"
+        return 0
+    fi
+    tail -n 25 "$TMPDIR_GATE/step.log"
+    record "НЕТ_ИНСТР" "$label" "команда не исполнилась (exit=$code): $why"
+    UNAVAILABLE=$((UNAVAILABLE + 1))
 }
 
 # unavailable <job> <name> <причина> — шаг, который эта машина не прогоняет.
@@ -374,10 +400,17 @@ elif db_env_ready; then
 fi
 
 if [ "$BACKEND_OK" = "1" ]; then
+    # Запасная форма отличается только способом вызвать тот же модуль: набор
+    # аргументов обязан совпадать, и сверяет это test_local_gate_parity — иначе
+    # «запасной прогон» мог бы тихо проверить меньше, чем проверяет CI.
     # ci: backend-tests / Migrations build the production schema
-    step "backend-tests" "Migrations build the production schema" "cd backend && alembic upgrade head"
+    step "backend-tests" "Migrations build the production schema" \
+        "cd backend && alembic upgrade head" \
+        "cd backend && python -m alembic upgrade head"
     # ci: backend-tests / Models match the migrated schema
-    step "backend-tests" "Models match the migrated schema" "cd backend && alembic check"
+    step "backend-tests" "Models match the migrated schema" \
+        "cd backend && alembic check" \
+        "cd backend && python -m alembic check"
     # ci: backend-tests / Run tests with Allure
     step "backend-tests" "Run tests with Allure" "cd backend && python -m pytest . --tb=short -q"
     if [ "$SMOKE_OK" = "1" ]; then

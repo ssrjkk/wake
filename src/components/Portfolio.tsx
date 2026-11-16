@@ -32,7 +32,19 @@ const STATUS_STYLE: Record<MirrorLogRow["status"], { bg: string; color: string; 
   planned: { bg: "var(--bg-2)", color: "var(--fg-2)" },
   skipped: { bg: "var(--warn-faint)", color: "var(--warn)", border: "var(--warn-line)" },
   dry_run: { bg: "var(--info-faint)", color: "var(--info)", border: "var(--info-line)" },
-  sent: { bg: "var(--up-faint)", color: "var(--up)", border: "var(--up-line)" },
+  // Зелёный здесь только у подтверждённого исполнения. `sent` — это «заявка
+  // принята площадкой», и до появления сверки он был единственным «успехом»
+  // журнала: MARKET+IOC, снятый с цены, отвечал успешно и красился как
+  // открывшая позиция. Теперь он info: подтверждения нет, позиция неизвестна.
+  sent: { bg: "var(--info-faint)", color: "var(--info)", border: "var(--info-line)" },
+  filled: { bg: "var(--up-faint)", color: "var(--up)", border: "var(--up-line)" },
+  partially_filled: { bg: "var(--warn-faint)", color: "var(--warn)", border: "var(--warn-line)" },
+  // Снят с цены: заявка прожила и не исполнилась ни на единицу. Не ошибка —
+  // цена ушла, и ордер с IOC обязан был сняться, — поэтому нейтральный фон.
+  unfilled: { bg: "var(--bg-3)", color: "var(--fg-2)", border: "var(--line-strong)" },
+  // Неизвестно: ленту сделок не прочитали. От «не исполнилось» это отличается
+  // правом двигать учёт — у unknown такого права нет, и цвет обязан это помнить.
+  unconfirmed: { bg: "var(--bg-3)", color: "var(--fg-2)", border: "var(--line)" },
   failed: { bg: "var(--down-faint)", color: "var(--down-hi)", border: "var(--down-line)" },
 };
 
@@ -336,7 +348,7 @@ export default function Portfolio({ following, followsError, setTab, togglePause
                       <th style={{ paddingBottom: "8px", fontWeight: 400 }}>Лидер</th>
                       <th style={{ paddingBottom: "8px", fontWeight: 400 }}>Рынок</th>
                       <th style={{ paddingBottom: "8px", fontWeight: 400 }}>Сторона</th>
-                      <th style={{ paddingBottom: "8px", fontWeight: 400 }}>Размер</th>
+                      <th style={{ paddingBottom: "8px", fontWeight: 400 }}>Заявлено</th>
                       <th style={{ paddingBottom: "8px", fontWeight: 400 }}>Исход</th>
                     </tr>
                   </thead>
@@ -358,6 +370,16 @@ export default function Portfolio({ following, followsError, setTab, togglePause
                         <td style={{ fontFamily: "var(--font-mono)", color: "var(--fg-2)" }}>{fmt(r.base_amount, 4)}</td>
                         <td>
                           <span style={{ fontSize: "var(--fs-label)", padding: "2px 8px", borderRadius: "3px", fontFamily: "var(--font-mono)", background: statusStyle(r.status).bg, color: statusStyle(r.status).color, border: statusStyle(r.status).border ? `1px solid ${statusStyle(r.status).border}` : "none" }}>{r.status}</span>
+                          {/* Исполненный базовый размер — то, что сверка прочитала
+                              в ленте сделок, а не то, что было заказано. Числа в
+                              этой колонке расходится с «Размером» ровно там, где
+                              IOC снялся с цены; null — «сверки не было», и
+                              выдумывать за него ноль нельзя. */}
+                          {r.filled_base_amount != null && (
+                            <span style={{ marginLeft: "8px", fontSize: "var(--fs-data)", fontFamily: "var(--font-mono)", color: "var(--fg-2)" }}>
+                              исполнено {fmt(r.filled_base_amount, 4)}
+                            </span>
+                          )}
                           {r.reason && <span style={{ marginLeft: "8px", fontSize: "var(--fs-data)", color: "var(--text-muted)" }}>{r.reason}</span>}
                           {r.tx_hash && (
                             <span style={{ marginLeft: "8px", fontSize: "var(--fs-data)", color: "var(--text-muted)", fontFamily: "var(--font-mono)" }} title={r.tx_hash}>

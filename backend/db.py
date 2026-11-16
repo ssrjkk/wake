@@ -298,6 +298,29 @@ async def log_mirror_result(
         await session.commit()
 
 
+async def set_mirror_fill(
+    log_id: str, status: str, executed_base: float | None, reason: str | None
+) -> None:
+    """Заменить у строки журнала «отправлено» на то, что сказала площадка.
+
+    Отдельная функция, а не второй `log_mirror_result`: строка лежит в базе с
+    момента, когда заявка ушла, и переписывать её целиком значило бы дать
+    листенеру право потерять tx_hash и время создания — единственное, по чему
+    человек потом разбирает, что произошло с его деньгами. Меняются ровно три
+    поля исхода.
+
+    `executed_base=None` — «не известно» (ленту не прочитали), и это НЕ ноль:
+    ноль означает «площадка ответила пустой лентой», то есть «IOC снят с цены».
+    Два этих исхода различаются в журнале словами, и оба не двигают учёт."""
+    async with async_session_factory() as session:
+        await session.execute(
+            update(MirrorLog)
+            .where(MirrorLog.id == log_id)
+            .values(status=status, filled_base_amount=executed_base, reason=reason)
+        )
+        await session.commit()
+
+
 # ── Чтение ───────────────────────────────────────────────────────────────────
 
 
@@ -422,6 +445,10 @@ async def mirror_log_for_follower(follower_id: str, limit: int) -> list[dict]:
                 "market_id": m.market_id,
                 "side": m.side,
                 "base_amount": m.base_amount,
+                # None = исполнение не сверялось (старые строки, dry_run,
+                # отказ ленты). Числом 0.0 оно быть не может: 0.0 означает
+                # «площадка ответила, сделок по заявке нет».
+                "filled_base_amount": m.filled_base_amount,
                 "reduce_only": 1 if m.reduce_only else 0,
                 "status": m.status,
                 "reason": m.reason,

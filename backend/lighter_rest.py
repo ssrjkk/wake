@@ -272,6 +272,101 @@ def get_account_snapshots(
     return out
 
 
+TRADES_PAGE_LIMIT = 100
+
+
+def _trade_size(row: dict) -> float | None:
+    """Базовый размер сделки: None — «данных нет», 0.0 — «поля нет».
+
+    По заметке OpenAPI «Fields with zero or empty values may be omitted»
+    отсутствующий size и есть ноль, поэтому молча прочитать его как None
+    значило бы потерять всю сверку на строчке, в которой ничего не сломано.
+    Кривое же значение ("NaN", "abc") — это ровно «не прочитано»: для mirror_fill
+    такое число отдельный исход, а не «филла нет» (см. _float_of)."""
+    if "size" not in row:
+        return 0.0
+    return _float_of(row["size"])
+
+
+def get_account_taker_fills(
+    account_index: int,
+    market_id: int,
+    network: str = LIGHTER_NETWORK,
+    limit: int = TRADES_PAGE_LIMIT,
+) -> list[dict]:
+    """Тейкер-сделки этого аккаунта в этом рынке, свежие первыми.
+
+    Это единственный источник, который отвечает на «что площадка ИСПОЛНИЛА по
+    нашей заявке», не требуя ключа подписчика. Замер mainnet 2026-11-16:
+      - `/api/v1/trades` анонимен, `account_index` + `market_id` сужают выборку
+        до строк запрошенного аккаунта (100 из 100), `role=taker` убирает из
+        неё мейкер-строки, `type=trade` — ликвидации;
+      - пустой результат — 200 с `trades: []`, а несуществующий аккаунт — 400
+        code 21100 "account not found", то есть «не спросили» и «не исполнилось»
+        различимы;
+      - лента отстаёт от события примерно на секунду: между запросами с паузой 1 с
+        появляется новый trade_id;
+      - limit=101 отвечает 400 code 20001 "invalid param": потолок страницы —
+        сам TRADES_PAGE_LIMIT, им же параметр и ограничивается сверху;
+
+    Кэша здесь нет и быть не может: ttl у @cached — это ровно тот lag, из-за
+    которого сверку не делали (см. docstring leader_listener.py), и по
+    кэшированному ответу «филла нет» неотличимо от «филла ещё не видно».
+
+    Разбирается только то, что читает сверка: сторона тейкера выбирается по
+    `is_maker_ask`, client id тейкера — это `client_order_index`, отправленный
+    с заявкой (mirror_fill.client_order_index), размеры приходят строками
+    (замер mainnet 2026-10-02) и через `_float_of`.
+
+    Отказ — RuntimeError, как во всём модуле: строку, у которой не разобраны
+    роли или идентификаторы, нельзя ни отнести к нашей заявке, ни отвергнуть,
+    поэтому она роняет весь разбор, а не уходит в сумму нулём."""
+    page = min(max(int(limit), 1), TRADES_PAGE_LIMIT)
+    params = {
+        "sort_by": "trade_id",
+        "sort_dir": "desc",
+        "limit": page,
+        "account_index": int(account_index),
+        "market_id": int(market_id),
+        "role": "taker",
+        "type": "trade",
+    }
+    url = f"{_base(network)}/trades?" + urllib.parse.urlencode(params)
+    data = _get(url)
+    rows = []
+    for row in data.get("trades") or []:
+        try:
+            # `is_maker_ask` говорит, где мейкер, значит тейкер — на другой
+            # стороне: False = мейкер bid, тейкер ask.
+            side = "bid" if row["is_maker_ask"] else "ask"
+            taker_account = int(row[f"{side}_account_id"])
+            # Обе стороны обязательны по схеме ответа: строку, у которой не
+            # разобран хотя бы один из двух account id, нельзя ни отнести к
+            # нашей заявке, ни отвергнуть.
+            int(row["ask_account_id"])
+            int(row["bid_account_id"])
+            client_raw = row.get(f"{side}_client_id")
+            client = 0 if client_raw is None else int(client_raw)
+            trade_id = int(row["trade_id"])
+            row_market = int(row["market_id"])
+        except (KeyError, TypeError, ValueError) as e:
+            raise RuntimeError(
+                f"лента сделок account_index={account_index} "
+                f"market_id={market_id} не разобрана: {e!r}"
+            ) from e
+        rows.append(
+            {
+                "trade_id": trade_id,
+                "market_id": row_market,
+                "type": str(row.get("type") or ""),
+                "taker_account_index": taker_account,
+                "taker_client_order_index": client,
+                "size": _trade_size(row),
+            }
+        )
+    return rows
+
+
 def get_mark_price(market_id: int, network: str = LIGHTER_NETWORK) -> float:
     """Последняя цена закрытия по market_id — close последней 1-минутной свечи.
     Для резолюции price-рынков достаточно точно; для чего-то более

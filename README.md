@@ -134,6 +134,8 @@ With `WAKE_DRY_RUN=true` it logs the mirror plan instead of signing anything.
 
 The first position snapshot a listener receives is a baseline, not a trade: it records what the leader already holds and derives no orders from it. The baseline lives in `leader_tracker_state`, so a restart or a deploy continues from the last known positions instead of mirroring the whole portfolio again. Mirror sizes are kept per follower and per market (`mirror_positions`): closing a BTC position is computed from the follower's BTC size, not from a BTC + ETH total, and the `current_mirrored_size` field on `/leaders/{id}/followers` is the display sum across markets.
 
+What moves `mirror_positions` is the venue's own fill report, not the order the engine sent. `create_order` answers with a transaction hash and a MARKET + IOC cancelled by price answers *successfully*, so after sending, the listener reads `/api/v1/trades` (anonymous, no key) filtered to the follower's account and market and matches rows by the `client_order_index` it sent with the order. The journal row then says `filled`, `partially_filled`, `unfilled` or `unconfirmed` and stores `filled_base_amount`; the mirrored size changes by that executed amount only. `sent` survives as "order accepted, execution not confirmed" — rows written before this check existed, and rows whose process died mid-reconciliation.
+
 ### Signing service
 
 ```bash

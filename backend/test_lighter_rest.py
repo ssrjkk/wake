@@ -891,6 +891,204 @@ class TestMarketOverviewDegradation(unittest.TestCase):
         )
 
 
+def trade_row(**overrides):
+    """Строка ленты `/api/v1/trades` в живой форме замера mainnet 2026-11-16:
+    размеры, цены и суммы — строки, идентификаторы сторон — числа, роль сторон
+    разворачивается флагом `is_maker_ask`. Значения фиктивные, набор полей и
+    их форматы — с площадки."""
+    row = {
+        "trade_id": 40827972531,
+        "trade_id_str": "40827972531",
+        "tx_hash": "2eff7fe3af305e0c9c7045d7913b73ae",
+        "type": "trade",
+        "market_id": 1,
+        "market_symbol": "BTC",
+        "market_kind": "perps",
+        "size": "0.00089",
+        "price": "64910.7",
+        "usd_amount": "57.770523",
+        "ask_id": 562953869558497,
+        "bid_id": 844420968111206,
+        "ask_client_id": 106007451662505,
+        "bid_client_id": 136717724906181,
+        "ask_account_id": 900,
+        "bid_account_id": 700,
+        "is_maker_ask": False,
+        "block_height": 390423777,
+        "timestamp": 1794857312493,
+        "taker_position_size_before": "-4.91031",
+        "transaction_time": 1794857312556774,
+    }
+    row.update(overrides)
+    return row
+
+
+class TestAccountTakerFills(unittest.TestCase):
+    """Лента собственных тейкер-сделок аккаунта — единственный источник, который
+    отвечает на «что площадка ИСПОЛНИЛА по нашей заявке» без ключа подписчика.
+    Разбирается ровно то, что нужно сверке (mirror_fill.fill_report)."""
+
+    def setUp(self):
+        cache.clear()
+
+    def _query(self, transport):
+        return dict(
+            p.split("=", 1) for p in transport.urls[0].split("?", 1)[1].split("&")
+        )
+
+    def test_request_is_scoped_to_one_account_and_one_market(self):
+        transport = Transport({"code": 200, "trades": []})
+        with patch("urllib.request.urlopen", transport):
+            lighter_rest.get_account_taker_fills(900, 1, "mainnet")
+        query = self._query(transport)
+        self.assertEqual(query["account_index"], "900")
+        self.assertEqual(query["market_id"], "1")
+        # Замер mainnet 2026-11-16: с role=taker в ответе нет ни одной
+        # мейкер-строки, с role=maker — ни одной тейкерской; type=trade endpoint
+        # принимает. Без этих двух фильтр отдавал бы чужие сделки той же страницы.
+        self.assertEqual(query["role"], "taker")
+        self.assertEqual(query["type"], "trade")
+        self.assertEqual(query["sort_by"], "trade_id")
+        self.assertEqual(query["sort_dir"], "desc")
+        self.assertTrue(transport.urls[0].startswith(f"https://{MAINNET_HOST}/api/v1/"))
+
+    def test_limit_never_asks_for_more_than_the_venue_answers(self):
+        """Замер mainnet 2026-11-16: limit=101 отвечает 400 code 20001
+        "invalid param" — заявка выше потолка означала бы, что сверка вообще не
+        получила ответа."""
+        transport = Transport({"code": 200, "trades": []})
+        with patch("urllib.request.urlopen", transport):
+            lighter_rest.get_account_taker_fills(900, 1, "mainnet", limit=500)
+        self.assertEqual(self._query(transport)["limit"], "100")
+
+        transport = Transport({"code": 200, "trades": []})
+        with patch("urllib.request.urlopen", transport):
+            lighter_rest.get_account_taker_fills(900, 1, "mainnet", limit=0)
+        self.assertEqual(self._query(transport)["limit"], "1")
+
+    def test_the_taker_side_is_chosen_by_the_maker_flag(self):
+        """Лента не говорит, кто из сторон мы: `is_maker_ask` разворачивает
+        роли. Перепутать их — значит читать client id чужой заявки как свой."""
+        transport = Transport({"code": 200, "trades": [trade_row()]})
+        with patch("urllib.request.urlopen", transport):
+            (row,) = lighter_rest.get_account_taker_fills(900, 1, "mainnet")
+        self.assertFalse(trade_row()["is_maker_ask"])
+        self.assertEqual(row["taker_account_index"], 900)
+        self.assertEqual(row["taker_client_order_index"], 106007451662505)
+
+        transport = Transport(
+            {
+                "code": 200,
+                "trades": [trade_row(is_maker_ask=True, bid_account_id=900)],
+            }
+        )
+        with patch("urllib.request.urlopen", transport):
+            (row,) = lighter_rest.get_account_taker_fills(900, 1, "mainnet")
+        self.assertEqual(row["taker_account_index"], 900)
+        self.assertEqual(row["taker_client_order_index"], 136717724906181)
+
+    def test_sizes_become_floats_and_the_row_keeps_only_what_the_check_needs(self):
+        transport = Transport({"code": 200, "trades": [trade_row()]})
+        with patch("urllib.request.urlopen", transport):
+            (row,) = lighter_rest.get_account_taker_fills(900, 1, "mainnet")
+        self.assertEqual(row["size"], 0.00089)
+        self.assertEqual(row["trade_id"], 40827972531)
+        self.assertEqual(row["market_id"], 1)
+        self.assertEqual(row["type"], "trade")
+        self.assertEqual(
+            set(row),
+            {
+                "trade_id",
+                "market_id",
+                "type",
+                "taker_account_index",
+                "taker_client_order_index",
+                "size",
+            },
+            "поля, которых никто не читает, уезжают в журнал как мёртвый груз",
+        )
+
+    def test_absent_client_id_reads_as_zero(self):
+        """Заметка OpenAPI: «Fields with zero or empty values may be omitted» —
+        отсутствие client id и есть ноль, а не «данных нет»."""
+        row = trade_row()
+        del row["ask_client_id"]
+        transport = Transport({"code": 200, "trades": [row]})
+        with patch("urllib.request.urlopen", transport):
+            (got,) = lighter_rest.get_account_taker_fills(900, 1, "mainnet")
+        self.assertEqual(got["taker_client_order_index"], 0)
+
+    def test_junk_size_is_no_data_not_zero(self):
+        """Размер — то, на что двигается учёт: "NaN" или "abc" обязаны остаться
+        «данных нет» (None), иначе сверка прочитала бы неисполненную заявку там,
+        где строка просто не разобрана."""
+        for junk in ("abc", None, "NaN", "inf"):
+            cache.clear()
+            with self.subTest(junk=junk):
+                transport = Transport({"code": 200, "trades": [trade_row(size=junk)]})
+                with patch("urllib.request.urlopen", transport):
+                    (row,) = lighter_rest.get_account_taker_fills(900, 1, "mainnet")
+                self.assertIsNone(row["size"])
+
+    def test_absent_size_reads_as_zero_not_as_no_data(self):
+        """По той же заметке OpenAPI отсутствующий размер — это 0: строк с
+        нулевым филлом лента не отдаёт, но молча превращать отсутствие поля в
+        «данных нет» значит терять всю сверку из-за формата."""
+        row = trade_row()
+        del row["size"]
+        transport = Transport({"code": 200, "trades": [row]})
+        with patch("urllib.request.urlopen", transport):
+            (got,) = lighter_rest.get_account_taker_fills(900, 1, "mainnet")
+        self.assertEqual(got["size"], 0.0)
+
+    def test_empty_and_null_tape_read_as_no_fills(self):
+        """Пустая лента при прочитанном ответе — «филлов нет» (замер: 200 с
+        `trades: []` на редком аккаунте), а не отказ сети."""
+        for body in (
+            {"code": 200, "trades": []},
+            {"code": 200, "trades": None},
+            {"code": 200},
+        ):
+            cache.clear()
+            with self.subTest(body=body):
+                with patch("urllib.request.urlopen", Transport(body)):
+                    self.assertEqual(
+                        lighter_rest.get_account_taker_fills(900, 1, "mainnet"), []
+                    )
+
+    def test_row_without_sides_is_a_runtime_error(self):
+        """Без ролей строку нельзя отнести ни к тейкеру, ни к мейкеру. Отдать
+        её как «не наш филл» значило бы молча недосчитать исполнение."""
+        for key in ("is_maker_ask", "ask_account_id", "bid_account_id"):
+            cache.clear()
+            row = trade_row()
+            del row[key]
+            with self.subTest(key=key), self.assertRaises(RuntimeError) as ctx:
+                with patch("urllib.request.urlopen", Transport({"trades": [row]})):
+                    lighter_rest.get_account_taker_fills(900, 1, "mainnet")
+            self.assertIn("не разобрана", str(ctx.exception))
+
+    def test_http_error_is_a_failure_not_an_empty_tape(self):
+        """Замер mainnet 2026-11-16: несуществующий account_index отвечает 400
+        code 21100 "account not found". Если бы это читалось как пустая лента,
+        журнал говорил бы «IOC снят с цены» там, где листенер не смог спросить."""
+        with (
+            patch("urllib.request.urlopen", Transport(http_error(400))),
+            self.assertRaises(RuntimeError),
+        ):
+            lighter_rest.get_account_taker_fills(900, 1, "mainnet")
+
+    def test_the_tape_is_never_cached(self):
+        """Смысл сверки в том, чтобы видеть филл сразу после заявки: ttl у
+        @cached — ровно тот lag, из-за которого сверки не было. Кэш здесь мог бы
+        быть только багом, поэтому проверяется количество запросов, а не ответ."""
+        transport = Transport({"code": 200, "trades": [trade_row()]})
+        with patch("urllib.request.urlopen", transport):
+            lighter_rest.get_account_taker_fills(900, 1, "mainnet")
+            lighter_rest.get_account_taker_fills(900, 1, "mainnet")
+        self.assertEqual(len(transport.urls), 2)
+
+
 class TestCachePreservesIdentity(unittest.TestCase):
     def test_wrapped_functions_keep_their_names_and_docstrings(self):
         """Без functools.wraps у обёртки имя «wrapper»: в логах, в traceback и в
