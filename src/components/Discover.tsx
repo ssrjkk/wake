@@ -80,7 +80,9 @@ export default function Discover({ setCopyModal }: DiscoverProps) {
           </div>
         )}
 
-        {leaders === null ? (
+        {/* Заглушка значит «ещё едет». После отказа она едет вечно рядом со
+            строкой «не загружен», и панель противоречит сама себе. */}
+        {leaders === null && !error ? (
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: "8px" }}>
             {[0, 1, 2].map((i) => (
               <div key={i} className="leader-card">
@@ -89,7 +91,7 @@ export default function Discover({ setCopyModal }: DiscoverProps) {
               </div>
             ))}
           </div>
-        ) : leaders.length === 0 ? (
+        ) : !leaders || leaders.length === 0 ? (
           /* Пустая витрина без ошибки — «лидеров правда нет»; с ошибкой выше уже
              всё сказано, и второй текст был бы противоречием. */
           error ? null : (

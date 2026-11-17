@@ -12,10 +12,40 @@ measured number goes stale while the text around it still looks fine.
 ## [Unreleased]
 
 ### Added
+- `scripts/screenshots.mjs`, `scripts/telegram-cards.py` — снимки панелей для README
+  перестали быть ручным делом. `npm run build && node scripts/screenshots.mjs`
+  поднимает `vite preview` на production-сборке, открывает каждую вкладку кликом
+  по роли и ждёт именно её панель по состоянию (тот же приём, что в
+  `e2e/design-audit.ts`), а не по таймеру, и печатает, что на экране: для стакана
+  — `{levels:{asks:20,bids:20}}`. Карточки бота собирает python: страница строится
+  вызовами `start_payload`, `markets_payload`, `price_payload`, `funding_payload` и
+  `spread_payload` из `backend/telegram_bot.py` — тех же, что уходят в чат, поэтому
+  подпись «живые данные» относится к боту, а не к макету. Причина появления скрипта
+  измерена им же: к 2026-11-17 на диске лежал кадр с линией вместо свечей (свечи —
+  969c781) и со стаканом из шести уровней при двадцати в коде, а обе половины
+  README о тех же панелях рассказывали прошлую картинку. Все 11 снимков пересняты
+  2026-11-17.
+- `src/components/PriceChart.tsx`, `src/components/chart.ts` (новый файл),
+  `lightweight-charts@5.3.0` (2026-11-15, 969c781) — Терминал рисует настоящие
+  свечи, а не линию по закрытиям. Прежняя обводка над SVG умела только линию, и
+  подпись «Свечи 1ч · 48 шт» над ней была неправдой: часовой размах high/low в
+  ответах Lighter есть, но на экран не попадал. Оборот — отдельной полосой на своей
+  шкале и в USDC (`V`, а не базовый `v`: литры на разных рынках несравнимы);
+  перекрестие печатает O/H/L/C и оборот часа под курсором, без курсора — последнего
+  часа. Ряд лежит на canvas, поэтому доступное описание (`role="img"`, `aria-label`)
+  собирает `chartSummary` из самих свечей. Покрыто `src/components/PriceChart.test.tsx`
+  (18 тестов) и e2e в `e2e/homepage.spec.ts`.
+- `src/components/OrderBookPanel.tsx`, `src/components/orderBook.ts` (новый файл,
+  2026-11-15, 969c781) — лестница стакана выехала из `Terminal.tsx` в свой
+  компонент, а сборка уровней (`buildLadder`, `imbalance`, `sizeChanges`) — в
+  функции, которые тестируются без монтирования терминала
+  (`src/components/OrderBookPanel.test.tsx`, 22 теста). Тогда же ladder вырос с
+  шести уровней до двадцати: `DEPTH_LEVELS` в `src/components/Terminal.tsx`.
 - `src/lib/lighter.ts` · `getOrderBookDepth`, `depthLevels`, `depthSpread`;
   `src/components/Terminal.tsx` — стакан между графиком и лентой сделок: по
-  шесть уровней на сторону, полоса накопленного объёма под ценой и строка
-  спреда в bps. Lighter отдаёт не уровни, а отдельные заявки
+  шесть уровней на сторону (с 2026-11-15 — двадцать, и лестница переехала в
+  `src/components/OrderBookPanel.tsx`), полоса накопленного объёма под ценой и
+  строка спреда в bps. Lighter отдаёт не уровни, а отдельные заявки
   (`/api/v1/orderBookOrders`), поэтому уровень собирается суммированием
   `remaining_base_amount` по цене: замер mainnet 2026-11-13 при limit=100 дал
   73 разные цены продажи и 75 цен покупки на сто заявок каждой стороны.
@@ -28,8 +58,9 @@ measured number goes stale while the text around it still looks fine.
   Терминал перемонтируется вместе с ним (`key` в `src/App.tsx`), и проверка
   `смена рынка не оставляет чужих заявок в стакане` падает, если этот key
   убрать, — прежний стакан доезжает до ответа нового рынка.
-  Снимки `docs/screenshots/terminal-1440.png` и `terminal-390.png` пересняты с
-  этой сборки на живых данных 2026-11-13.
+  Снимки `docs/screenshots/terminal-1440.png` и `terminal-390.png` тогда же были
+  пересняты с этой сборки на живых данных; те, что лежат на диске сейчас, сняты
+  заново 2026-11-17 — см. запись про `scripts/screenshots.mjs` выше.
 - `backend/test_hygiene.py` · `test_readme_halves_stand_on_the_same_lines` —
   форма двух половин README сверяется якорями разметки: заголовки, границы
   блоков кода и пункты списков обязаны стоять на одних и тех же строках
@@ -1269,6 +1300,14 @@ measured number goes stale while the text around it still looks fine.
   импортов ни в `src/`, ни в `e2e/` не осталось.
 
 ### Fixed
+- `src/components/Discover.tsx` — витрина перестала держать карточки-заглушки
+  после отказа бэкенда. Заглушки рисовались, пока `leaders === null`, а ошибка
+  этот флаг не сбрасывает: под строкой «Список лидеров не загружен: …» лежали три
+  пустые карточки, то есть панель одновременно сообщала об отказе и делала вид,
+  что ещё грузится. Нашёл снимок `docs/screenshots/discover-1440.png` от
+  2026-11-17, и e2e этого не видел: его гейт ждёт `.skeleton`, а эти заглушки
+  собраны руками в обход `ui.tsx`. Покрыто `src/components/Discover.test.tsx`
+  (2 теста) — до правки первый падает на «ожидал 0, получил 3».
 - `backend/mirror_fill.py` (новый файл), `backend/lighter_rest.py` ·
   `get_account_taker_fills`, `backend/leader_listener.py` · `_confirm_fill`,
   `backend/db.py` · `set_mirror_fill`, миграция `006_mirror_fill_confirmation` —
@@ -1308,6 +1347,14 @@ measured number goes stale while the text around it still looks fine.
   `filled_base_amount` ушёл в ответ, а фронт его не объявил; `src/lib/lighter.ts`
   и `src/components/Portfolio.tsx` читают поле и показывают «исполнено X» рядом
   со статусом, а `sent` и `filled` больше не одного цвета.
+- `src/components/chart.ts` · `priceFormat` — шаг цены перестал зависеть от
+  машинной libm. `minMove` считался как `Math.pow(10, -precision)`, и на
+  CI-раннере это дало `0.00009999999999999999` там, где проверка
+  `PriceChart.test.tsx:108` ждёт ровно `0.0001`: последний ULP у библиотечной
+  степени плавает от платформы к платформе, то есть тест краснел не из-за правки,
+  а из-за того, на чём его гоняли. Теперь `Number(\`1e-${precision}\`)` — разбор
+  десятичной записи округляется по IEEE одинаково везде. 969c781 довёз свечной ряд
+  до экрана, и формат цены стал влиять на подпись под курсором.
 - `backend/lighter_rest.py` — docstring `_get` приводил в пример закрытого
   эндпоинта «/orderBooks с depth, который Lighter отдаёт 403». Замер mainnet
   2026-11-13: 403 отвечают `/tickers` и `/markets`, а `/api/v1/orderBookOrders`
