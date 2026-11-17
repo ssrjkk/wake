@@ -12,6 +12,23 @@ measured number goes stale while the text around it still looks fine.
 ## [Unreleased]
 
 ### Added
+- `scripts/lighthouse-check.mjs`, `npm run check:lighthouse` — у сайта появился гейт
+  по скоррам, которого раньше не было ни в каком виде: четыре категории Lighthouse по
+  живому адресу, порог `LH_GATE` (по умолчанию 95), форма `LH_FORM` (mobile) и
+  `simulate`, берётся худший из `LH_RUNS` прогонов, а не среднее. Среднее по этому
+  сайду не значит ничего: три прогона одного и того же билда дали performance
+  44 / 49 / 70 при TBT 1530 / 1310 / 310 мс. Гейт проверен в обе стороны — на
+  пороге 95 он `exit=1` (так и есть сегодня), на пороге 40 `exit=0`, то есть краснеет
+  он по скорру, а не от собственной поломки. `lighthouse@12.6.0` берётся
+  `npx --yes` и пинится внутри скрипта: версия методики входит в число, и гейт,
+  который краснеет от чужого мажорного обновления, ничего не сторожит; в
+  `package.json` от этого ни одной новой зависимости не появилось. Отдельно про
+  запуск: `execFileSync("npx", …)` на Windows даёт ENOENT, потому что `npx` —
+  пакетник `.cmd`, а Node без `shell: true` их не запускает; отчёт читается из
+  stdout, чтобы в командной строке не было путей с пробелом. Что гейт сегодня и
+  показывает: accessibility 100, SEO 100, best-practices 96 — и все шесть
+  `errors-in-console` это ответы несуществующего бэкенда (`404 Application not
+  found` с `x-railway-fallback: true`), то есть потолок 96 держит не фронтенд.
 - `public/_headers`, `scripts/headers-check.mjs`, `npm run check:headers` — у
   фронтенда появились заголовки, и способ увидеть их до деплоя. Кэш: `/assets/*` год
   `immutable`, `index.html` — `max-age=0, must-revalidate`. Живой замер до правки:

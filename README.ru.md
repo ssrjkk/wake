@@ -328,6 +328,7 @@ curl -s https://wake-7k6.pages.dev/assets/<это-имя>.js | grep -c waketrade
 ```bash
 npm run build
 npm run check:headers          # dist под настоящими _headers, в браузере, до выкладки
+npm run check:lighthouse       # скоры по живому адресу: порог 95, худший из трёх прогонов
 npx wrangler pages deploy dist --project-name wake
 ```
 

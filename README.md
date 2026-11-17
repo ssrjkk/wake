@@ -328,6 +328,7 @@ Deploy from the repo:
 ```bash
 npm run build
 npm run check:headers          # dist under the real _headers, in a browser, before upload
+npm run check:lighthouse       # live scores: gate at 95, worst of three runs
 npx wrangler pages deploy dist --project-name wake
 ```
 
