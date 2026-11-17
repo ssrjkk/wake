@@ -33,6 +33,7 @@ from unittest.mock import patch
 import testsupport  # noqa: F401
 import cache
 import lighter_rest
+import mirror_fill
 
 MAINNET_HOST = "mainnet.zklighter.elliot.ai"
 MINUTE_MS = 60_000
@@ -1087,6 +1088,75 @@ class TestAccountTakerFills(unittest.TestCase):
             lighter_rest.get_account_taker_fills(900, 1, "mainnet")
             lighter_rest.get_account_taker_fills(900, 1, "mainnet")
         self.assertEqual(len(transport.urls), 2)
+
+    def test_parsed_row_is_read_by_the_fill_report_without_translation(self):
+        """Разобранный ответ площадки входит в `fill_report` как есть.
+
+        Повод: имена полей живут в двух модулях, а тесты сверки до этого момента
+        кормили `fill_report` фикстурами, выведенными из того же представления об
+        ответе, что и сам модуль. Переименование поля у парсера не сломало бы ни
+        одной проверки — `row.get()` вернул бы None, каждая реальная сделка
+        стала бы «IOC снят с цены», и учёт перестал бы двигаться молча. Здесь
+        цепочка настоящая: JSON площадки → `get_account_taker_fills` →
+        `fill_report`.
+        """
+        order_uid = "6f1d2c3b-4a59-4b6c-8d7e-0f1a2b3c4d5e"
+        ours = mirror_fill.client_order_index(order_uid)
+        # Тейкер — сторона ask (is_maker_ask=False): аккаунт 900 из фикстуры и
+        # наш client id в `ask_client_id`.
+        row = trade_row(ask_client_id=ours)
+        with patch("urllib.request.urlopen", Transport({"code": 200, "trades": [row]})):
+            fills = lighter_rest.get_account_taker_fills(900, 1, "mainnet")
+        report = mirror_fill.fill_report(
+            fills,
+            account_index=900,
+            market_id=1,
+            order_uid=order_uid,
+            ordered_base=0.00089,
+        )
+        self.assertEqual(report.status, mirror_fill.FILLED)
+        self.assertAlmostEqual(report.executed_base, 0.00089)
+        self.assertIsNone(report.reason)
+
+    def test_the_same_row_for_another_order_is_not_ours(self):
+        """Та же строка площадки, но client id у другой заявки: учёт не
+        двигается. Проверка идёт по настоящему парсеру, значит фильтр читается
+        настоящим именем поля, а не совпадением двух фикстур."""
+        row = trade_row(ask_client_id=7)
+        with patch("urllib.request.urlopen", Transport({"code": 200, "trades": [row]})):
+            fills = lighter_rest.get_account_taker_fills(900, 1, "mainnet")
+        report = mirror_fill.fill_report(
+            fills,
+            account_index=900,
+            market_id=1,
+            order_uid="6f1d2c3b-4a59-4b6c-8d7e-0f1a2b3c4d5e",
+            ordered_base=0.00089,
+        )
+        self.assertEqual(report.status, mirror_fill.UNFILLED)
+        self.assertEqual(report.executed_base, 0.0)
+
+    def test_the_taker_side_is_read_from_the_row_not_assumed(self):
+        """Заявка с другой стороны книги — те же деньги и та же сверка.
+
+        `is_maker_ask=True` значит, что тейкер сидит в `bid_*`: если парсер или
+        сверка считают сторону заранее (как в фикстуре выше — ask), то половина
+        реальных исполнений просто не найдётся, и журнал назовёт их снятыми с
+        цены. Здесь как раз та половина.
+        """
+        order_uid = "6f1d2c3b-4a59-4b6c-8d7e-0f1a2b3c4d5e"
+        ours = mirror_fill.client_order_index(order_uid)
+        row = trade_row(bid_client_id=ours, is_maker_ask=True)
+        with patch("urllib.request.urlopen", Transport({"code": 200, "trades": [row]})):
+            fills = lighter_rest.get_account_taker_fills(700, 1, "mainnet")
+        report = mirror_fill.fill_report(
+            fills,
+            account_index=700,
+            market_id=1,
+            order_uid=order_uid,
+            ordered_base=0.00089,
+        )
+        self.assertEqual(report.status, mirror_fill.FILLED)
+        self.assertAlmostEqual(report.executed_base, 0.00089)
 
 
 class TestCachePreservesIdentity(unittest.TestCase):

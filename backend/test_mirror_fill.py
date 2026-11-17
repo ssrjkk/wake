@@ -31,8 +31,11 @@ def fill(
     size="0.005",
     type="trade",
 ):
-    """Строка ленты в той форме, которую отдаёт lighter_rest.
-    get_account_taker_fills: размер — float, сторона тейкера уже выбрана."""
+    """Строка ленты в той форме, которую отдаёт
+    `lighter_rest.get_account_taker_fills`: ровно шесть полей, размер — float,
+    сторона тейкера уже выбрана. Лишних полей здесь намеренно нет — сверка
+    обязана видеть тот же словарь, что ей отдадут в бою; настоящая цепочка
+    «JSON площадки → парсер → fill_report» проверяется в test_lighter_rest."""
     return {
         "trade_id": trade_id,
         "market_id": market,
@@ -40,8 +43,6 @@ def fill(
         "taker_account_index": account,
         "taker_client_order_index": client if client is not None else CLIENT,
         "size": None if size is None else float(size),
-        "price": 1900.0,
-        "tx_hash": "0xdead",
     }
 
 
