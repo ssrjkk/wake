@@ -522,6 +522,14 @@ class TestFrontendEnvKnobs(unittest.TestCase):
     имя имеет тип, и он же молча отстаёт, пока компилятор не заставят
     отказывать неизвестным именам.
 
+    Реестр «код» — это два читателя, а не один: `src/` через `import.meta.env`
+    и `vite.config.ts` через `loadEnv`. Второй держит настройки, которые в
+    бандл не попадают физически (`VITE_SITE_URL` разбирается на сборке и
+    доезжает до браузера только как подстановка в `index.html`), и для него
+    `vite-env.d.ts` — чужой файл: типизировать там можно только то, что читает
+    `import.meta.env`. Поэтому сверка с примером и документами идёт по
+    объединению, а четвёртый тест — по-прежнему только по первому.
+
     Последний тест про резерв `BACKEND_URL`: сборка без `VITE_*` обязана уходить
     на настоящий сервис. Резерв в `localhost:8000` выглядит безобидно ровно до
     того момента, когда бандл без env-переменных уезжает на хостинг и вся
@@ -530,6 +538,7 @@ class TestFrontendEnvKnobs(unittest.TestCase):
 
     ROOT = Path(__file__).resolve().parent.parent
     KNOB_IN_CODE = re.compile(r"import\.meta\.env\.(VITE_[A-Z0-9_]+)\b")
+    KNOB_IN_CONFIG = re.compile(r"\benv\.(VITE_[A-Z0-9_]+)\b")
     KNOB_IN_TEXT = re.compile(r"\b(VITE_[A-Z0-9_]+)\b")
 
     def _code_knobs(self) -> set:
@@ -543,6 +552,14 @@ class TestFrontendEnvKnobs(unittest.TestCase):
                 )
             )
         return names
+
+    def _build_knobs(self) -> set:
+        """Имена, которые читает конфиг сборки, а не приложение."""
+        text = (self.ROOT / "vite.config.ts").read_text(encoding="utf-8")
+        return set(self.KNOB_IN_CONFIG.findall(text))
+
+    def _wired_knobs(self) -> set:
+        return self._code_knobs() | self._build_knobs()
 
     def _example_text(self) -> str:
         return (self.ROOT / ".env.example").read_text(encoding="utf-8")
@@ -576,13 +593,19 @@ class TestFrontendEnvKnobs(unittest.TestCase):
             f"`src/` не читает почти ничего ({sorted(code)}) — регулярка разбора сломана",
         )
         self.assertGreaterEqual(
+            len(self._build_knobs()),
+            1,
+            "`vite.config.ts` не читает ни одной переменной — второй читатель не найден, "
+            "и настройка сборки пройдёт сверку как лишняя",
+        )
+        self.assertGreaterEqual(
             len(example),
             4,
             f"в `.env.example` не разобралось ни одной переменной ({sorted(example)}) — формат строк поменялся",
         )
 
     def test_every_knob_the_app_reads_is_in_the_example(self):
-        missing = sorted(self._code_knobs() - self._example_knobs())
+        missing = sorted(self._wired_knobs() - self._example_knobs())
         self.assertEqual(
             missing,
             [],
@@ -590,11 +613,12 @@ class TestFrontendEnvKnobs(unittest.TestCase):
         )
 
     def test_no_knob_is_advertised_that_the_app_ignores(self):
-        extra = sorted(self._example_knobs() - self._code_knobs())
+        extra = sorted(self._example_knobs() - self._wired_knobs())
         self.assertEqual(
             extra,
             [],
-            f"пример советует переменную, которую `src/` не читает: {extra} — это выключатель без проводки",
+            f"пример советует переменную, которую не читает ни `src/`, ни `vite.config.ts`: "
+            f"{extra} — это выключатель без проводки",
         )
 
     def test_declared_env_type_lists_exactly_the_read_knobs(self):
@@ -639,7 +663,7 @@ class TestFrontendEnvKnobs(unittest.TestCase):
         )
 
     def test_docs_name_only_knobs_that_exist(self):
-        real = self._code_knobs() | self._example_knobs()
+        real = self._wired_knobs() | self._example_knobs()
         offenders = []
         for name in TestDocsClaims.DOC_NAMES:
             text = (self.ROOT / name).read_text(encoding="utf-8")

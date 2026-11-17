@@ -13,18 +13,12 @@
 // лидеров, статистика лидера), а всё, у чего есть владелец, уходит с токеном
 // сессии — заголовок подмешивает lib/backend.ts.
 
-// mainnet.zklighter.elliot.ai и testnet.zklighter.elliot.ai — оба подтверждены официальными
-// источниками Lighter (apidocs.lighter.xyz, GitHub elliottech/lighter-agent-kit).
 import { backendJson } from "./backend";
 import { timedFetch } from "./net";
 import { LIGHTER_NETWORK, SIGNING_SERVICE_URL } from "./config";
+import { LIGHTER_API_URLS, type LighterNetwork } from "./networks";
 
-const NETWORKS = {
-  mainnet: "https://mainnet.zklighter.elliot.ai/api/v1",
-  testnet: "https://testnet.zklighter.elliot.ai/api/v1",
-} as const;
-
-export type LighterNetwork = keyof typeof NETWORKS;
+export type { LighterNetwork };
 
 // res.json() — Promise<any>: единственное место, где внешний ответ входит в
 // типизированный мир. Каждая функция ниже описывает свою сырую форму и один
@@ -41,7 +35,7 @@ export function setNetwork(network: LighterNetwork) {
 export function getNetwork(): LighterNetwork {
   return currentNetwork;
 }
-const BASE_URL = () => NETWORKS[currentNetwork];
+const BASE_URL = () => LIGHTER_API_URLS[currentNetwork];
 
 // Хост отдельной строкой: в состоянии «Lighter не отвечает» нужно показать,
 // именно куда не прошёл запрос, а не заставлять человека вычитать его из

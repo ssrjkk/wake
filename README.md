@@ -200,6 +200,7 @@ Price markets close themselves at the deadline only while this process runs; oth
 | `VITE_WALLETCONNECT_PROJECT_ID` | empty | empty means no QR connector; injected wallets still work |
 | `VITE_TELEGRAM_BOT_NAME` | empty | empty disables the Telegram login panel |
 | `VITE_SENTRY_DSN` | empty | leave empty until a real project exists |
+| `VITE_SITE_URL` | `https://wake-7k6.pages.dev` | the address the page declares about itself: canonical, `og:url`, the share image and the Lighter preconnect are built from it; a value without a scheme fails the build |
 
 ### Backend (`backend/.env`)
 
@@ -309,6 +310,15 @@ curl -s https://wake-7k6.pages.dev/assets/<that-name>.js | grep -c waketrade_bot
   bundle whose "backend" is each visitor's own machine. `cp .env.example .env` is
   a development setup — to build something deployable, drop the line or set the
   deployed address.
+- `public/_headers` carries the cache policy and the security headers, `public/_redirects`
+  the SPA fallback. `vite preview` does not apply `_headers` — only Pages does when it
+  serves — so `npm run check:headers` replays those rules over `dist` in a browser, walks
+  the nine panels and the wallet modal, requires zero blocked requests and prints what an
+  enforced CSP would break (measured 2026-11-17: the `new Function` inside the Telegram
+  widget, and until the host was listed explicitly the login frame `oauth.telegram.org`).
+- Serving this bundle anywhere but Pages means putting the same rules in the server config:
+  `docs/FRONTEND_HOSTING.md`. There `VITE_SITE_URL` stops being cosmetic — it is what
+  `canonical` and the messenger link preview are built from.
 
 One consequence worth knowing: because Pages answers *any* unknown path with `index.html` and status 200, an API request to a host with no backend returns HTML. `src/lib/backend.ts` turns that into a readable "there is no backend at this address" message instead of a JSON parse error, and the panels print which three still work.
 
@@ -316,6 +326,7 @@ Deploy from the repo:
 
 ```bash
 npm run build
+npm run check:headers          # dist under the real _headers, in a browser, before upload
 npx wrangler pages deploy dist --project-name wake
 ```
 

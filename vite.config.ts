@@ -1,5 +1,6 @@
 import { defineConfig, loadEnv } from "vite";
 import react from "@vitejs/plugin-react";
+import { lighterOrigin, type LighterNetwork } from "./src/lib/networks.ts";
 
 // Pages-проект не привязан к Git: бандл собирается здесь и загружается отсюда,
 // поэтому VITE_* в нём — те, что лежат в локальном .env, а не что-то из дашборда.
@@ -40,13 +41,41 @@ function isTempoWorkerNoise(message: string): boolean {
   return importer.includes("ox") && importer.includes("tempo");
 }
 
+// Адрес сайта, который видит мир: canonical, og:url, og:image, twitter:image.
+// Литералом он лежал в index.html до того, как фронт вообще умел собираться
+// куда-то, кроме Pages: на собственном домене страница назвала бы чужой, а
+// карточку ссылки в чате мессенджер строит именно по этим тегам — JavaScript он
+// для этого не исполняет. Отсюда же preconnect: греть соединение имеет смысл
+// только к тому узлу, к которому сборка реально ходит, поэтому хост берётся из
+// того же модуля, что и клиентский адрес (src/lib/networks.ts).
+const SITE_URL_DEFAULT = "https://wake-7k6.pages.dev";
+
+function siteMeta(env: Record<string, string | undefined>) {
+  const site = env.VITE_SITE_URL || SITE_URL_DEFAULT;
+  let origin: string;
+  try {
+    origin = new URL(site).origin;
+  } catch {
+    throw new Error(
+      `VITE_SITE_URL="${site}" — не абсолютный адрес: canonical и og:url требуют схему, например https://wake.example.com`,
+    );
+  }
+  const network: LighterNetwork = env.VITE_LIGHTER_NETWORK === "testnet" ? "testnet" : "mainnet";
+  return {
+    name: "wake-site-meta",
+    transformIndexHtml: (html: string) =>
+      html.replaceAll("%SITE_URL%", origin).replaceAll("%LIGHTER_ORIGIN%", lighterOrigin(network)),
+  };
+}
+
 export default defineConfig(({ mode }) => {
-  const backend = loadEnv(mode, process.cwd(), "VITE_").VITE_BACKEND_URL;
+  const env = loadEnv(mode, process.cwd(), "VITE_");
+  const backend = env.VITE_BACKEND_URL;
   const problem = loopbackBuildProblem(mode, backend);
   if (problem) throw new Error(problem);
 
   return {
-    plugins: [react()],
+    plugins: [react(), siteMeta(env)],
     server: {
       watch: {
         ignored: [

@@ -236,6 +236,28 @@ NAME_CELL = re.compile(r"`[A-Z][A-Z0-9_]*`(?:\s*/\s*`[A-Z][A-Z0-9_]*`)*")
 FRONTEND_FALLBACK = re.compile(
     r'import\.meta\.env\.(VITE_[A-Z0-9_]+)\s*\|\|\s*"([^"]*)"'
 )
+# Сборочная переменная читается не бандлом, а vite.config.ts, и там она после `||`
+# держит не литерал, а имя константы: `env.VITE_SITE_URL || SITE_URL_DEFAULT`.
+BUILD_FALLBACK = re.compile(r"\benv\.(VITE_[A-Z0-9_]+)\s*\|\|\s*([A-Za-z_$][\w$]*)")
+CONST_STRING = re.compile(r'\bconst\s+([A-Za-z_$][\w$]*)\s*=\s*"([^"]*)"')
+
+
+def _build_time_defaults(path: Path) -> dict:
+    """Имена сборочных переменных и значения, которые подставляет их дефолт.
+
+    Разыменование нужно здесь, а не в виде ещё одной руки с литералом: таблица
+    README обязана описывать тот же дефолт, что видит сборка, и для этой проверки
+    переменная сборки ничем не отличается от рантаймовой. Строка `|| SITE_URL_DEFAULT`
+    без найденной константы молча остаётся в списке «дефолта нет» — тест это и
+    ловит, вместо того чтобы сравнить адрес с самим собой.
+    """
+    text = path.read_text(encoding="utf-8")
+    consts = dict(CONST_STRING.findall(text))
+    return {
+        name: consts[ident]
+        for name, ident in BUILD_FALLBACK.findall(text)
+        if ident in consts
+    }
 
 
 def _readme_rows(path: Path) -> list:
@@ -510,6 +532,7 @@ class TestReadmeConfigTable(unittest.TestCase):
 
     ROOT = BACKEND.parent
     CONFIG_TS = ROOT / "src" / "lib" / "config.ts"
+    VITE_CONFIG = ROOT / "vite.config.ts"
     README_NAMES = ("README.md", "README.ru.md")
     # Диапазон в третьей колонке пишется через тире (обычное или en), и это
     # единственный способ, каким таблица обещает границы валидатора.
@@ -545,6 +568,8 @@ class TestReadmeConfigTable(unittest.TestCase):
                 cls.CONFIG_TS.read_text(encoding="utf-8")
             )
         )
+        # Переменные, которые в бандл не попадают: их читает конфиг сборки.
+        cls.frontend_defaults.update(_build_time_defaults(cls.VITE_CONFIG))
 
     def _defaults(self):
         """Имя -> дефолт из кода в той форме, в какой его пишет таблица."""

@@ -12,6 +12,45 @@ measured number goes stale while the text around it still looks fine.
 ## [Unreleased]
 
 ### Added
+- `public/_headers`, `scripts/headers-check.mjs`, `npm run check:headers` — у
+  фронтенда появились заголовки, и способ увидеть их до деплоя. Кэш: `/assets/*` год
+  `immutable`, `index.html` — `max-age=0, must-revalidate` (вкладка, державшая старый
+  HTML, просит чанки, которых после редиплоя нет; `src/lib/preload.ts` лечит
+  следствие, заголовок убирает причину). Безопасность: `nosniff`, `Referrer-Policy`,
+  `Permissions-Policy`, HSTS. CSP — в `Content-Security-Policy-Report-Only`, и это
+  решение, а не отговорка: виджет входа исполняет строку как код, поэтому та же
+  политика на переименовании в enforce ломает кнопку входа, а `unsafe-eval` её
+  обходить нельзя — он разрешает исполнение любой строки всей странице. Харнесс
+  поднимает `dist` с правилами из `_headers` (`vite preview` их не применяет — их
+  накладывает Pages при выдаче), проходит 9 панелей и модалку кошелька и печатает и
+  счётчик блокировок, и список того, что сломает enforce: 2026-11-17 — 0
+  заблокированных запросов, 1 report-only нарушение (тот самый eval). Список узлов
+  собран браузером, а не грепом, и вот почему этого мало: `oauth.telegram.org`, куда
+  виджет ставит iframe, в `dist/assets/*.js` не встречается ни разу (0 совпадений) —
+  адрес рождается при клике. Пока политика писалась по тексту бандла, фрейм входа
+  в неё не попадал. Отсюда и `font-src 'self' data:`: Vite инлайнит woff2 в
+  `data:font/…`, и `font-src 'self'` блокировал бы шрифты, которых человек до этого
+  не видел ни разу. Классификатор нарушений тоже поправлен по факту: у console-формы
+  Chrome фраза «violates the following **report-only** Content Security Policy
+  directive» — со словом внутри, из-за чего фрейм-нарушения не считались совсем.
+- `src/lib/networks.ts` (новый файл), `vite.config.ts` · `wake-site-meta`,
+  `VITE_SITE_URL` в `.env.example`, `docs/FRONTEND_HOSTING.md` — адрес сайта перестал
+  быть литералом в `index.html`. Подстановки `%SITE_URL%` и `%LIGHTER_ORIGIN%`
+  разворачиваются на сборке: canonical, `og:url`, `og:image`, `twitter:image` и
+  preconnect берутся из одного места, поэтому сайт на своём домене больше не
+  называет canonical'ом `wake-7k6.pages.dev` — мессенджер карточку ссылки строит по
+  этим тегам, JavaScript для этого не исполняя. Значение без схемы роняет сборку, а
+  не пишет относительный canonical. Хост Lighter переехал в `networks.ts` и из
+  `src/lib/lighter.ts`, и из `index.html`: preconnect греет соединение только к тому
+  узлу, куда бандл реально ходит, и харнесс сверяет строку HTML с хостами собранных
+  чанков (`OK preconnect совпадает с узлом бандла: mainnet.zklighter.elliot.ai`).
+  Вне Pages заголовки и фолбэк SPA настраивает сервер — `docs/FRONTEND_HOSTING.md`
+  переносит правила `_headers` на nginx и Caddy и объясняет, что Pages при этом
+  делает сам. Реестр «код читает» в
+  `backend/test_api_contract.py::TestFrontendEnvKnobs` стал из двух читателей
+  (`src/` через `import.meta.env` и `vite.config.ts` через `loadEnv`): иначе
+  настройка, которая в бандл не попадает физически, помечалась выключателем без
+  проводки и сборку нельзя было задокументировать.
 - `scripts/screenshots.mjs`, `scripts/telegram-cards.py` — снимки панелей для README
   перестали быть ручным делом. `npm run build && node scripts/screenshots.mjs`
   поднимает `vite preview` на production-сборке, открывает каждую вкладку кликом
