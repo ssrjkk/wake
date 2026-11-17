@@ -255,16 +255,32 @@ async def error_envelope_middleware(request: Request, call_next):
 
 
 # Security headers — Helmet-аналог для FastAPI.
+#
+# Список закрытых функций — буквально та же строка Permissions-Policy, что
+# лежит во `public/_headers`: у продукта два отдающих сервера, Pages со
+# статикой и этот с JSON, и разъехаться им достаточно легко. Сверку закрепляет
+# тест, а не этот комментарий.
+#
+# X-XSS-Protection здесь был и убран не из аскезы: MDN помечает заголовок
+# Deprecated и Non-standard — «Not part of any specifications or drafts», — а
+# в Security considerations описано, как фильтр сам создаёт XSS: страница с
+# `var productionMode = true` и отладочным блоком ниже после «очистки»
+# отражённого из URL тега теряла первый и исполняла второй. Против отражённого
+# XSS здесь работает CSP ниже: `default-src 'self'` без инлайновых скриптов —
+# ровно то, что MDN рекомендует использовать вместо фильтра.
+_PERMISSIONS_POLICY = (
+    "camera=(), microphone=(), geolocation=(), payment=(), "
+    "usb=(), magnetometer=(), gyroscope=()"
+)
+
+
 @app.middleware("http")
 async def security_headers_middleware(request: Request, call_next):
     response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
-    response.headers["X-XSS-Protection"] = "1; mode=block"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
-    response.headers["Permissions-Policy"] = (
-        "camera=(), microphone=(), geolocation=(), payment=()"
-    )
+    response.headers["Permissions-Policy"] = _PERMISSIONS_POLICY
     # `default-src 'self'`: ни инлайновых скриптов, ни чужих CDN. Именно этот
     # заголовок делает Swagger нерабочим, поэтому он выключен по умолчанию
     # (см. создание `app`): swagger-ui грузится с CDN и пишет инлайновый тег, а

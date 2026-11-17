@@ -279,10 +279,19 @@ market in one tick, and two parallel claims by the same user must pay once.
 - CORS: explicit origins from `WAKE_CORS_ORIGINS`, no wildcards, credentials
   allowed for the bearer header.
 - Every API response carries `X-Content-Type-Options: nosniff`,
-  `X-Frame-Options: DENY`, `X-XSS-Protection`, `Referrer-Policy:
-  strict-origin-when-cross-origin`, a `Permissions-Policy` that denies
-  camera/microphone/geolocation/payment, and `Content-Security-Policy:
-  default-src 'self'`.
+  `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin`,
+  a `Permissions-Policy` that denies camera, microphone, geolocation, payment,
+  usb, magnetometer and gyroscope, and `Content-Security-Policy:
+  default-src 'self'`. That `Permissions-Policy` is the same string
+  `public/_headers` sends for the site, and a test compares the two — one list
+  held by two servers drifts silently, and the only witness is the browser.
+- `X-XSS-Protection` is not sent, and not by omission. MDN marks it deprecated
+  and non-standard ("Not part of any specifications or drafts"), and its
+  security section documents the filter itself creating XSS: on a page whose
+  safety rests on `var productionMode = true`, "sanitizing" a `<script>`
+  reflected from the URL dropped that line and executed the debug branch below
+  it. What MDN recommends instead is exactly the header above — a CSP with no
+  inline JavaScript.
 - "Every" includes the refusals, and that is a property of middleware order, not
   of each handler: Starlette inserts every middleware at position 0, so the last
   one registered is the outermost, and the stack is built CORS → security
@@ -666,10 +675,19 @@ price-рынка в этот момент уже определён оракул
 - CORS: явные источники из `WAKE_CORS_ORIGINS`, без wildcard'ов, credentials
   разрешены — нужен bearer-заголовок.
 - Каждый ответ API несёт `X-Content-Type-Options: nosniff`,
-  `X-Frame-Options: DENY`, `X-XSS-Protection`, `Referrer-Policy:
-  strict-origin-when-cross-origin`, `Permissions-Policy`, запрещающий
-  камеру/микрофон/геолокацию/payment, и `Content-Security-Policy: default-src
-  'self'`.
+  `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin`,
+  `Permissions-Policy`, запрещающий камеру, микрофон, геолокацию, payment, usb,
+  magnetometer и gyroscope, и `Content-Security-Policy: default-src 'self'`.
+  Этот `Permissions-Policy` — буквально та же строка, которую сайту отдаёт
+  `public/_headers`, и тест сверяет их: один список в руках двух серверов
+  разъезжается молча, а замечает это только браузер.
+- `X-XSS-Protection` не отправляется, и это не недосмотр: MDN помечает заголовок
+  Deprecated и Non-standard («Not part of any specifications or drafts»), а в
+  разделе Security considerations описано, как фильтр сам создавал XSS — на
+  странице, где безопасность держится на `var productionMode = true`,
+  «вычищение» отражённого из URL тега теряло эту строку и исполняло отладочную
+  ветку ниже. Вместо фильтра MDN рекомендует ровно то, что стоит заголовком
+  выше: CSP без инлайнового JavaScript.
 - «Каждый» включает отказы, и это свойство порядка middleware, а не каждого
   обработчика: Starlette вставляет каждый слой в начало списка, поэтому
   последним добавленный оказывается внешним, и стек собран CORS → заголовки →

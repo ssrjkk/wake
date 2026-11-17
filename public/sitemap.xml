@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Один URL, и это не лень: у панелей нет своих адресов. Раздел — состояние
+  вкладки (src/App.tsx:161), а в строку запроса попадает только deeplink `?tab=`
+  (src/lib/deeplink.ts:23), по которому бот открывает нужный экран. Семь копий
+  одной страницы поисковик посчитал бы дублями и склеил бы их в тот же
+  canonical, который указан в index.html, — в карте этот адрес один.
+
+  Хост здесь — литерал, как и в og.png (scripts/brand-assets.mjs:61): Vite
+  подставляет VITE_SITE_URL только в index.html, файлы из public/ уходят в
+  сборку байт в байт. Поэтому на собственном домене эту строку правят руками,
+  а `npm run check:headers` сверяет её с canonical из собранного index.html и
+  о расхождении говорит сам.
+-->
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url>
+    <loc>https://wake-7k6.pages.dev/</loc>
+  </url>
+</urlset>

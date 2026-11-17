@@ -311,11 +311,12 @@ curl -s https://wake-7k6.pages.dev/assets/<that-name>.js | grep -c waketrade_bot
   a development setup — to build something deployable, drop the line or set the
   deployed address.
 - `public/_headers` carries the cache policy and the security headers, `public/_redirects`
-  the SPA fallback. `vite preview` does not apply `_headers` — only Pages does when it
-  serves — so `npm run check:headers` replays those rules over `dist` in a browser, walks
-  the nine panels and the wallet modal, requires zero blocked requests and prints what an
-  enforced CSP would break (measured 2026-11-17: the `new Function` inside the Telegram
-  widget, and until the host was listed explicitly the login frame `oauth.telegram.org`).
+  the SPA fallback and the 301 for `/favicon.ico`. `vite preview` applies neither — Pages
+  adds both when it serves — so `npm run check:headers` replays those rules over `dist`
+  in a browser, walks the nine panels plus the login and wallet modals, requires zero
+  blocked requests and prints what an enforced CSP would break (measured 2026-11-17: the
+  `new Function` inside the Telegram widget, visible only after the login click, and
+  until the host was listed explicitly the login frame `oauth.telegram.org`).
 - Serving this bundle anywhere but Pages means putting the same rules in the server config:
   `docs/FRONTEND_HOSTING.md`. There `VITE_SITE_URL` stops being cosmetic — it is what
   `canonical` and the messenger link preview are built from.

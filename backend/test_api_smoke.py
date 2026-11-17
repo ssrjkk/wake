@@ -23,10 +23,12 @@ import math
 import hmac
 import json
 import logging
+import re
 import threading
 import time
 import unittest
 import uuid
+from pathlib import Path
 from urllib.parse import urlencode
 
 # Тестовое окружение (секрет сессии, фиктивный токен бота, ведро rate limit)
@@ -1944,6 +1946,35 @@ class TestHardening(HttpCase):
             r.headers["referrer-policy"], "strict-origin-when-cross-origin"
         )
         self.assertIn("default-src 'self'", r.headers["content-security-policy"])
+        # X-XSS-Protection здесь нет, и проверяется именно отсутствие: MDN
+        # помечает заголовок Deprecated и Non-standard («Not part of any
+        # specifications or drafts») и описывает, как фильтр сам открывал XSS —
+        # «вычищая» отражённый из URL тег, браузер терял соседний флаг в
+        # документе и исполнял отладочную ветку. Ответ, который не просит
+        # ничего вычищать, безопаснее ответа с этой строкой.
+        self.assertNotIn("x-xss-protection", r.headers)
+
+    async def test_permissions_policy_matches_the_file_pages_serves(self):
+        """Закрытые функции объявлены дважды: здесь и строкой
+        Permissions-Policy в `public/_headers`. Правит эти два файла разный
+        код, а разница между ними видна только браузеру — то есть разъехаться
+        они могут молча. Сверка буквальная, потому что другое значение тут
+        означает не стиль, а разное разрешение у фронтенда и у API."""
+        headers_file = Path(__file__).resolve().parent.parent / "public" / "_headers"
+        found = re.findall(
+            r"^[ \t]*Permissions-Policy:[ \t]*(.+?)[ \t]*$",
+            headers_file.read_text(encoding="utf-8"),
+            re.MULTILINE,
+        )
+        self.assertEqual(
+            len(found), 1, f"строк Permissions-Policy в _headers: {len(found)}"
+        )
+        r = await self.client.get("/health")
+        self.assertEqual(
+            r.headers["permissions-policy"],
+            found[0],
+            "список функций у API и у сайта разъехался",
+        )
 
     async def test_docs_are_absent_unless_explicitly_enabled(self):
         """Swagger выключен по умолчанию, и это не «ограничен», а «нет пути».

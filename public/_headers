@@ -13,8 +13,11 @@
 # заблокированных запросов и печатает то, что сломало бы enforce.
 
 # Файлы с хэшем в имени неизменяемы по построению: новое содержимое — новое имя.
-# Без этой строки Pages отдаёт их с max-age=0, и каждый заход тянет заново всё,
-# что лежит в /assets (сборка 2026-11-17: 0.83 МиБ JS+CSS, 19 файлов JS).
+# Без этой строки Pages отдаёт их с max-age=0, must-revalidate — живой замер
+# 2026-11-17: `assets/index-o3W-CAb1.js` отвечает 200 с ETag, а повтор с
+# If-None-Match даёт 304. Значит заново едет не тело (0.83 МиБ на 19 JS-файлов
+# и CSS этого билда), а отдельный условный запрос на каждый файл при каждом
+# заходе. Год `immutable` убирает и их.
 /assets/*
   Cache-Control: public, max-age=31536000, immutable
 
@@ -22,6 +25,29 @@
 # чанков, и устаревший HTML — это та самая ошибка «чанк не найден» после редиплоя.
 /index.html
   Cache-Control: public, max-age=0, must-revalidate
+
+# Картинки и файлы роботов. То, что не названо в этом файле, Pages отдаёт с
+# max-age=0, must-revalidate — замер 2026-11-17 по живому адресу прошлого
+# деплоя (в той сборке `_headers` не было вовсе): `/og.png` отвечает именно так,
+# `/robots.txt` — тоже, и заодно 200 с `text/html`, потому что вместо файла
+# приходил fallback. Год этим файлам нельзя: их правят руками, и имя от
+# содержимого не зависит. Сутки на визитку, час на правила для робота: столько
+# стоит устаревшая картинка в превью мессенджера и столько же — запоздалый
+# запрет в robots.
+/og.png
+  Cache-Control: public, max-age=86400
+
+/favicon.svg
+  Cache-Control: public, max-age=86400
+
+/apple-touch-icon.png
+  Cache-Control: public, max-age=86400
+
+/robots.txt
+  Cache-Control: public, max-age=3600
+
+/sitemap.xml
+  Cache-Control: public, max-age=3600
 
 /*
   X-Content-Type-Options: nosniff
@@ -42,4 +68,11 @@
   # исполнение любой строки и у уязвимого места, а не только у виджета.
   # Решение за человеком: либо изолировать виджет в отдельном iframe со своей
   # политикой, либо жить без enforce-CSP. Проверка — scripts/headers-check.mjs.
-  Content-Security-Policy-Report-Only: default-src 'self'; script-src 'self' https://telegram.org; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https://explorer-api.walletconnect.com https://assets.reown.org; font-src 'self' data:; connect-src 'self' https://mainnet.zklighter.elliot.ai https://testnet.zklighter.elliot.ai https://api.arcus.xyz https://api.testnet.arcus.xyz https://wake-backend-production-3483.up.railway.app https://4byte.sourcify.dev https://eth.llamarpc.com wss://relay.walletconnect.org https://api.web3modal.org https://explorer-api.walletconnect.com https://*.ingest.sentry.io http://localhost:8787 http://127.0.0.1:8787; worker-src 'self' blob:; frame-src 'self' https://telegram.org https://oauth.telegram.org https://h.walletconnect.org https://secure.walletconnect.org; object-src 'none'; base-uri 'self'; form-action 'self'
+  # Разрешений на blob: в политике нет, и это не недосмотр: в собранном бандле
+  # (19 JS-файлов этого билда) `new Worker`, `SharedWorker`,
+  # `navigator.serviceWorker` и `createObjectURL` не встречаются ни разу — 0 совпадений.
+  # Ни воркер, ни blob-ссылка появиться не могут, а `blob:` в worker-src или img-src —
+  # это как раз та строка, которой пользуются XSS-попапы, чтобы исполнить своё. Если
+  # воркер когда-нибудь появится, `default-src 'self'` пропустит одностроничный, а
+  # `npm run check:headers` увидит нарушение сам.
+  Content-Security-Policy-Report-Only: default-src 'self'; script-src 'self' https://telegram.org; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://explorer-api.walletconnect.com https://assets.reown.org; font-src 'self' data:; connect-src 'self' https://mainnet.zklighter.elliot.ai https://testnet.zklighter.elliot.ai https://api.arcus.xyz https://api.testnet.arcus.xyz https://wake-backend-production-3483.up.railway.app https://4byte.sourcify.dev https://eth.llamarpc.com wss://relay.walletconnect.org https://api.web3modal.org https://explorer-api.walletconnect.com https://*.ingest.sentry.io http://localhost:8787 http://127.0.0.1:8787; frame-src 'self' https://telegram.org https://oauth.telegram.org https://h.walletconnect.org https://secure.walletconnect.org; object-src 'none'; base-uri 'self'; form-action 'self'
