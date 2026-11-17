@@ -238,7 +238,25 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Audit frontend dependencies
-        run: npm audit
+        # Замер 2026-11-17: голая `npm audit` здесь краснеет из-за
+        # GHSA-fc5q-39xc-vjpf (picomatch, ReDoS, CWE-1333, CVSS 7.5). Адвизория
+        # опубликована 19.10, но диапазон `<= 4.0.7` в неё дописан 17.11 в
+        # 15:56Z, а `first_patched_version` остаётся null: пропатченного выпуска
+        # нет, и 4.0.7 — это latest. `npm audit fix --force` при этом предлагает
+        # vite 6.2.7 вместо 8.3.8, то есть откат через мажор, а не исправление.
+        # Разбор риска и условие снятия исключения — SECURITY.md, раздел про
+        # npm; скрипт сверяет продакшен-граф (исключений нет) и dev-граф
+        # (исключения названы GHSA-id, краснеет и на новую адвизорию, и на то,
+        # что список стал длиннее дерева).
+        run: node scripts/audit-check.mjs --ignore GHSA-fc5q-39xc-vjpf
+      - name: Upstream fix for the ignored npm advisory must still be missing
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # Обратная сторона предыдущего шага, как `pip install --dry-run` после
+        # pip-audit: краснеет не в день, когда дыра появилась, а в день, когда
+        # она стала устранима. Пока исключение живёт в ci.yml без проверки, что
+        # патча всё ещё нет, оно переживает собственный резон.
+        run: node scripts/advisory-fix-check.mjs GHSA-fc5q-39xc-vjpf
       - name: ESLint
         run: npm run lint -- --max-warnings 0
       - name: TypeScript type check

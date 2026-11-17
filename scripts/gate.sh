@@ -73,10 +73,19 @@ IGNORES=()
 while IFS= read -r id; do
     [ -n "$id" ] && IGNORES+=("--ignore-vuln" "$id")
 done < <(grep -oE -- '--ignore-vuln +[A-Za-z0-9._-]+' "$CI_FILE" | awk '{print $2}')
+# npm-исключения (`--ignore <GHSA>` в шаге аудита фронтенда) и список адвизорий
+# обратного гейта. `--ignore +` не матчит `--ignore-vuln`: после флага обязан
+# стоять пробел.
+NPM_IGNORES=()
+while IFS= read -r id; do
+    [ -n "$id" ] && NPM_IGNORES+=("--ignore" "$id")
+done < <(grep -oE -- '--ignore +GHSA-[0-9a-z-]+' "$CI_FILE" | awk '{print $2}')
+NPM_ADVISORIES="$(grep -oE 'advisory-fix-check\.mjs( +GHSA-[0-9a-z-]+)+' "$CI_FILE" | sed -E 's/advisory-fix-check\.mjs +//')"
 if [ -z "$RUFF_PIN" ] || [ -z "$CI_PYTHON" ] || [ -z "$CI_NODE" ] ||
-    [ ${#IGNORES[@]} -eq 0 ] || [ -z "$MIGRATE_URL" ] || [ -z "$TEST_URL" ]; then
+    [ ${#IGNORES[@]} -eq 0 ] || [ -z "$MIGRATE_URL" ] || [ -z "$TEST_URL" ] ||
+    [ -z "$NPM_ADVISORIES" ]; then
     echo "ci.yml прочитан не до конца: пин ruff, версии Python/Node, имена баз"
-    echo "alembic/pytest или список --ignore-vuln не найдены"
+    echo "alembic/pytest, список --ignore-vuln или аргументы advisory-fix-check не найдены"
     exit 1
 fi
 
@@ -458,6 +467,7 @@ fi
 # ── фронтенд ───────────────────────────────────────────────────────────────
 if [ "$GATE_LIST" = "0" ] && ! command -v npm >/dev/null 2>&1; then
     unavailable "frontend-check" "Audit frontend dependencies" "npm не установлен"
+    unavailable "frontend-check" "Upstream fix for the ignored npm advisory must still be missing" "npm не установлен"
     unavailable "frontend-check" "ESLint" "npm не установлен"
     unavailable "frontend-check" "TypeScript type check" "npm не установлен"
     unavailable "frontend-check" "Build" "npm не установлен"
@@ -465,7 +475,11 @@ if [ "$GATE_LIST" = "0" ] && ! command -v npm >/dev/null 2>&1; then
     unavailable "e2e-tests" "Run E2E tests" "npm не установлен"
 else
     # ci: frontend-check / Audit frontend dependencies
-    step "frontend-check" "Audit frontend dependencies" "npm audit"
+    step "frontend-check" "Audit frontend dependencies" \
+        "node scripts/audit-check.mjs ${NPM_IGNORES[*]}"
+    # ci: frontend-check / Upstream fix for the ignored npm advisory must still be missing
+    step "frontend-check" "Upstream fix for the ignored npm advisory must still be missing" \
+        "node scripts/advisory-fix-check.mjs $NPM_ADVISORIES"
     # ci: frontend-check / ESLint
     step "frontend-check" "ESLint" "npm run lint -- --max-warnings 0"
     # ci: frontend-check / TypeScript type check

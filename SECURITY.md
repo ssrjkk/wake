@@ -329,7 +329,9 @@ market in one tick, and two parallel claims by the same user must pay once.
 
 CI runs `pip-audit --strict` against `backend/requirements.txt`. Audit errors
 and advisories outside the exact list below fail the job, including new urllib3
-advisories. `npm audit` checks both production and development frontend packages.
+advisories. The frontend is audited as two graphs — what ships in `dist` and
+what only runs on the build machine — and the split is described in
+«npm dependency auditing» below.
 
 The following urllib3 advisories were reviewed on 2026-10-25. `lighter-sdk`
 1.1.8 — published 2026-10-19 and still the newest release — requires
@@ -373,6 +375,41 @@ absent here, or documented but no longer excluded.
 
 The decompression exceptions remain residual risk for dependency code that reads
 responses in full; trusted HTTPS hosts reduce exposure but do not remove it.
+
+### npm dependency auditing
+
+The frontend is audited in two graphs, because the two are not the same risk.
+`npm audit --omit=dev` reads the graph that gets compiled into `dist`: zero
+exceptions are possible there, and the measurement on 2026-11-17 is zero
+advisories across 45 production packages. The build-time graph — `vite`,
+`vitest`, `@typescript-eslint` — is gated by `scripts/audit-check.mjs`, which
+fails on any advisory whose GHSA id the CI step did not name, and fails in the
+other direction too: an `--ignore` that `npm audit` no longer returns is itself
+a red step. An exception list that cannot shrink is not an exception list but a
+mute button.
+
+| Advisory | Package | Why the exception holds |
+| --- | --- | --- |
+| GHSA-fc5q-39xc-vjpf | picomatch, range `<= 4.0.7` | ReDoS (CWE-1333, CVSS 7.5) in glob matching that runs at build and test time, over globs taken from this repository's own config; the code never enters the bundle |
+
+The advisory was published 2026-10-19, and the `<= 4.0.7` range was added to it
+on 2026-11-17 at 15:56Z — the same day CI turned red — while
+`first_patched_version` is still `null`: 4.0.7 is the newest release, so there
+is nothing to move to. `npm audit fix --force` proposes replacing `vite` 8.3.8
+with 6.2.7, which is a major downgrade rather than a fix, so the gate reads the
+advisory record and the installed versions instead of acting on that suggestion.
+The exposure the exception describes is a build machine pointed at a hostile
+glob pattern, which in this repository means a commit to `vite.config.ts` or the
+test include lists — already a code-execution position, not one this advisory
+adds.
+
+The step after the audit, `Upstream fix for the ignored npm advisory must still
+be missing`, asks the GitHub advisory database whether a patched release now
+exists and fails the job the day it does, or the day the advisory is withdrawn,
+so the exception cannot outlive the condition that made it necessary.
+`backend/test_local_gate_parity.py` checks that the `--ignore` list, the
+arguments of that step and this table name one and the same set, in both
+language halves.
 
 ## What These Measures Do Not Cover
 
@@ -724,7 +761,8 @@ price-рынка в этот момент уже определён оракул
 
 CI запускает `pip-audit --strict` по `backend/requirements.txt`. Ошибки аудита
 и уязвимости вне точного списка ниже роняют джоб, включая новые уязвимости
-urllib3. `npm audit` проверяет фронтенд вместе с dev-зависимостями.
+urllib3. Фронтенд проверяется двумя графами — то, что попадает в `dist`, и то,
+что живёт только на машине сборки; раздел про npm ниже.
 
 Перечисленные уязвимости urllib3 проверены 2026-10-25. `lighter-sdk` 1.1.8 —
 опубликован 2026-10-19 и остаётся свежим релизом — требует `urllib3<2.1.0`, а
@@ -769,6 +807,39 @@ HTTP-путей требуют пересмотра исключений. Пос
 
 Распаковка остаётся остаточным риском для кода зависимостей, читающего ответ
 целиком: доверенные HTTPS-хосты уменьшают риск, но не устраняют его.
+
+### Проверка npm-зависимостей
+
+Фронтенд аудируется двумя графами, потому что это разные риски.
+`npm audit --omit=dev` смотрит на граф, который компилируется в `dist`:
+исключений в нём не бывает вовсе, а замер 2026-11-17 даёт ноль адвизорий на 45
+продакшен-пакетов. Сборочный граф — `vite`, `vitest`, `@typescript-eslint` —
+держит `scripts/audit-check.mjs`: он краснеет на любую адвизорию, чей GHSA-id
+не назван в шаге CI, и краснеет в обратную сторону, если `--ignore` больше не
+встречается в отчёте npm. Список исключений, который не умеет уменьшаться, —
+это не список исключений, а кнопка «заглушить звук».
+
+| Адвизория | Пакет | Почему исключение держится |
+| --- | --- | --- |
+| GHSA-fc5q-39xc-vjpf | picomatch, диапазон `<= 4.0.7` | ReDoS (CWE-1333, CVSS 7.5) в сопоставлении glob-паттернов, которое исполняется на сборке и в тестах, где паттерны берутся из конфигов самого репозитория; в бандл код не попадает |
+
+Адвизория опубликована 2026-10-19, диапазон `<= 4.0.7` в неё дописан
+2026-11-17 в 15:56Z — в тот же день CI покраснел, — а `first_patched_version`
+по-прежнему `null`: 4.0.7 и есть свежий релиз, переходить некуда.
+`npm audit fix --force` предлагает заменить `vite` 8.3.8 на 6.2.7, то есть
+откат через мажор вместо исправления, поэтому гейт читывает запись адвизории и
+установленные версии, а не это предложение. Риск, который описывает исключение,
+— сборочная машина, которой подсунули враждебный glob; в этом репозитории это
+коммит в `vite.config.ts` или в списки include тестов, то есть позиция с правом
+исполнять код, а не что-то новое из этой адвизории.
+
+Шаг после аудита, `Upstream fix for the ignored npm advisory must still be
+missing`, спрашивает базу адвизорий GitHub, появился ли пропатченный выпуск, и
+роняет джоб в первый день, когда появится или когда адвизорию отзовут, — так
+исключение не переживает причину, по которой оно нужно.
+`backend/test_local_gate_parity.py` сверяет, что список `--ignore`, аргументы
+этого шага и таблица выше называют одно и то же множество, в обеих половинах
+документа.
 
 ## Что эти меры НЕ закрывают
 

@@ -32,6 +32,9 @@ docker-build, так что локальный «всё зелёное» опи�
   * список `--ignore-vuln` и таблицы исключений в SECURITY.md разошлись:
     снятое исключение продолжает читаться как действующий риск, а новое
     появляется в красном логе без объяснения;
+  * то же для npm-исключений, но втроём: `--ignore <GHSA>` в шаге аудита,
+    аргументы шага `advisory-fix-check` и обе таблицы SECURITY.md. Исключение
+    без стража переживает свой резон, страж без исключения проверяет пустоту;
   * документ парный, и значение из CI процитировано только в одной половине:
     по файлу целиком расхождение не видно, а решение принимает читатель одной
     из половин;
@@ -282,6 +285,12 @@ def doc_table(markdown: str, heading: str) -> dict:
 # `###`, а не `##`, поэтому doc_table здесь не годится — он ищет ровно `## `.
 AUDIT_HEADINGS = ("### Dependency auditing", "### Проверка зависимостей")
 ADVISORY_ID = re.compile(r"(?:CVE|PYSEC)-[0-9]{4}-[0-9]+")
+# npm-половина того же раздела: таблица с GHSA-id в первой колонке. Идентификатор
+# жёсткий (четыре группы по четыре символа), потому что `GHSA-[0-9a-z-]+` матчил
+# бы и шаблон grep из scripts/gate.sh, и тогда тест проверял бы собственное
+# регулярное выражение вместо списка.
+NPM_AUDIT_HEADINGS = ("### npm dependency auditing", "### Проверка npm-зависимостей")
+GHSA_ID = re.compile(r"GHSA-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4}")
 
 
 def advisory_rows(markdown: str, heading: str) -> list:
@@ -739,6 +748,9 @@ class TestGateMirrorsCi(unittest.TestCase):
         for pattern, label in (
             (r"ruff\s*==\s*[0-9]", "пин ruff"),
             (r"(CVE|PYSEC)-", "идентификатор уязвимости из списка исключений"),
+            # Строгий GHSA-id, а не `GHSA-[0-9a-z-]+`: второй матчил бы собственный
+            # шаблон grep из гейта, и проверка ловила бы саму себя.
+            (r"GHSA-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4}", "GHSA-id из npm-исключений"),
             (r"allure-commandline@[0-9]", "версия allure"),
         ):
             self.assertIsNone(
@@ -886,6 +898,106 @@ class TestAdvisoryExceptionsAreDocumented(unittest.TestCase):
 
     def test_documented_advisories_are_the_excluded_ones(self):
         self.assertEqual(advisory_findings(self.security, self.excluded), [])
+
+
+class TestNpmAdvisoryExceptionsAreGuarded(unittest.TestCase):
+    """npm-исключения: шаг аудита, шаг-страж и SECURITY.md называют одно множество.
+
+    Повод: 2026-11-17 CI покраснел от адвизории, у которой пропатченного выпуска
+    нет (`picomatch <= 4.0.7`, `first_patched_version: null`), и единственная
+    честная форма — держать исключение, названное GHSA-id. Оно живёт сразу в трёх
+    местах, и в двух из них его нет: `--ignore` в шаге аудита, аргумент
+    `advisory-fix-check.mjs` и таблицы в обеих половинах SECURITY.md. Любая
+    пара расходится молча: исключение без стража переживает свой резон, страж
+    без исключения проверяет пустоту, а документ без строки решает «это снято»
+    по тому, чего в CI уже нет.
+    """
+
+    AUDIT_STEP = ("frontend-check", "Audit frontend dependencies")
+    GUARD_STEP = (
+        "frontend-check",
+        "Upstream fix for the ignored npm advisory must still be missing",
+    )
+
+    @classmethod
+    def setUpClass(cls):
+        cls.steps = run_steps(parse_yaml(CI_FILE.read_text(encoding="utf-8")))
+        cls.security = SECURITY_FILE.read_text(encoding="utf-8")
+
+    def ids_of(self, step, script):
+        if step not in self.steps:
+            self.fail(
+                f"в ci.yml нет шага {step[0]} / {step[1]}: идентификаторы читать неоткуда"
+            )
+        run = self.steps[step]
+        self.assertIn(
+            script,
+            run,
+            f"шаг «{step[1]}» больше не запускает {script}: идентификаторы из него "
+            "читает не тот инструмент",
+        )
+        return GHSA_ID.findall(run)
+
+    def test_both_steps_exist(self):
+        for step in (self.AUDIT_STEP, self.GUARD_STEP):
+            self.assertIn(step, self.steps, f"в ci.yml нет шага {step[0]} / {step[1]}")
+
+    def test_the_exception_ids_are_the_guarded_ids(self):
+        ignored = self.ids_of(self.AUDIT_STEP, "audit-check.mjs")
+        guarded = self.ids_of(self.GUARD_STEP, "advisory-fix-check.mjs")
+        self.assertEqual(
+            sorted(ignored),
+            sorted(guarded),
+            "--ignore и аргументы стража разошлись: первое без второго — риск без "
+            "срока, второе без первого — проверка над пустым списком",
+        )
+        self.assertEqual(
+            len(ignored),
+            len(set(ignored)),
+            "один GHSA-id в --ignore дважды: вторая строка ничего не добавляет",
+        )
+
+    def test_an_empty_exception_list_removes_the_guard_step(self):
+        """Ноль исключений законен, но страж над ним — уже проверка пустоты."""
+        if self.ids_of(self.AUDIT_STEP, "audit-check.mjs"):
+            return
+        if self.GUARD_STEP in self.steps:
+            self.fail(
+                "исключений в ci.yml не осталось, а шаг-страж жив: "
+                "он проверяет пустой список"
+            )
+
+    def test_documented_advisories_are_the_ignored_ones(self):
+        excluded = set(self.ids_of(self.AUDIT_STEP, "audit-check.mjs"))
+        findings = []
+        for heading in NPM_AUDIT_HEADINGS:
+            if f"\n{heading}\n" not in self.security:
+                findings.append(f"{heading}: раздела в SECURITY.md нет")
+                continue
+            rows = advisory_rows(self.security, heading)
+            named = [row[0] for row in rows]
+            for row in rows:
+                if not GHSA_ID.fullmatch(row[0]):
+                    findings.append(
+                        f"{heading}: «{row[0]}» — GHSA-id не в первой колонке"
+                    )
+                if not row[1] or not row[2]:
+                    findings.append(
+                        f"{heading}: {row[0]} без пакета или без обоснования"
+                    )
+            if len(named) != len(set(named)):
+                findings.append(
+                    f"{heading}: один идентификатор в таблице назван дважды"
+                )
+            for missing in sorted(excluded - set(named)):
+                findings.append(
+                    f"{heading}: {missing} исключена в CI, но в таблице её нет"
+                )
+            for extra in sorted(set(named) - excluded):
+                findings.append(
+                    f"{heading}: {extra} описана, но ci.yml её не исключает"
+                )
+        self.assertEqual(findings, [])
 
 
 class TestGateEnvIsQuotedFromCi(unittest.TestCase):
