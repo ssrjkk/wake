@@ -407,6 +407,87 @@ export async function auditTypeScale(
   );
 }
 
+/** Геометрия живого дерева: какие значения радиусов, отступов и gaps тема
+ *  действительно рисует.
+ *
+ *  Смысл зеркалить именно нарисованное, а не написанное в CSS: computed-стиль
+ *  собирает и правила темы, и инлайн-значения панели, и наследование, поэтому
+ *  новый `padding: 13px`, затесавшийся в разметку, попадёт в этот же список и
+ *  покраснеет. Тотальный запрет «каждый отступ ∈ --sp-*» был бы неправдой про
+ *  саму тему: плотный ритм строк (3 и 7 px у `.chip`, 7 и 12 у `.data-table`,
+ *  7 и 14 у `.panel-caption`) — осознанная лестница плотности, а не дрейф, и
+ *  в шкалу `--sp-*` она не просится. Зеркалится поэтому множество значений.
+ *
+ *  Значения нормализуются: круг и пилюля приходят как `50%` и как
+ *  `3.35544e+07px` (браузер разворачивает `9999px` в предельное число), поэтому
+ *  радиус больше 500 px считается пилюлей, иначе зеркало зависело бы от того,
+ *  каким способом автор нарисовал скругление. */
+export type GeometryAudit = {
+  radius: Offender[];
+  padding: Offender[];
+  gap: Offender[];
+};
+
+export async function auditGeometry(
+  page: Page,
+  allowed: { radius: string[]; padding: string[]; gap: string[] },
+  root?: string
+): Promise<GeometryAudit> {
+  const tag = await page.addStyleTag({
+    content: "*, *::before, *::after { animation: none !important; transition: none !important; }",
+  });
+  try {
+    return await page.evaluate(
+      ({ allow, sel }) => {
+        const scope: ParentNode = (sel ? document.querySelector(sel) : null) ?? document;
+        const out: GeometryAudit = { radius: [], padding: [], gap: [] };
+        // 0 и normal — отсутствие значения, его зеркало не перечисляет.
+        const known = (list: string[], value: string) =>
+          list.some((a) => Math.abs(parseFloat(a) - parseFloat(value)) < 0.5 && !a.includes("%") === !value.includes("%"));
+        const label = (el: Element) => {
+          const cls = (el.getAttribute("class") ?? "").split(" ").filter(Boolean)[0] ?? el.tagName.toLowerCase();
+          return `${el.tagName.toLowerCase()}.${cls}`;
+        };
+        for (const el of [...scope.querySelectorAll("*")]) {
+          const box = el.getBoundingClientRect();
+          if (box.width <= 0 || box.height <= 0) continue;
+          const cs = getComputedStyle(el);
+          for (const [prop, value] of [
+            ["border-top-left-radius", cs.borderTopLeftRadius],
+            ["border-top-right-radius", cs.borderTopRightRadius],
+            ["border-bottom-left-radius", cs.borderBottomLeftRadius],
+            ["border-bottom-right-radius", cs.borderBottomRightRadius],
+          ] as const) {
+            if (value === "0px") continue;
+            const fixed = parseFloat(value) > 500 ? "9999px" : value;
+            if (known(allow.radius, fixed)) continue;
+            out.radius.push({ what: `${prop} ${fixed}`, where: label(el), value: allow.radius.join(" ") });
+          }
+          for (const [prop, value] of [
+            ["padding-top", cs.paddingTop],
+            ["padding-right", cs.paddingRight],
+            ["padding-bottom", cs.paddingBottom],
+            ["padding-left", cs.paddingLeft],
+          ] as const) {
+            if (value === "0px") continue;
+            if (known(allow.padding, value)) continue;
+            out.padding.push({ what: `${prop} ${value}`, where: label(el), value: allow.padding.join(" ") });
+          }
+          for (const [prop, value] of [["row-gap", cs.rowGap], ["column-gap", cs.columnGap]] as const) {
+            if (value === "normal" || value === "0px") continue;
+            if (known(allow.gap, value)) continue;
+            out.gap.push({ what: `${prop} ${value}`, where: label(el), value: allow.gap.join(" ") });
+          }
+        }
+        return out;
+      },
+      { allow: allowed, sel: root ?? null }
+    );
+  } finally {
+    await tag.evaluate((el) => el.parentNode?.removeChild(el));
+  }
+}
+
 /** Кольцо фокуса на реальной Tab-навигации. */
 export async function auditTabFocus(page: Page, steps = 45): Promise<Offender[]> {
   const out: Offender[] = [];

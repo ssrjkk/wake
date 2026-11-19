@@ -5,6 +5,7 @@ import { FULL_FIXTURE } from "./fixtures";
 import {
   TABS,
   auditDesign,
+  auditGeometry,
   auditTabFocus,
   auditTypeScale,
   openWithData,
@@ -217,6 +218,51 @@ test.describe("дизайн-инварианты на живом объёме д
     // её текст стоит на значении базовой шкалы.
     reportOffenders("type scale@200%", offScale, 20);
     expect(offScale, "каждый текст панели обязан идти по шкале темы").toEqual([]);
+  });
+});
+
+/** Зеркало нарисованной геометрии. Снято 2026-11-19 прогоном по всем девяти
+ *  панелям на живом объёме данных (computed border-*, padding-*, gap у каждого
+ *  видимого узла), базовый текстовый масштаб.
+ *
+ *  Это множество значений, а не шкала `--sp-*`: плотность строк темы (3 и 7 px у
+ *  `.chip`, 7 и 12 у `.data-table`, 7 и 14 у `.panel-caption`) намеренно гуще
+ *  шкалы, и требовать от неё `--sp-*` — значит переписать ритм интерфейса ради
+ *  красивого гейта. Смысл зеркала в другом: новое число в дереве появляется
+ *  только вместе с правкой этого списка, то есть геометрию нельзя добавить
+ *  исподтишка. Чувствительность проверена мутацией: `padding: 13px` на
+ *  `.terminal-panel` краснеет именно этим тестом. */
+const GEOMETRY = {
+  radius: ["2px", "3px", "4px", "5px", "50%", "9999px"],
+  padding: [
+    "2px", "3px", "4px", "5px", "6px", "7px", "8px", "9px", "10px", "11px",
+    "12px", "14px", "16px", "20px", "24px", "28px", "36px",
+  ],
+  gap: ["1px", "2px", "4px", "5px", "6px", "8px", "10px", "12px", "14px", "16px", "18px"],
+};
+
+test.describe("геометрия панелей под зеркалом значений", () => {
+  test.beforeEach(async ({ page }) => {
+    await openWithData(page, { leaders: 12, predictMarkets: 24, mirrorLog: 60 });
+  });
+
+  test("радиусы, отступы и gaps девяти панелей не добавляют новых чисел", async ({ page }) => {
+    const radius: Offender[] = [];
+    const padding: Offender[] = [];
+    const gap: Offender[] = [];
+    for (const tab of TABS) {
+      await visitTab(page, tab);
+      const audit = await auditGeometry(page, GEOMETRY);
+      radius.push(...audit.radius.map((o) => ({ ...o, where: `${tab} → ${o.where}` })));
+      padding.push(...audit.padding.map((o) => ({ ...o, where: `${tab} → ${o.where}` })));
+      gap.push(...audit.gap.map((o) => ({ ...o, where: `${tab} → ${o.where}` })));
+    }
+    reportOffenders("radius", radius, 20);
+    reportOffenders("padding", padding, 20);
+    reportOffenders("gap", gap, 20);
+    expect(radius, "радиус вне зеркала: новое скругление обязано быть названо в GEOMETRY или взять var(--r)").toEqual([]);
+    expect(padding, "отступ вне зеркала: новый паддинг обязан войти в тему, а не в разметку").toEqual([]);
+    expect(gap, "gap вне зеркала").toEqual([]);
   });
 });
 
