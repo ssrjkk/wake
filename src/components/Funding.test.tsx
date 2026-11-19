@@ -50,7 +50,7 @@ function rateRow(rate: number): FundingRateRow[] {
   ];
 }
 
-function mount(responses: Record<string, unknown | ((body: unknown) => unknown)>) {
+function mount(responses: Record<string, unknown>) {
   const respond = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
     const key = Object.keys(responses).find((k) => url.includes(k));
@@ -66,9 +66,10 @@ function mount(responses: Record<string, unknown | ((body: unknown) => unknown)>
   return render(<Funding markets={MARKETS} setToast={() => {}} />);
 }
 
-function safeJson(raw: BodyInit | null | undefined) {
+function safeJson(raw: BodyInit | null | undefined): unknown {
+  if (typeof raw !== "string") return null;
   try {
-    return JSON.parse(String(raw));
+    return JSON.parse(raw) as unknown;
   } catch {
     return null;
   }
@@ -83,7 +84,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-async function openCheck(responses: Record<string, unknown | ((body: unknown) => unknown)>) {
+async function openCheck(responses: Record<string, unknown>) {
   mount({
     "/funding-rates": { funding_rates: rateRow(0.0002) },
     "/candles": { c: [{ c: 2000 }] },
