@@ -18,7 +18,7 @@ import {
  *  «крупного текста» поймает это как «размер не вырос», а не промолчит. */
 const DOUBLED_SCALE =
   ":root{--fs-label:21px;--fs-data:24px;--fs-ui:26px;--fs-body:28px;--fs-title:30px;" +
-  "--fs-heading:32px;--fs-metric:36px;--fs-figure:48px;--fs-wordmark:34px;" +
+  "--fs-heading:32px;--fs-metric:36px;--fs-wordmark:34px;" +
   "--fs-price:clamp(52px,5.2vw,72px)}";
 
 /** Метрики заведомо шире любого измеренного шрифта. Шрифты панели теперь лежат

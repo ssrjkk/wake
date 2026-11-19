@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { avatarColor, categorizeMarket, fmt, fmtPrice, fmtPct, fmtUsdCompact, shortHandle, stamp, toastVariant, trialToast, usd } from './utils'
+import { avatarSlot, AVATAR_SLOTS, categorizeMarket, fmt, fmtPrice, fmtPct, fmtUsdCompact, shortHandle, stamp, toastVariant, trialToast, usd } from './utils'
 import type { ToastVariant } from './utils'
 import type { Subscription } from './types'
 import { COMMODITY_SYMBOLS, FOREX_SYMBOLS, STOCK_SYMBOLS } from './types'
@@ -53,22 +53,23 @@ describe('components/utils', () => {
     })
   })
 
-  describe('avatarColor', () => {
-    it('is stable per handle and drawn from the existing palette', () => {
-      expect(avatarColor('@northstar')).toBe(avatarColor('@northstar'))
-      // Цвет, а не имя класса: панели красят аватар через style={{ background }},
-      // и «bg-cyan-500» браузер отбрасывает как невалидное значение — круг был
-      // прозрачным.
-      expect(avatarColor('@northstar')).toMatch(/^#[0-9a-f]{6}$/)
+  describe('avatarSlot', () => {
+    it('is stable per handle', () => {
+      expect(avatarSlot('@northstar')).toBe(avatarSlot('@northstar'))
     })
 
-    it('stays inside the declared palette', () => {
+    it('stays inside the six declared slots', () => {
       const handles = ['@a', '@northstar', '@vega.eth', '@driftking', '@x1', '@мимо', '', '@qqqqqq']
-      const hexes = handles.map(avatarColor)
-      for (const h of hexes) expect(h).toMatch(/^#[0-9a-f]{6}$/)
-      // Разные handle обязаны иногда давать разные цвета, иначе палитра из шести
+      const slots = handles.map(avatarSlot)
+      // Слот, а не цвет: оттенок живёт в --tag-N, и панель обязана называть
+      // только номер — иначе палитра снова окажется в JS.
+      for (const slot of slots) {
+        expect(slot).toBeGreaterThanOrEqual(1)
+        expect(slot).toBeLessThanOrEqual(AVATAR_SLOTS)
+      }
+      // Разные handle обязаны иногда давать разные слоты, иначе набор из шести
       // значений — декорация: проверка на фикстурном наборе, а не «в среднем».
-      expect(new Set(hexes).size).toBeGreaterThan(1)
+      expect(new Set(slots).size).toBeGreaterThan(1)
     })
   })
 

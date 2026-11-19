@@ -52,8 +52,10 @@ Predict-рынки на LMSR и расчёт хеджа корзины. Дист
 и `mirror_positions` двигается на него, а не на заказанный. Ключ подписчика для
 сверки не используется второй раз — лента публична.
 
-Качество на 2026-11-17: 972 backend-теста (`python -m unittest discover`, один
-пропущен — `test_key_store`), 545 frontend-тестов (vitest в 29 файлах), 82 e2e-теста
+Качество на 2026-11-19: 977 backend-теста (`python -m unittest discover`, один
+пропущен — `test_key_store.TestConstructionAndRoundTrip::test_file_is_owner_readable_only`,
+он проверяет права на файл там, где они работают, то есть на POSIX), 552 frontend-тестов
+(vitest в 30 файлах), 82 e2e-теста
 (Playwright), включая гейты темы, контраста, бюджетов рендера и зеркало половин README.
 `scripts/gate.sh` прогоняет локально ровно те шаги, что считает CI, и сверяется
 с workflow отдельным тестом.

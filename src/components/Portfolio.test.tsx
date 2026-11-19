@@ -125,11 +125,15 @@ describe("журнал копи-движка", () => {
     ]);
     await screen.findByText("sent");
     expect(screen.getByText("filled")).toBeTruthy();
-    // Разные статусы — разные подложки: «заявка принята» и «сделка есть» не
-    // имеют права краситься в один цвет, это ровно та подмена, из-за которой
-    // снятый с цены IOC выглядел исполненным.
+    // Разные статусы — разные чипы: «заявка принята» и «сделка есть» не имеют
+    // права краситься в один цвет, это ровно та подмена, из-за которой снятый
+    // с цены IOC выглядел исполненным. Оттенки переехали в тему, поэтому
+    // здесь проверяется класс состояния, а не инлайн-фон строки: что классы
+    // чипов действительно дают разные подложки, меряет e2e-гейт.
     const pill = (status: string) => screen.getByText(status);
-    expect(pill("sent").style.background).not.toBe(pill("filled").style.background);
+    expect(pill("sent").classList).toContain("chip-info");
+    expect(pill("filled").classList).toContain("chip-up");
+    expect(pill("sent").className).not.toBe(pill("filled").className);
     // Подтверждённое исполнение целого ордера тоже называется числом: на «sent»
     // числа нет, и по одному только хэшу эти строки не развести.
     await waitFor(() => expect(screen.getByText(/исполнено 0\.0100/)).toBeTruthy());

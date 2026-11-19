@@ -23,7 +23,7 @@
 // ней — снимок момента, а не свойство рынка.
 //   curl https://mainnet.zklighter.elliot.ai/api/v1/orderBookOrders?market_id=1&limit=100
 //        → 100 заявок на сторону, 73 разные цены продажи и 75 цен покупки, 45 159 байт (2026-11-13)
-import type { Page, Route } from "@playwright/test";
+import type { Page, Request, Route } from "@playwright/test";
 import { isLoopbackHost } from "../src/lib/loopback";
 import { urlHost, urlOrigin } from "../src/lib/url";
 
@@ -486,7 +486,73 @@ export type RequestLog = { byPath: () => Record<string, number>; total: () => nu
 function jsonRoute(log: Map<string, number>, body: unknown, key: string) {
   return async (route: Route) => {
     log.set(key, (log.get(key) ?? 0) + 1);
-    await route.fulfill({ json: body });
+    // Тело может быть и функцией от запроса — для эндпоинтов, где ответ зависит
+    // от того, что прислал фронт (funding-arb). Статичный `{opportunity: null}`
+    // отвечал «нет» и на числах, где бэкенд вернул бы возможность, и панель на
+    // этом ответе печатала про собственную строку таблицы «APR 3416.4% ниже
+    // порога 5%».
+    const value =
+      typeof body === "function" ? (body as (req: Request) => unknown)(route.request()) : body;
+    await route.fulfill({ json: value });
+  };
+}
+
+/* Ровно две ветки find_opportunity (backend/funding_arb.py): направление не
+   «long» и годовая ниже порога. Годовая — ставка × 24 × 365, эпоха Lighter
+   равна часу. */
+function fundingCheckBody(req: Request) {
+  const b = req.postDataJSON() as {
+    symbol: string;
+    market_id: number;
+    hourly_rate: number;
+    direction: string;
+    min_annualized_yield: number;
+  };
+  const apy = b.hourly_rate * 24 * 365;
+  if (b.direction !== "long" || apy < b.min_annualized_yield) return { opportunity: null };
+  return {
+    opportunity: {
+      symbol: b.symbol,
+      market_id: b.market_id,
+      annualized_yield: apy,
+      perp_side: "short",
+      spot_needed: true,
+      hourly_rate: b.hourly_rate,
+    },
+  };
+}
+
+/* size_delta_neutral_position: capital/2 на каждую ногу, округление ВНИЗ до
+   decimals этой ноги, position: null — если нога не дотягивает до минимального
+   base-объёма. Формулировка reason дословно из backend/api/funding.py. */
+function fundingSizeBody(req: Request) {
+  const b = req.postDataJSON() as {
+    capital_usd: number;
+    price: number;
+    perp_size_decimals: number;
+    spot_size_decimals: number;
+    perp_min_base_amount: number;
+    spot_min_base_amount: number;
+  };
+  const NO_POSITION = {
+    position: null,
+    reason: "капитала недостаточно на минимальный размер обеих ног, либо неверные входные данные",
+  };
+  if (!(Number.isFinite(b.capital_usd) && Number.isFinite(b.price)) || b.capital_usd <= 0 || b.price <= 0) {
+    return NO_POSITION;
+  }
+  const roundDown = (v: number, d: number) => Math.floor(v * 10 ** d + 1e-9) / 10 ** d;
+  const leg = b.capital_usd / 2;
+  const perp = roundDown(leg / b.price, b.perp_size_decimals);
+  const spot = roundDown(leg / b.price, b.spot_size_decimals);
+  if (perp < b.perp_min_base_amount || spot < b.spot_min_base_amount) return NO_POSITION;
+  return {
+    position: {
+      perp_notional_usd: perp * b.price,
+      spot_notional_usd: spot * b.price,
+      perp_base_amount: perp,
+      spot_base_amount: spot,
+    },
   };
 }
 
@@ -620,8 +686,8 @@ export async function installFixtures(page: Page, options: FixtureOptions = {}):
       has_copy_trading: true,
       has_predict_markets: true,
     }),
-    backend("/funding-arb/check", "wake/funding-check", { opportunity: null, reason: "фикстура" }),
-    backend("/funding-arb/size", "wake/funding-size", { legs: [], total_usd: 0 }),
+    backend("/funding-arb/check", "wake/funding-check", fundingCheckBody),
+    backend("/funding-arb/size", "wake/funding-size", fundingSizeBody),
     backend("/health", "wake/health", { status: "ok", network: "mainnet", dry_run: true }),
     backend("/ready", "wake/ready", { status: "ready", checks: { database: "ok", redis: "ok" } }),
   ]);

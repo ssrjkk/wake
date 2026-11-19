@@ -328,7 +328,7 @@ export default function Predict({
           </p>
         </div>
 
-        <div className="terminal-header" style={{ flexWrap: "wrap" }}>
+        <div className="terminal-header">
           <div className="seg" role="group" aria-label="Срез рынков">
             {FILTERS.map((f) => (
               <button
@@ -424,11 +424,7 @@ export default function Predict({
                             <button
                               onClick={() => void claim(p)}
                               disabled={claimingId !== null}
-                              className="btn-action btn-up"
-                              style={{
-                                padding: "8px 12px",
-                                fontSize: "var(--fs-data)",
-                              }}
+                              className="btn-primary btn-up"
                             >
                               {claimingId === p.market_id
                                 ? "Забираю…"
@@ -494,13 +490,7 @@ export default function Predict({
 
         {markets && markets.length === 0 && !marketsError && (
           <div className="empty-state">
-            <p
-              style={{
-                fontSize: "var(--fs-ui)",
-                color: "var(--fg-2)",
-                margin: 0,
-              }}
-            >
+            <p className="panel-lead">
               {status === "open"
                 ? "Открытых рынков нет"
                 : status === "resolved"
@@ -624,13 +614,12 @@ export default function Predict({
             onClick={() => void loadMoreMarkets()}
             disabled={loadingMore}
             className="link-action"
-            style={{ marginTop: "12px" }}
           >
             {loadingMore ? "Загружаю…" : `Показать ещё ${PREDICT_PAGE_SIZE}`}
           </button>
         )}
 
-        <p className="fineprint" style={{ marginTop: "4px" }}>
+        <p className="fineprint">
           Объём и число сделок — сделки через Wake, а не глубина пула: прямого
           доступа к книге LMSR у сайта нет. Рынок с нулевым объёмом ещё никто не
           торговал, и это не значит, что он пустой.
@@ -680,12 +669,13 @@ export default function Predict({
                 </div>
               )}
 
-              <div>
-                <label htmlFor="predict-shares" className="stat-label">
+              <div className="stack">
+                <label htmlFor="predict-shares" className="label">
                   Количество shares
                 </label>
                 <input
                   id="predict-shares"
+                  className="input-mono"
                   type="number"
                   min={1}
                   max={sellMode ? trade.held : undefined}
@@ -698,10 +688,9 @@ export default function Predict({
                     const raw = e.target.valueAsNumber;
                     setShares(Number.isFinite(raw) ? Math.max(0, raw) : 0);
                   }}
-                  style={{ width: "100%", marginTop: "4px" }}
                 />
                 {sellMode && (
-                  <p className="sub-label" style={{ marginTop: "4px" }}>
+                  <p className="sub-label">
                     Продать можно не больше {trade.held} shares.
                   </p>
                 )}
@@ -768,7 +757,7 @@ export default function Predict({
                         ? `Продать ${shares}`
                         : `Купить ${shares} за ${money(preview)}`}
               </button>
-              <p className="fineprint" style={{ textAlign: "center" }}>
+              <p className="fineprint">
                 Номинал — это не прибыль: share победившего исхода после
                 резолюции стоит $1, проигравшего — $0, а вход по LMSR-кривой
                 обычно дороже {cents(0.5)} и двигается против тебя с каждой

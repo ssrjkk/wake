@@ -1024,6 +1024,21 @@ measured number goes stale while the text around it still looks fine.
   выглядит чужой ошибкой.
 
 ### Changed
+- `src/index.css`, `src/App.tsx`, `src/components/{Portfolio,Discover,Funding,Earn,Predict,ErrorBoundary}.tsx`
+  — шесть панелей переведены с инлайн-стилей на классы темы: `style={{` в
+  `src/components/*.tsx` и `src/App.tsx` — 568 → 253 (замер 2026-11-19). Разметка
+  теперь называет роль элемента (`.desk-stat-lg`, `.empty-mark`, `.range`, `.text-warn`,
+  `.fallback-card`), а кегль, отступ и радиус живут в теме: инлайн-значение не
+  переживает правку шкалы и не растёт вместе с пользовательским масштабом текста.
+  Удалено то, что после переезда не читает никто: `.venue-row`, `.input-plain`, а также
+  токен `--fs-figure` — последним его носителем был кегль метрик в «Заработке»,
+  вписанный в разметку. Осиротение токена поймал не человек, а
+  `backend/test_theme_registry.py::TestDeadAndUndeclared` (красный списком
+  `['--fs-figure']`); токен убран из темы и из трёх зеркал шкалы — `FS_TOKENS` в
+  `src/components/theme.gate.test.ts` и `e2e/design-audit.ts` и `DOUBLED_SCALE` в
+  `e2e/design-gate.spec.ts`, — которые обязаны совпадать с `:root` позиция в позицию.
+  `.data-table--venues` переименован в `.data-table--fit`: правило то же для любой
+  таблицы, которой нельзя сжиматься в одну букву на колонку (`min-width: max-content`).
 - Шаг `frontend-check / Audit frontend dependencies` в CI запускает
   `scripts/audit-check.mjs`, за ним встал шаг-страж; `scripts/gate.sh` зеркалит
   оба и вычитывает идентификаторы из workflow, как уже делал с `--ignore-vuln` —
@@ -1429,6 +1444,14 @@ measured number goes stale while the text around it still looks fine.
   импортов ни в `src/`, ни в `e2e/` не осталось.
 
 ### Fixed
+- `src/components/Funding.tsx`, `src/index.css` — чип-фильтр «только там, где есть и
+  перп, и спот» на 320 px при удвоенной шкале занимал 553 px в полосе шириной 270 px и
+  уезжал за правый край панели: базовый `.chip` держит `nowrap`. Для чипа, который
+  подписывает фильтр целым предложением, добавлен `.chip-btn--wrap` — перенос вместо
+  сокращения, потому что фильтр обязан называть себя целиком. Красноту проверки
+  измерять не пришлось: `design-gate` покраснел сам до правки
+  (`clipping@200% | Funding → 553>270`), после — весь набор e2e зелёный, 82/82
+  (замер 2026-11-19).
 - `backend/app.py`, `backend/test_api_smoke.py`, `SECURITY.md` — `Permissions-Policy`
   двух серверов перестали быть двумя разными списками: `public/_headers` закрывает
   семь функций, middleware — четыре (не хватало `usb`, `magnetometer`, `gyroscope`).

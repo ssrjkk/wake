@@ -355,7 +355,6 @@ export const FS_TOKENS = [
   "--fs-title",
   "--fs-heading",
   "--fs-metric",
-  "--fs-figure",
   "--fs-wordmark",
   "--fs-price",
 ];

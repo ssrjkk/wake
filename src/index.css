@@ -96,7 +96,6 @@
     --fs-title: 15px;
     --fs-heading: 16px;
     --fs-metric: 18px;
-    --fs-figure: 24px;
     /* Логотип стоит на 17px, а не на 16: у него своя ширина буквы в полосе
        шапки. Токен, а не литера, потому что иначе проверка шкалы считает его
        «размером вне темы» — ровно тем она и занимается. */
@@ -122,6 +121,38 @@
     --warn-line: rgba(251, 191, 36, 0.35);
 
     --r: 4px;
+
+    /* Шкала рядовой геометрии. До неё панели печатали отступ числом в
+       инлайн-стиле: замер прод 2026-11-19 дал 15 разных паддингов (2, 3, 5, 6,
+       7, 8, 9, 10, 11, 12, 14, 16, 20, 24, 36 px) и пять радиусов (2, 3, 4, 5,
+       6 px) там, где тема владеет одним --r. Числа шкалы — не выдуманные: это
+       те четыре значения, которые тема уже использует в своих классах
+       (.chip 3/7, .data-table 7/12, .panel-caption 7/14, .notice 8/12), плюс
+       шаг 24 для breathing room между секциями. Инлайн-стиль медиазапроса не
+       имеет, поэтому всё, что обязан меняться на пальце, живо только здесь. */
+    --sp-1: 4px;
+    --sp-2: 8px;
+    --sp-3: 12px;
+    --sp-4: 16px;
+    --sp-5: 24px;
+
+    /* Слоты идентичности трейдера. Цвет кружка аватара — не семантика: он
+       ничего не значит, кроме «это тот же handle», и обязан быть различим на
+       любой панели и держать читаемую букву. Значения переехали сюда из
+       AVATAR_COLORS в components/utils.ts, но слот 4-theme вынесен из зелёного
+       --up: под тем же числом они были бы двумя именами одного цвета, и правка
+       «зелёного направления» покрасила бы половину аватаров. Теперь их измеряет
+       гейт, а не глаза: против худшей панели --bg-3 слоты дают 4.01…7.92:1
+       (порог 3:1 для части интерфейса), тёмной чернильной парой --on-accent —
+       4.68…9.22:1 (порог 4.5:1 для текста). Белый на этих же слотах —
+       1.72…3.40, поэтому буква на аватаре тёмная, и это выбирает класс, а не
+       панель. */
+    --tag-1: #06b6d4;
+    --tag-2: #8b5cf6;
+    --tag-3: #f59e0b;
+    --tag-4: #14b8a6;
+    --tag-5: #0ea5e9;
+    --tag-6: #f43f5e;
 
     /* Компактные контролы: 36px на десктопе, 44px на тач-экранах. Переменная,
        потому что инлайн-стиль перебивает любое правило, а медиазапрос в
@@ -346,6 +377,18 @@
     border-radius: 0;
   }
 
+  /* Внутренний отступ панели: 16 px — значение, которое 19 самодельных обёрток
+     задавали инлайном вместе с собственным радиусом. Здесь к нему прилагается
+     колонка с общим зазором, потому что все эти обёртки складывали в себя
+     именно стопку блоков. */
+  .panel-pad {
+    padding: var(--sp-4);
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-4);
+    min-width: 0;
+  }
+
   /* min-width:auto по умолчанию — ребёнок grid/flex растягивается до ширины
      своего содержимого. Таблица на 700 px делала шире и панель, и ряд, а
      .terminal-main с overflow:hidden обрезал всё, что не влезло: замер на 390 px
@@ -370,6 +413,15 @@
     gap: 16px;
     padding: 10px 14px;
     background: var(--bg-1);
+  }
+
+  /* Та же полоса, когда подпись встает второй строкой: инлайн
+     `flexDirection: column` перебивал порядок, который задаёт адаптив, и на
+     пальце шапка оставалась колонкой с шестнадцатикратным зазором. */
+  .terminal-header--stack {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: var(--sp-2);
   }
 
   .panel-title {
@@ -533,6 +585,16 @@
     color: var(--fg);
   }
 
+  /* Полоса агрегатов, где число — главное, а не подпись рядом: капитал и PnL
+     счёта в Портфеле. Тот же .desk-stat, только значение размером --fs-metric;
+     направление задают .text-positive/.text-negative — пять мест в панелях
+     печатали `color: up ? var(--up) : var(--down)` инлайном, и при смене темы
+     они бы остались с прежним красным. */
+  .desk-stat-lg > b {
+    font-size: var(--fs-metric);
+    font-weight: 600;
+  }
+
   /* ── Мелкие примитивы ─────────────────────────────────────────────────── */
   .label {
     font-size: var(--fs-label);
@@ -540,6 +602,14 @@
     color: var(--fg-3);
     text-transform: uppercase;
     letter-spacing: 0.07em;
+  }
+
+  /* Подпись с иконкой (капитал, PnL, подписчики): без строки-флекса глиф садился
+     на базовую линию и разъезжался с буквами подписи по высоте. */
+  .label-row {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--sp-1);
   }
 
   .chip {
@@ -701,6 +771,22 @@
 
   .data-table th:first-child { text-align: left; }
   .data-table td { padding: 7px 12px; border-bottom: 1px solid var(--line); }
+
+  /* Ширина, ниже которой таблица не сжимается, а уезжает в скролл внутри
+     .table-scroll. Без неё на 390 px шестиколонная таблица подписок отдавала
+     колонке лидера 40 px, и «@nike0» печатался в столбик по букве. Значение не
+     сферическое: шесть колонок по 12+12 px полей и минимум под самое длинное
+     заглавие («ЗЕРКАЛЬНЫЙ РАЗМЕР») — 620 px. */
+  .data-table--wide { min-width: 620px; }
+
+  /* Таблица, у которой ни одна колонка не прозовая: столбец держит ширину
+     своего самого длинного значения и уходит в скролл, а не плющится.
+     Замер в Chromium на 390 px (Funding, восемь числовых колонок):
+     max-content = 766 px (82+73+82+81+81+101+64+94+108). Без этого
+     «+3416.4%» рвалось на «+34 / 16. / 4%» — глобальный
+     overflow-wrap: anywhere уменьшает min-content ячейки до одного символа, и
+     nowrap у заголовка колонку не спасает. */
+  .data-table--fit { min-width: max-content; }
   .data-table td.right, .data-table th.right { text-align: right; }
   .data-table th.left, .data-table td.left { text-align: left; }
   .data-table tbody tr:hover { background: var(--bg-2); }
@@ -709,16 +795,6 @@
      не отвечает на фокус с клавиатуры, и цвет, который панели считали числом
      (rgba(26,26,26,.6) вместо --bg-2). */
   .data-table tbody tr[data-action] { cursor: pointer; }
-
-  /* Таблица ставок funding — своя, не .data-table (другой набор колонок и
-     padding), но подсветка строки обязана вести себя так же: правилом CSS, а не
-     обработчиком на каждой строке. */
-  .venue-row {
-    border-bottom: 1px solid var(--bg-2);
-    transition: background 0.1s;
-  }
-
-  .venue-row:hover { background: var(--bg-2); }
 
   /* ── Стакан ─────────────────────────────────────────────────────────────
      Панель — отдельный компонент (src/components/OrderBookPanel.tsx), и порядок в
@@ -875,6 +951,119 @@
      шкале: 10px классом Tailwind не переживает удвоение темы. */
   .avatar-ink { font-size: var(--fs-label); }
 
+  /* ── Примитивы рядов, переехавшие из инлайнов панелей ──────────────────
+     До 2026-11-19 эти пять форм жили повторами в style={{…}}: 19 самодельных
+     «карточек» с радиусом 6 px там, где у темы панель квадратная (.terminal-panel),
+     34 подписи «fs-data + --text-muted» там, где уже есть .muted, 8 заголовков
+     секции, 8 строк «flex + center + 8 px», три аватара трёх разных размеров.
+     Класс здесь, а не в панели, по той же причине, что и --touch: инлайн-стиль
+     перебивает медиазапрос, и на пальце такое значение не меняется никогда. */
+  .avatar {
+    width: 28px;
+    height: 28px;
+    flex: none;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-family: var(--font-mono);
+    font-weight: 700;
+    /* Буква тёмная по выбору темы, не панели: на этих слотах белый даёт
+       1.72…3.40:1, --on-accent — 4.68…9.22:1. */
+    color: var(--on-accent);
+    background: var(--tag-1);
+  }
+
+  /* Крупный аватар — только в карточке лидера, где кружок и есть заголовок. */
+  .avatar-lg {
+    width: 40px;
+    height: 40px;
+    font-size: var(--fs-body);
+  }
+
+  /* Слоты темы, а не цвет из JS: панель выбирает номер, оттенок владеет тема.
+     Значения были измерены против худшей панели (--bg-3): 4.01…7.92:1, и все
+     шесть держат тёмную букву от 4.68:1. */
+  .avatar[data-tag="1"] { background: var(--tag-1); }
+  .avatar[data-tag="2"] { background: var(--tag-2); }
+  .avatar[data-tag="3"] { background: var(--tag-3); }
+  .avatar[data-tag="4"] { background: var(--tag-4); }
+  .avatar[data-tag="5"] { background: var(--tag-5); }
+  .avatar[data-tag="6"] { background: var(--tag-6); }
+
+  .row {
+    display: flex;
+    align-items: center;
+    gap: var(--sp-2);
+    min-width: 0;
+  }
+
+  .row-between {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--sp-2);
+    flex-wrap: wrap;
+    min-width: 0;
+  }
+
+  .stack {
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-3);
+    min-width: 0;
+  }
+
+  .section-title {
+    font-size: var(--fs-heading);
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    color: var(--fg);
+    margin: 0;
+  }
+
+  /* Иконка-действие в конце строки. Голая «×» была кнопкой 16×16 без подписи
+     состояния: цель — 24 px под указателем, на пальце — --touch. */
+  .icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 24px;
+    min-height: 24px;
+    padding: 0;
+    background: none;
+    border: none;
+    cursor: pointer;
+    color: var(--fg-3);
+    transition: color 0.12s;
+  }
+
+  .icon-btn:hover { color: var(--fg); }
+
+  /* Чип, который жмут. Внешне — .chip, но у кнопки обязана быть цель нажатия:
+     голый чип 19 px высотой под пальцем найти нельзя, поэтому 24 px здесь и
+     --touch в адаптиве. */
+  .chip-btn {
+    min-height: 24px;
+    padding: 4px 9px;
+    cursor: pointer;
+    transition: border-color 0.12s, color 0.12s;
+  }
+
+  .chip-btn:hover { border-color: var(--line-strong); }
+
+  /* Чип-фильтр с подписью-предложением, а не со статусом: в Funding это
+     «только там, где есть и перп, и спот». Базовый .chip nowrap, и на 320 px
+     при удвоенной шкале такая подпись стоит 553 px в полосе шириной 270 px —
+     то есть уезжает за правый край. Перенос здесь, а не сокращение слов:
+     фильтр обязан называть себя целиком. */
+  .chip-btn--wrap {
+    white-space: normal;
+    text-align: left;
+    line-height: 1.25;
+    max-width: 100%;
+  }
+
   /* Нижняя строка панели: сеть, число рядов, ссылки «показать все». */
   .panel-foot {
     display: flex;
@@ -922,10 +1111,26 @@
     background: var(--bg-1);
   }
 
+  /* Шаг строки журнала = LOG_ROW_PITCH из Portfolio.tsx, и он держится на
+     высоте клетки, а не на сумме паддингов: чип статуса со своими 3+1 px
+     по вертикали вылезал за 40, и виртуализация считала позиции по числу,
+     которое дерево уже не соблюдало. Поэтому здесь padding по вертикали нулевой,
+     высота задана, а центрует содержимое vertical-align клетки. */
   .log-row td {
     height: 40px;
-    padding: 10px 0;
+    padding: 0 12px;
     border-bottom: 1px solid var(--line);
+    /* Одна строка на запись: перенос «исполнено …» поднимал ряд до 62 px
+       ровно на тех записях, где есть причина или хэш. Ширина уходит в
+       горизонтальный скролл .table-scroll, а не в высоту строки. */
+    white-space: nowrap;
+  }
+
+  /* Строка-воздух виртуализированного журнала: её высота — число из JS (окно
+     списка считает позиции арифметикой), всё остальное — как у пустой клетки. */
+  .data-table td.log-spacer {
+    padding: 0;
+    border: none;
   }
 
   .scrollbar-hide { scrollbar-width: none; }
@@ -1104,6 +1309,17 @@
 
   .fineprint code { color: var(--fg-2); }
 
+  /* Термин в начале строки-происхождения («Ставки — GET /…») спорит с
+     приглушённым остальным текстом: без чернил строка читается как один шум. */
+  .fineprint b {
+    color: var(--fg);
+    font-weight: 600;
+  }
+
+  /* Имя файла или флага в приглушённой строке остаётся адресуемым: его читают
+     как ссылку, а не как фон предложения, поэтому на ступень выше чернил. */
+  .muted code { color: var(--fg-2); }
+
   /* ── График ───────────────────────────────────────────────────────────── */
   .chart-panel {
     position: relative;
@@ -1140,7 +1356,7 @@
   .ohlc-pair {
     display: inline-flex;
     align-items: baseline;
-    gap: 4px;
+    gap: var(--sp-1);
     min-width: 0;
   }
 
@@ -1232,6 +1448,98 @@
     gap: 6px;
   }
 
+  /* Маркер пустого состояния: круг 48 px под глиф 24 px. Earn и Agent
+     складывали его инлайном, теперь форма одна на обе панели — и у
+     .fallback-mark над ней та же геометрия, только рамка ошибки. */
+  .empty-mark {
+    width: 48px;
+    height: 48px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg-2);
+    color: var(--fg-3);
+  }
+
+  /* Пустота по причине сбоя, а не «пока нет данных»: подложка и чернила
+     берутся из шкалы предупреждения, как у .chip-warn. */
+  .empty-mark-warn {
+    background: var(--warn-faint);
+    color: var(--warn);
+  }
+
+  /* ── Экранный откат (ErrorBoundary) ───────────────────────────────────── */
+  /* Показывает boundary вокруг <App /> (main.tsx:41), когда приложение упало
+     целиком. У девяти граничных объектов внутри App стоит свой fallback
+     (.panel-error), поэтому этот экран срабатывает редко и классы у него
+     свои: рамка цвета ошибки, кнопка перезагрузки, стек под <details>. */
+  .fallback-screen {
+    min-height: 100dvh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: var(--sp-5);
+    background: var(--bg-0);
+  }
+
+  /* 420px — значение, которое инлайн-стиль задавал до переезда в класс;
+     ограничивает карточку так, чтобы на 1440px сообщение не растягивалось в
+     пол-экрана. */
+  .fallback-card {
+    width: 100%;
+    max-width: 420px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--sp-2);
+    text-align: center;
+    background: var(--bg-1);
+    border: 1px solid var(--down-line);
+    border-radius: var(--r);
+    padding: var(--sp-5);
+  }
+
+  .fallback-mark {
+    width: 48px;
+    height: 48px;
+    margin-bottom: var(--sp-2);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--down);
+    background: var(--down-faint);
+    border: 1px solid var(--down-line);
+  }
+
+  /* Раскрытие стека — единственное место в приложении, где technical-текст
+     печатается целиком: width:100% нужен, чтобы <pre> не жался по слову
+     «Error». */
+  .fallback-details {
+    width: 100%;
+    text-align: left;
+  }
+
+  .fallback-details summary {
+    cursor: pointer;
+  }
+
+  .fallback-trace {
+    margin: var(--sp-2) 0 0;
+    padding: var(--sp-3);
+    font-family: var(--font-mono);
+    font-size: var(--fs-label);
+    line-height: 1.5;
+    color: var(--down);
+    background: var(--bg-0);
+    border: 1px solid var(--line);
+    border-radius: var(--r);
+    overflow-x: auto;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+
   .link-action {
     color: var(--fg);
     font-size: var(--fs-ui);
@@ -1241,7 +1549,7 @@
     text-decoration-color: var(--line-strong);
     display: inline-flex;
     align-items: center;
-    gap: 4px;
+    gap: var(--sp-1);
     background: none;
     border: none;
     cursor: pointer;
@@ -1260,6 +1568,15 @@
   }
 
   .link-action:hover { color: var(--accent); text-decoration-color: currentColor; }
+
+  /* Отключённое действие («проверить» без активной книги перпа) не должно
+     выглядеть приглашением: в Funding это печатали инлайном цветом --fg-3, и
+     подчёркивание всё равно оставалось. */
+  .link-action:disabled {
+    color: var(--fg-3);
+    text-decoration: none;
+    cursor: not-allowed;
+  }
 
   /* ── Формы и кнопки, общие для всех панелей ───────────────────────────── */
   .input-mono {
@@ -1284,27 +1601,27 @@
      остаётся тёмнее значения. opacity:1 — чтобы computed-цвет совпадал с
      нарисованным: браузер иначе домножает прозрачность, и проверка контраста
      меряет не то, что видит глаз. */
-  .input-mono::placeholder,
-  .input-plain::placeholder {
+  .input-mono::placeholder {
     color: var(--fg-3);
     opacity: 1;
   }
 
-  /* Число внутри строки таблицы (капитал в Funding): рамок нет, но моноширинный
-     ряд, цвет и кольцо фокуса общие с остальными полями. */
-  .input-plain {
-    font-family: var(--font-mono);
-    font-variant-numeric: tabular-nums;
-    font-size: var(--fs-ui);
-    color: var(--fg);
-    background: transparent;
-    border: none;
-    border-bottom: 1px solid var(--line-strong);
-    padding: 6px 2px;
-    transition: border-color 0.12s;
+  /* Поле, значение которого — одно число (порог APR, капитал на ногу). Ширина по
+     шкале ch, а не пикселями: семь таких полей печатали инлайном 60/100/120 px,
+     и при смене --fs-ui они расходились с подписями и друг с другом. 12ch — с
+     запасом на знак и разделитель тысяч, box-sizing: border-box уже учтён. */
+  .input-num {
+    width: 12ch;
   }
 
-  .input-plain:focus { border-bottom-color: var(--accent); }
+  /* Ползунок во всю ширину панели. Terminal (плечо) и Earn (комиссия) красили
+     accent-color инлайном и разными токенами — --accent и --info; один и тот
+     же контрол в двух панелях не имеет права выглядеть по-разному, акцент
+     здесь тот же, что у действия. */
+  .range {
+    width: 100%;
+    accent-color: var(--accent);
+  }
 
   .btn-primary {
     background: var(--accent);
@@ -1358,6 +1675,11 @@
 
   .text-positive { color: var(--up); }
   .text-negative { color: var(--down); }
+
+  /* Третья краска состояний — предупреждение без тревоги: прогноз дохода в
+     Earn и чип «живой ход». До этого --warn ставили инлайном, и в тексте он
+     читался меньше, чем тем же жёлтым в чипе. */
+  .text-warn { color: var(--warn); }
 
   /* ── Строка состояния ───────────────────────────────────────────────────
      Раньше это была панель на треть экрана: системное сообщение стояло выше
@@ -1547,13 +1869,39 @@
     transition: border-color 0.12s;
   }
 
-  /* Карточка лидера в Discover. */
+  /* Карточка лидера в Discover. Колонка с общим зазором: до этого внутренность
+     собиралась отступами по низу каждого блока (16, 12, 4, 16 px), и карточка
+     переставала быть карточкой, стоило убрать один блок. */
   .leader-card {
     background: var(--bg-1);
     border: 1px solid var(--line);
     border-radius: var(--r);
     padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: var(--sp-3);
+    min-width: 0;
     transition: border-color 0.12s;
+  }
+
+  /* Сетка карточек: одна минимальная ширина на весь фронт. До правки в четырёх
+     местах стояли три разных minmax (250, 280, 300 px), и на одном и том же
+     экране витрина, обзор и ставки funding складывались в разное число колонок. */
+  .card-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: var(--sp-2);
+    min-width: 0;
+  }
+
+  /* Кнопка на всю ширину карточки: .btn-primary по умолчанию сжимается до
+     подписи, а в карточке он обязан доставать до краёв. */
+  .btn-block {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--sp-2);
   }
 
   /* Рынок, на который пришла ссылка из бота, помечен marca: без этого список из
@@ -1598,7 +1946,7 @@
   .evidence {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
+    gap: var(--sp-1);
     color: var(--info);
     font-size: var(--fs-label);
   }
@@ -1738,7 +2086,7 @@
     overflow-y: auto;
     background: var(--bg-1);
     border: 1px solid var(--line-strong);
-    border-radius: 6px;
+    border-radius: var(--r);
     padding: 20px;
     display: flex;
     flex-direction: column;
@@ -1747,6 +2095,23 @@
 
   .overlay-shell--wide { max-width: 480px; }
   .overlay-shell--flush { gap: 0; padding: 16px; }
+
+  /* Ряд действий диалога: две равные кнопки на всю ширину оболочки. Каждый
+     модалке-ряд собирал flex и flex:1 инлайном, поэтому в одном диалоге кнопки
+     делили ширину пополам, в другом — по содержимому, а на 390 px второй вариант
+     разламывался на две строки по-разному. */
+  .overlay-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--sp-2);
+  }
+
+  .overlay-actions > * {
+    flex: 1 1 0;
+    min-width: 0;
+    justify-content: center;
+    text-align: center;
+  }
 
   /* В flex-колонке ребёнок без права сжиматься тянет всю карточку до своей
      min-content ширины; при 200% текста это делает диалог шире экрана. */
@@ -1763,7 +2128,21 @@
     padding: 8px 12px;
   }
 
-  .field-box > input { flex: 1; min-width: 0; }
+  /* Поле внутри рамки (сумма аллокации, капитал на обе ноги). Рамку и фон несёт
+     .field-box, поэтому у input'а они выключены здесь, а не классами в разметке:
+     .input-mono + Tailwind-заплатки bg-transparent/w-full давали в одной строке
+     два источника одной геометрии. */
+  .field-box > input {
+    flex: 1;
+    min-width: 0;
+    background: transparent;
+    border: none;
+  }
+
+  /* Кольцо фокуса переезжает на рамку: у input'а обводки больше нет, и без этой
+     строки поле внутри .field-box теряло ответ на Tab — клавиатура приходила в
+     никуда. */
+  .field-box:focus-within { border-color: var(--accent); }
 
   /* Кнопка-строка: коннектор кошелька, рынок в списке. */
   .row-button {
@@ -1797,7 +2176,7 @@
   .picker-list {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: var(--sp-1);
     height: min(52vh, 420px);
     flex: 0 0 auto;
   }
@@ -1901,7 +2280,7 @@
   .skeleton-row { display: flex; gap: 12px; }
 
   .panel-error {
-    padding: 24px;
+    padding: var(--sp-5);
     color: var(--down);
     font-size: var(--fs-ui);
     display: flex;
@@ -1932,6 +2311,8 @@
     .desk-stats { gap: 14px 18px; }
     .btn-primary { padding: 12px 18px; min-height: 44px; }
     .btn-action { padding: 14px; }
+    .icon-btn { min-width: var(--touch); min-height: var(--touch); }
+    .chip-btn { min-height: var(--touch); }
     .input-mono { padding: 12px 14px; font-size: var(--fs-title); }
 
     /* Под пальцем область нажатия обязательной ссылки графика — 44×44: знак

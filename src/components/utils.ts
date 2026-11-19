@@ -18,17 +18,19 @@ export function fmt(n: number, d = 0): string {
   return v.toLocaleString("en-US", { maximumFractionDigits: d, minimumFractionDigits: d });
 }
 
-const AVATAR_COLORS = ["#06b6d4", "#8b5cf6", "#f59e0b", "#10b981", "#0ea5e9", "#f43f5e"];
+// Номер слота аватара: 1…6. Значения цвета живут не здесь, а в теме
+// (--tag-1…--tag-6 в src/index.css), и панель красит кружок классом .avatar с
+// data-tag, а не инлайном: JS-палитра из шести hex-ов не измерялась ничем,
+// тогда как тот же круг в мини-аппе ложится на --bg-3, и гейт обязан знать
+// контраст каждого слота против каждой панели.
+export const AVATAR_SLOTS = 6;
 
-// Один и тот же handle — один и тот же цвет в Discover, «Моих подписках» и
-// модалке копирования, без состояния на лидере. Значение — цвет, а не имя
-// класса Tailwind: три из четырёх мест красят аватар через style={{ background }},
-// куда «bg-cyan-500» не применим — браузер отбрасывал невалидное значение, и
-// аватар был прозрачным кругом с белой буквой.
-export function avatarColor(handle: string): string {
+// Один и тот же handle — один и тот же слот в Discover, «Моих подписках»,
+// карточке лидера и модалке копирования, без состояния на лидере.
+export function avatarSlot(handle: string): number {
   let h = 0;
   for (let i = 0; i < handle.length; i++) h = (h * 31 + handle.charCodeAt(i)) >>> 0;
-  return AVATAR_COLORS[h % AVATAR_COLORS.length];
+  return (h % AVATAR_SLOTS) + 1;
 }
 
 export function shortHandle(handle: string): string {

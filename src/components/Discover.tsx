@@ -4,7 +4,8 @@ import { listHydratedLeaders } from "../lib/lighter";
 import { errorText } from "../lib/backend";
 import { leaderFromHydrated } from "../lib/leaders";
 import { setIntervalWhenVisible } from "../lib/visibleInterval";
-import { fmt, shortHandle, stamp, usd, avatarColor } from "./utils";
+import { Skeleton } from "./ui";
+import { avatarSlot, fmt, shortHandle, stamp, usd } from "./utils";
 import type { Leader } from "./types";
 
 interface DiscoverProps {
@@ -46,9 +47,9 @@ export default function Discover({ setCopyModal }: DiscoverProps) {
   return (
     <div className="terminal-layout terminal-stack">
       <div className="terminal-main">
-        <div className="terminal-header" style={{ flexDirection: "column", alignItems: "flex-start" }}>
+        <div className="terminal-header terminal-header--stack">
           <div className="panel-head-row">
-            <h2 style={{ fontSize: "var(--fs-heading)", fontWeight: 600, color: "var(--fg)", margin: 0 }}>Кого копируют</h2>
+            <h2 className="section-title">Кого копируют</h2>
             {lastUpdated && (
               <span
                 className="push-right section-note"
@@ -58,7 +59,7 @@ export default function Discover({ setCopyModal }: DiscoverProps) {
               </span>
             )}
           </div>
-          <p style={{ fontSize: "var(--fs-data)", color: "var(--text-muted)", margin: "8px 0 0 0", maxWidth: "800px" }}>
+          <p className="panel-lead">
             Лидеры — из таблицы leaders, подписчики и AUM — из follows. Капитал, реализованный PnL и открытые позиции — публичный ответ Lighter GET /api/v1/account?by=index по аккаунту лидера.
             Порядок: по реализованному PnL, при равенстве — по AUM; у кого Lighter не ответил, тот в конце списка.
           </p>
@@ -83,11 +84,11 @@ export default function Discover({ setCopyModal }: DiscoverProps) {
         {/* Заглушка значит «ещё едет». После отказа она едет вечно рядом со
             строкой «не загружен», и панель противоречит сама себе. */}
         {leaders === null && !error ? (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: "8px" }}>
+          <div className="card-grid">
             {[0, 1, 2].map((i) => (
               <div key={i} className="leader-card">
-                <div style={{ height: "12px", background: "var(--bg-2)", borderRadius: "3px", width: "50%", marginBottom: "12px" }} />
-                <div style={{ height: "24px", background: "var(--bg-2)", borderRadius: "3px" }} />
+                <Skeleton height="12px" width="50%" />
+                <Skeleton height="24px" />
               </div>
             ))}
           </div>
@@ -96,70 +97,69 @@ export default function Discover({ setCopyModal }: DiscoverProps) {
              всё сказано, и второй текст был бы противоречием. */
           error ? null : (
             <div className="empty-state">
-              <Users style={{ width: "24px", height: "24px", color: "var(--text-muted)", marginBottom: "12px" }} />
-              <p style={{ fontSize: "var(--fs-data)", color: "var(--fg-2)", margin: "0 0 4px 0" }}>В базе пока нет ни одного лидера</p>
-              <p style={{ fontSize: "var(--fs-label)", color: "var(--text-muted)", margin: 0, maxWidth: "500px", marginLeft: "auto", marginRight: "auto" }}>
+              <Users size={24} className="muted" aria-hidden="true" />
+              <p className="panel-lead">В базе пока нет ни одного лидера</p>
+              <p className="muted">
                 Лидер появляется сам: в Терминале включи «Публиковать мои сделки».
               </p>
             </div>
           )
         ) : (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: "8px" }}>
+          <div className="card-grid">
             {leaders.map((t) => {
               const pnl = t.exchange?.realizedPnlUsd ?? null;
               return (
                 <div key={t.id} className="leader-card">
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "16px" }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                      <div
-                        style={{ width: "40px", height: "40px", borderRadius: "50%", background: avatarColor(t.handle), display: "flex", alignItems: "center", justifyContent: "center", fontSize: "var(--fs-body)", fontWeight: 700, color: "var(--on-accent)" }}
-                      >
+                  <div className="row-between">
+                    <div className="row">
+                      <span className="avatar avatar-lg" data-tag={avatarSlot(t.handle)}>
                         {shortHandle(t.handle)}
-                      </div>
-                      <div>
-                        <div style={{ fontSize: "var(--fs-ui)", color: "var(--fg)", fontWeight: 600 }}>{t.handle}</div>
-                        <div style={{ fontSize: "var(--fs-label)", color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>Lighter #{t.lighterAccountIndex}</div>
+                      </span>
+                      <div className="stack">
+                        <div className="panel-title">{t.handle}</div>
+                        <div className="muted num">Lighter #{t.lighterAccountIndex}</div>
                       </div>
                     </div>
-                    <span style={{ fontSize: "var(--fs-label)", color: "var(--fg-2)", padding: "3px 8px", background: "var(--bg-2)", borderRadius: "3px", border: "1px solid var(--line-strong)" }}>{(t.feeBps / 100).toFixed(2)}%</span>
+                    <span className="chip">{(t.feeBps / 100).toFixed(2)}%</span>
                   </div>
 
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px", marginBottom: "12px" }}>
-                    <div>
-                      <div style={{ fontSize: "var(--fs-label)", color: "var(--text-muted)", display: "flex", alignItems: "center", gap: "4px", marginBottom: "4px" }}>
-                        <Wallet style={{ width: "10px", height: "10px" }} /> Капитал
-                      </div>
-                      <div style={{ fontSize: "var(--fs-data)", color: "var(--fg)", fontFamily: "var(--font-mono)" }}>{pnl === null ? "—" : usd(t.exchange!.equityUsd, 0)}</div>
+                  <div className="desk-stats">
+                    <div className="desk-stat">
+                      <span className="label label-row">
+                        <Wallet size={10} aria-hidden="true" /> Капитал
+                      </span>
+                      <b>{pnl === null ? "—" : usd(t.exchange!.equityUsd, 0)}</b>
                     </div>
-                    <div>
-                      <div style={{ fontSize: "var(--fs-label)", color: "var(--text-muted)", display: "flex", alignItems: "center", gap: "4px", marginBottom: "4px" }}>
-                        {pnl != null && pnl >= 0 ? <TrendingUp style={{ width: "10px", height: "10px" }} /> : <TrendingDown style={{ width: "10px", height: "10px" }} />} PnL
-                      </div>
-                      <div style={{ fontSize: "var(--fs-data)", color: pnl == null ? "var(--fg-3)" : pnl >= 0 ? "var(--up)" : "var(--down)", fontFamily: "var(--font-mono)" }}>
+                    <div className="desk-stat">
+                      <span className="label label-row">
+                        {pnl != null && pnl >= 0 ? (
+                          <TrendingUp size={10} aria-hidden="true" />
+                        ) : (
+                          <TrendingDown size={10} aria-hidden="true" />
+                        )}{" "}
+                        PnL
+                      </span>
+                      <b className={pnl == null ? "muted" : pnl >= 0 ? "text-positive" : "text-negative"}>
                         {pnl === null ? "—" : `${pnl >= 0 ? "+" : ""}${usd(pnl, 0)}`}
-                      </div>
+                      </b>
                     </div>
                   </div>
 
-                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: "var(--fs-label)", fontFamily: "var(--font-mono)", marginBottom: "4px" }}>
-                    <span style={{ color: "var(--fg-2)", display: "flex", alignItems: "center", gap: "4px" }}>
-                      <Users style={{ width: "11px", height: "11px" }} />
+                  <div className="row-between num">
+                    <span className="label label-row">
+                      <Users size={11} aria-hidden="true" />
                       {fmt(t.followers)}
                     </span>
-                    <span style={{ color: "var(--fg-2)", display: "flex", alignItems: "center", gap: "4px" }}>
-                      <DollarSign style={{ width: "11px", height: "11px" }} />
+                    <span className="label label-row">
+                      <DollarSign size={11} aria-hidden="true" />
                       {fmt(t.aumUsd)}
                     </span>
                   </div>
-                  <div style={{ fontSize: "var(--fs-label)", color: "var(--text-muted)", marginBottom: "16px" }}>
+                  <p className="muted">
                     {t.exchange ? `${t.exchange.openPositions.length} позиций` : "Lighter не ответил"} · с {new Date(t.since * 1000).toLocaleDateString("ru-RU")}
-                  </div>
-                  <button
-                    onClick={() => setCopyModal(t)}
-                    className="btn-primary"
-                    style={{ width: "100%", display: "flex", alignItems: "center", justifyContent: "center", gap: "6px" }}
-                  >
-                    <CopyIcon style={{ width: "12px", height: "12px" }} /> Copy
+                  </p>
+                  <button onClick={() => setCopyModal(t)} className="btn-primary btn-block">
+                    <CopyIcon size={12} aria-hidden="true" /> Copy
                   </button>
                 </div>
               );

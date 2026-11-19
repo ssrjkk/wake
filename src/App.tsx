@@ -83,7 +83,7 @@ import {
 } from "./lib/telegram";
 import {
   categorizeMarket,
-  avatarColor,
+  avatarSlot,
   shortHandle,
   toastVariant,
   trialToast,
@@ -1731,12 +1731,9 @@ export default function App() {
             <div className="overlay-shell" onClick={(e) => e.stopPropagation()}>
               <div className="flex items-center justify-between mb-4">
                 <div className="flex items-center gap-2">
-                  <div
-                    className="w-9 h-9 rounded-full flex items-center justify-center text-sm font-bold text-[color:var(--on-accent)]"
-                    style={{ background: avatarColor(copyModal.handle) }}
-                  >
+                  <span className="avatar" data-tag={avatarSlot(copyModal.handle)}>
                     {shortHandle(copyModal.handle)}
-                  </div>
+                  </span>
                   <div>
                     <div className="font-medium text-sm">
                       {copyModal.handle}
