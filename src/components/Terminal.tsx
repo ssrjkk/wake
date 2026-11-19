@@ -464,11 +464,11 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
           </div>
 
           {candlesLoading && candles.length === 0 ? (
-            <div className="desk-chart" style={{ padding: "16px 14px" }}><Skeleton height="100%" /></div>
+            <div className="desk-chart panel-pad"><Skeleton height="100%" /></div>
           ) : chartError ? (
-            <div className="empty-state desk-chart" style={{ border: "none", justifyContent: "center" }}>
-              <p style={{ color: "var(--down)", fontSize: "var(--fs-ui)", margin: 0 }}>Lighter API не отвечает</p>
-              <p style={{ color: "var(--fg-3)", fontSize: "var(--fs-data)", margin: 0 }}>{getApiHost()} — {chartError}</p>
+            <div className="empty-state desk-chart">
+              <p className="panel-lead text-negative">Lighter API не отвечает</p>
+              <p className="muted">{getApiHost()} — {chartError}</p>
             </div>
           ) : (
             <div className="desk-chart chart-wipe" key={`chart-${asset}`}>
@@ -490,16 +490,16 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
 
         {/* ── Лента сделок ─────────────────────────────────────────────── */}
         <div>
-          <div className="panel-caption" style={{ background: "var(--bg-1)" }}>
+          <div className="panel-caption">
             <span className="label">Лента сделок</span>
             <span className="num muted">обновлено {stamp(lastTradesUpdate)}</span>
           </div>
 
-          <div className="table-scroll" style={{ maxHeight: "220px", overflowY: "auto", background: "var(--bg-1)" }}>
+          <div className="table-scroll tape-scroll">
             {tradesError && trades.length === 0 ? (
-              <p style={{ padding: "16px 14px", margin: 0, fontSize: "var(--fs-data)", color: "var(--down)" }}>{tradesError}</p>
+              <p className="panel-note text-negative">{tradesError}</p>
             ) : trades.length === 0 ? (
-              <p style={{ padding: "16px 14px", margin: 0, fontSize: "var(--fs-data)", color: "var(--fg-3)" }}>
+              <p className="panel-note muted">
                 {tradesLoading ? "загрузка…" : chartError ? "Сделок нет: Lighter не ответил." : "Сделок в окне выборки нет."}
               </p>
             ) : (
@@ -515,16 +515,16 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
                 <tbody>
                   {trades.map((t) => (
                     <tr key={`${t.id}-${t.timestamp}`} className="trade-row">
-                      <td className="num tape-price" style={{ color: t.takerBuy ? "var(--up)" : "var(--down)" }}>
+                      <td className={`num tape-price ${t.takerBuy ? "text-positive" : "text-negative"}`}>
                         {/* Сторона держится не только на цвете (WCAG 1.4.1):
                             у символа свой знак, а диктор читает слово. */}
                         <span className="tape-side" aria-hidden="true">{t.takerBuy ? "▲" : "▼"}</span>
                         <span className="sr-only">{t.takerBuy ? "покупка" : "продажа"}</span>
                         {fmt(t.price, decimals)}
                       </td>
-                      <td className="num right" style={{ color: "var(--fg-2)" }}>{fmt(t.size, sizeDecimals)}</td>
-                      <td className="num right" style={{ color: "var(--fg-3)" }}>{fmtUsdCompact(t.size * t.price)}</td>
-                      <td className="num right" style={{ color: "var(--fg-3)" }}>
+                      <td className="num right secondary">{fmt(t.size, sizeDecimals)}</td>
+                      <td className="num right muted">{fmtUsdCompact(t.size * t.price)}</td>
+                      <td className="num right muted">
                         {stamp(t.timestamp ? new Date(t.timestamp) : null)}
                       </td>
                     </tr>
@@ -539,9 +539,9 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
       {/* ── Правая колонка: тикет и список рынков ───────────────────────── */}
       <div className="terminal-side">
         <div className="terminal-ticket">
-          <div className="seg" role="group" aria-label="Сторона ордера" style={{ display: "flex" }}>
-            <button aria-pressed={side === "long"} onClick={() => setSide("long")} style={{ flex: 1 }}>Long</button>
-            <button aria-pressed={side === "short"} onClick={() => setSide("short")} style={{ flex: 1 }}>Short</button>
+          <div className="seg seg-stretch" role="group" aria-label="Сторона ордера">
+            <button aria-pressed={side === "long"} onClick={() => setSide("long")}>Long</button>
+            <button aria-pressed={side === "short"} onClick={() => setSide("short")}>Short</button>
           </div>
 
           <label htmlFor="terminal-size" className="label">Размер, USD</label>
@@ -557,22 +557,21 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
               const v = e.target.valueAsNumber;
               setSize(Number.isFinite(v) ? Math.max(0, v) : 0);
             }}
-            style={{ width: "100%" }}
           />
 
           <div className="terminal-field-row">
             <label htmlFor="terminal-leverage" className="label">Плечо</label>
-            <span className="num" style={{ fontSize: "var(--fs-ui)", fontWeight: 600 }}>{leverage}x</span>
+            <span className="stat-value">{leverage}x</span>
           </div>
           <input
             id="terminal-leverage"
+            className="range"
             type="range"
             aria-label="Плечо"
             min="1"
             max="20"
             value={leverage}
             onChange={(e) => setLeverage(Number(e.target.value))}
-            style={{ width: "100%", accentColor: "var(--accent)" }}
           />
 
           <div className="kv">
@@ -609,13 +608,12 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
             {accountEquityUsd != null ? ` Баланс счёта ${usd(accountEquityUsd, 0)}.` : " Баланс счёта не подключён."}
           </p>
 
-          <div style={{ display: "flex", alignItems: "center", gap: "6px", flexWrap: "wrap" }}>
+          <div className="row">
             <button
               type="button"
               onClick={() => void checkSigner()}
               disabled={signerBusy}
-              className={`chip ${signerBusy ? "chip-info" : !signerChecked ? "chip-info" : signer ? (signer.network === network ? (signer.dry_run ? "chip-info" : "chip-warn") : "chip-warn") : "chip-warn"}`}
-              style={{ cursor: signerBusy ? "default" : "pointer" }}
+              className={`chip chip-btn ${signerBusy ? "chip-info" : !signerChecked ? "chip-info" : signer ? (signer.network === network ? (signer.dry_run ? "chip-info" : "chip-warn") : "chip-warn") : "chip-warn"}`}
               title={
                 `Сервис подписи: ${SIGNING_SERVICE_URL}. Он не опубликован вместе с сайтом — это локальный процесс, ` +
                 "который держит твой API-ключ Lighter и спрашивает WAKE_DRY_RUN. Спрашиваем его по клику, а не при " +
@@ -649,7 +647,6 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
                 aria-pressed={isCopyable}
                 aria-label="Публиковать мои сделки"
                 className="btn-ghost"
-                style={{ display: "flex", alignItems: "center", gap: "6px", minHeight: "var(--touch)" }}
                 title={
                   isCopyable
                     ? "Выключить публикацию: строка leaders остаётся, но копи-движок перестаёт строить план по твоим сделкам"
@@ -668,16 +665,15 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
           </div>
         </div>
 
-        <div style={{ padding: "0 12px 10px" }}>
+        <div className="side-search">
           <div className="terminal-search">
-            <Search style={{ position: "absolute", left: "10px", top: "50%", transform: "translateY(-50%)", width: "13px", height: "13px", color: "var(--fg-3)" }} />
+            <Search />
             <input
               aria-label="Поиск по рынку"
               className="input-mono"
               placeholder="Поиск рынка"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              style={{ width: "100%", paddingLeft: "28px" }}
             />
           </div>
         </div>
@@ -686,12 +682,12 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
           <div className="list-head">
             <span>Рынок</span>
             <span>Последняя</span>
-            <span style={{ textAlign: "right" }}>24ч</span>
+            <span>24ч</span>
           </div>
           {dataError && markets.length === 0 ? (
-            <p style={{ padding: "14px 12px", margin: 0, fontSize: "var(--fs-data)", color: "var(--down)" }}>{dataError}</p>
+            <p className="panel-note text-negative">{dataError}</p>
           ) : filteredMarkets.length === 0 ? (
-            <p style={{ padding: "14px 12px", margin: 0, fontSize: "var(--fs-data)", color: "var(--fg-3)" }}>
+            <p className="panel-note muted">
               Ничего не найдено по «{searchQuery}».
             </p>
           ) : (
@@ -703,7 +699,6 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
                 <button
                   key={m.market_id}
                   className="desk-row"
-                  style={{ gridTemplateColumns: "minmax(0, 1fr) minmax(0, auto) minmax(0, auto)" }}
                   aria-current={m.symbol === asset}
                   onClick={() => setAsset(m.symbol)}
                 >
@@ -714,12 +709,12 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
                       style={{ "--w": `${(share * 100).toFixed(1)}%` } as CSSProperties}
                     />
                   )}
-                  <span style={{ display: "flex", alignItems: "center", gap: "6px", minWidth: 0 }}>
-                    <b className="num" style={{ color: "var(--fg)", fontWeight: 600 }}>{m.symbol}</b>
-                    <span style={{ fontSize: "var(--fs-label)", color: "var(--fg-3)", textTransform: "uppercase" }}>{m.market_type}</span>
+                  <span className="row">
+                    <b className="num cell-name">{m.symbol}</b>
+                    <span className="label">{m.market_type}</span>
                   </span>
-                  <span className="num" style={{ color: "var(--fg-2)" }}>{t ? fmt(t.price, m.supported_price_decimals) : "—"}</span>
-                  <span className="num right" style={{ color: t ? (rowUp ? "var(--up)" : "var(--down)") : "var(--fg-3)" }}>{pct(t?.changePct ?? null)}</span>
+                  <span className="num secondary">{t ? fmt(t.price, m.supported_price_decimals) : "—"}</span>
+                  <span className={`num right ${t ? (rowUp ? "text-positive" : "text-negative") : "muted"}`}>{pct(t?.changePct ?? null)}</span>
                 </button>
               );
             })
@@ -735,16 +730,16 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
       {showOrderConfirm && currentMarket && price != null && signer && (
         <Modal label="Подтверждение ордера" onClose={() => setShowOrderConfirm(false)}>
           <div className="overlay-shell">
-            <h3 className="panel-title" style={{ margin: "0 0 14px" }}>Подтверждение ордера</h3>
-            <div className="kv kv-cols" style={{ marginBottom: "16px" }}>
+            <h3 className="panel-title">Подтверждение ордера</h3>
+            <div className="kv kv-cols">
               <span className="label">Рынок</span><b className="num">{currentMarket.symbol}</b>
-              <span className="label">Сторона</span><b className="num" style={{ color: side === "long" ? "var(--up)" : "var(--down)" }}>{side === "long" ? "Long" : "Short"}</b>
+              <span className="label">Сторона</span><b className={`num ${side === "long" ? "text-positive" : "text-negative"}`}>{side === "long" ? "Long" : "Short"}</b>
               <span className="label">Размер</span><b className="num">{usd(size, 0)}</b>
               <span className="label">Цена</span><b className="num">{fmt(price, decimals)}</b>
               {!isSpot && (<><span className="label">Плечо</span><b className="num">{leverage}x</b></>)}
               <span className="label">Маржа</span><b className="num">{usd(size / Math.max(leverage, 1), 0)}</b>
             </div>
-            <p className="fineprint" style={{ marginBottom: "14px" }}>
+            <p className="fineprint">
               {/* Сеть и режим берутся из ответа самого сервиса, а не из
                   переключателя страницы: человек подтверждает именно то, куда
                   уйдёт ордер. */}
@@ -755,14 +750,13 @@ export default function Terminal({ asset, setAsset, markets, dataError, setToast
                   новым индексом. Честнее сказать это здесь, чем молчать. */}
               {!signer.dry_run && " · запрос не отменяется: если сервис не ответит, ордер всё равно мог исполниться — ищи его в open orders Lighter"}
             </p>
-            <div style={{ display: "flex", gap: "8px" }}>
-              <button onClick={() => setShowOrderConfirm(false)} className="btn-ghost" style={{ flex: 1, justifyContent: "center" }}>
+            <div className="overlay-actions">
+              <button onClick={() => setShowOrderConfirm(false)} className="btn-ghost">
                 Отмена
               </button>
               <button
                 onClick={() => void placeOrder(signer)}
-                className="btn-action"
-                style={{ flex: 1, background: side === "long" ? "var(--up)" : "var(--down)", color: "var(--on-accent)" }}
+                className={`btn-action ${side === "long" ? "btn-up" : "btn-down"}`}
               >
                 Подтвердить
               </button>

@@ -55,15 +55,22 @@ const RESOLUTIONS: Resolution[] = ["5m", "15m", "1h", "4h", "1d"];
 // сверке, а не решению.
 const POINTS_SENT = 40;
 
-const EXECUTION_STYLE: Record<string, { bg: string; color: string; border?: string }> = {
-  dry_run: { bg: "var(--info-faint)", color: "var(--info)", border: "var(--info-line)" },
-  sent: { bg: "var(--up-faint)", color: "var(--up)", border: "var(--up-line)" },
-  blocked_by_risk_limit: { bg: "var(--warn-faint)", color: "var(--warn)", border: "var(--warn-line)" },
-  skipped: { bg: "var(--bg-2)", color: "var(--fg-2)" },
-  failed: { bg: "var(--down-faint)", color: "var(--down-hi)", border: "var(--down-line)" },
+// Статус исполнения — чип темы, а не три оттенка на строку, которые панель
+// смешивала сама (bg, color и border тремя инлайнами на чип). Краски сохранены
+// один в один как были: info — сухой прогон, up — заявка принята площадкой,
+// warn — сдвинулось с намеченного, down — отказ, базовый chip — сделка не нужна.
+// Неизвестный статус обязан отличаться от failed и не ронять панель: это
+// единственное, чем человек проверяет, что агент сделал с его деньгами.
+const EXECUTION_CHIP: Record<string, string> = {
+  dry_run: "chip-info",
+  sent: "chip-up",
+  blocked_by_risk_limit: "chip-warn",
+  // «Решили не торговать» — не сбой, поэтому нейтральный чип.
+  skipped: "",
+  failed: "chip-down",
   // Не «не удалось», а «неизвестно»: запрос мог дойти до сервиса подписи, и
-  // повтор шага — это второй ордер. Цвет тот же, что у отказа, смысл другой.
-  unknown: { bg: "var(--warn-faint)", color: "var(--warn)", border: "var(--warn-line)" },
+  // повтор шага — это второй ордер. Краска та же, что у отказа, смысл другой.
+  unknown: "chip-warn",
 };
 
 export default function Agent({ signedIn, subscription, currentMarket, setToast, startTrial }: AgentProps) {
@@ -163,24 +170,24 @@ export default function Agent({ signedIn, subscription, currentMarket, setToast,
   return (
     <div className="terminal-layout terminal-stack">
       <div className="terminal-main">
-        <div className="terminal-header" style={{ flexDirection: "column", alignItems: "flex-start" }}>
-          <h2 style={{ fontSize: "var(--fs-heading)", fontWeight: 600, color: "var(--fg)", margin: 0 }}>Агент</h2>
-          <p style={{ fontSize: "var(--fs-data)", color: "var(--text-muted)", margin: "4px 0 0" }}>
+        <div className="terminal-header terminal-header--stack">
+          <h2 className="section-title">Агент</h2>
+          <p className="panel-lead">
             Момент-эвристика по закрытиям свечей Lighter, поверх неё — LLM-рассуждение с откатом на эвристику, если ответы модели нет. Свечи читаются
-            здесь же, через публичный <code style={{ color: "var(--fg-2)" }}>GET /candles</code>.
+            здесь же, через публичный <code>GET /candles</code>.
           </p>
         </div>
 
       {!subscription?.has_ai_agent ? (
         <div className="empty-state">
-          <div style={{ width: "48px", height: "48px", borderRadius: "50%", background: "var(--bg-2)", display: "flex", alignItems: "center", justifyContent: "center", marginBottom: "12px" }}>
-            <Zap style={{ width: "24px", height: "24px", color: "var(--text-muted)" }} />
-          </div>
-          <p style={{ fontSize: "var(--fs-body)", color: "var(--fg-2)", marginBottom: "4px" }}>
+          <span className="empty-mark">
+            <Zap size={24} aria-hidden="true" />
+          </span>
+          <p className="panel-lead">
             {subscription?.tier === "free" ? "Пробный период закончился" : "Агент доступен на trial или Pro"}
           </p>
-          <p style={{ fontSize: "var(--fs-data)", color: "var(--text-muted)", marginBottom: "12px", maxWidth: "320px" }}>
-            Статус подписки читается с <code style={{ color: "var(--fg-2)" }}>GET /subscription</code> — того, кому он принадлежит, решает токен входа; без
+          <p className="muted">
+            Статус подписки читается с <code>GET /subscription</code> — того, кому он принадлежит, решает токен входа; без
             Telegram или кошелька её не на что заводить.
           </p>
           {/* Кнопка «начать trial» у человека, у которого trial уже был, —
@@ -189,33 +196,35 @@ export default function Agent({ signedIn, subscription, currentMarket, setToast,
               Сказать это текстом честнее, чем предлагать действие, которое не
               происходит. */}
           {subscription?.tier === "free" ? (
-            <p style={{ fontSize: "var(--fs-data)", color: "var(--fg-2)", maxWidth: "320px" }}>
+            <p className="muted">
               Продлить трайл нельзя — он даётся один раз на аккаунт. Доступ дальше
-              включает <code style={{ color: "var(--fg-2)" }}>Pro</code>.
+              включает <code>Pro</code>.
             </p>
           ) : (
             <button className="btn-primary" onClick={startTrial}>Начать 14-дневный trial</button>
           )}
-          <p style={{ fontSize: "var(--fs-label)", color: "var(--text-muted)", marginTop: "12px", maxWidth: "320px", lineHeight: 1.5 }}>
-            Trial заводится без оплаты, один раз на аккаунт. «pro» включает <code style={{ color: "var(--fg-2)" }}>POST /subscription/&lt;user_id&gt;/upgrade</code>{" "}
+          <p className="fineprint">
+            Trial заводится без оплаты, один раз на аккаунт. «pro» включает <code>POST /subscription/&lt;user_id&gt;/upgrade</code>{" "}
             на бэкенде под токеном куратора — платёжного пути в репозитории нет, и кнопкой в интерфейсе это не делается. Строки подписки лежат в{" "}
-            <code style={{ color: "var(--fg-2)" }}>subscriptions</code> (<code style={{ color: "var(--fg-2)" }}>agent_db.py</code>) и переживают рестарт сервиса.
+            <code>subscriptions</code> (<code>agent_db.py</code>) и переживают рестарт сервиса.
           </p>
         </div>
       ) : (
-        <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+        <div className="stack">
           {subscription.days_left_in_trial != null && (
-            <div style={{ fontSize: "var(--fs-data)", color: "var(--warn)" }}>Trial: {subscription.days_left_in_trial.toFixed(1)} дней осталось</div>
+            <div className="muted text-warn">Trial: {subscription.days_left_in_trial.toFixed(1)} дней осталось</div>
           )}
 
-          <div style={{ background: "var(--bg-1)", border: "1px solid var(--line)", borderRadius: "6px", padding: "16px" }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "12px", flexWrap: "wrap", marginBottom: "12px" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
-                <span style={{ fontSize: "var(--fs-data)", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.5px", minWidth: 0 }}>
+          <div className="terminal-panel panel-pad">
+            <div className="row-between">
+              <div className="row">
+                <span className="stat-label">
                   {currentMarket?.symbol ?? "рынок не выбран"}
-                  {spot != null && <span style={{ fontFamily: "var(--font-mono)", color: "var(--fg-2)", marginLeft: "8px", textTransform: "none" }}>{usd(spot, currentMarket?.supported_price_decimals ?? 2)}</span>}
                 </span>
-                <div style={{ display: "flex", gap: "4px", flexWrap: "wrap" }}>
+                {spot != null && (
+                  <span className="num secondary">{usd(spot, currentMarket?.supported_price_decimals ?? 2)}</span>
+                )}
+                <div className="row-between">
                   {RESOLUTIONS.map((r) => (
                     <button
                       key={r}
@@ -229,7 +238,7 @@ export default function Agent({ signedIn, subscription, currentMarket, setToast,
                 </div>
               </div>
               <div className="agent-controls">
-                <label htmlFor="agent-base-size" style={{ fontSize: "var(--fs-data)", color: "var(--text-muted)", display: "flex", alignItems: "center" }}>
+                <label htmlFor="agent-base-size" className="label-row muted">
                   Базовый размер $
                   <input
                     id="agent-base-size"
@@ -244,8 +253,7 @@ export default function Agent({ signedIn, subscription, currentMarket, setToast,
                       const raw = e.target.valueAsNumber;
                       setBaseSizeUsd(Number.isFinite(raw) ? Math.max(0, raw) : 0);
                     }}
-                    className="input-mono"
-                    style={{ marginLeft: "6px", width: "100px" }}
+                    className="input-mono input-num"
                   />
                 </label>
                 <button
@@ -259,13 +267,13 @@ export default function Agent({ signedIn, subscription, currentMarket, setToast,
             </div>
 
             {candlesError ? (
-              <p style={{ fontSize: "var(--fs-data)", color: "var(--warn)", display: "flex", alignItems: "center", gap: "6px", margin: 0 }}>
-                <AlertTriangle style={{ width: "14px", height: "14px" }} /> Lighter не отдал свечи: {candlesError}
+              <p className="notice notice-warn">
+                <AlertTriangle size={14} aria-hidden="true" /> Lighter не отдал свечи: {candlesError}
               </p>
             ) : candles == null ? (
-              <p style={{ fontSize: "var(--fs-ui)", color: "var(--text-muted)", margin: 0 }}>Читаю {POINTS_SENT} свечей по {resolution}…</p>
+              <p className="muted">Читаю {POINTS_SENT} свечей по {resolution}…</p>
             ) : (
-              <p style={{ fontSize: "var(--fs-data)", color: "var(--text-muted)", margin: 0 }}>
+              <p className="muted">
                 {lastDecision?.data
                   ? `${lastDecision.data.candles_used} закрытий ${lastDecision.data.resolution} с ${lastDecision.data.network} — ряд забрал бэкенд, последнее ${fmt(lastDecision.data.last_price, currentMarket?.supported_price_decimals ?? 2)}.`
                   : `${prices.length} закрытий по ${resolution}, последние ${Math.min(10, prices.length)} — окно, по которому считается момент; ряд для решения берёт бэкенд.`}
@@ -273,33 +281,33 @@ export default function Agent({ signedIn, subscription, currentMarket, setToast,
             )}
 
             {lastDecision && (
-              <div style={{ marginTop: "12px", borderTop: "1px solid var(--line)", paddingTop: "12px" }}>
-                <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px", flexWrap: "wrap" }}>
+              <div className="sep-top stack">
+                <div className="row">
                   <span
-                    style={{ fontSize: "var(--fs-metric)", fontFamily: "var(--font-mono)", fontWeight: 700, color: lastDecision.action === "long" ? "var(--up)" : lastDecision.action === "short" ? "var(--down)" : "var(--fg-2)" }}
+                    className={`metric-word ${lastDecision.action === "long" ? "text-positive" : lastDecision.action === "short" ? "text-negative" : "secondary"}`}
                   >
                     {lastDecision.action.toUpperCase()}
                   </span>
-                  <span style={{ fontSize: "var(--fs-data)", color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
+                  <span className="muted num">
                     {(lastDecision.confidence * 100).toFixed(0)}% уверенность (самоотчёт)
                   </span>
-                  {lastDecision.size_usd > 0 && <span style={{ fontSize: "var(--fs-data)", color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>{usd(lastDecision.size_usd, 0)}</span>}
+                  {lastDecision.size_usd > 0 && <span className="muted num">{usd(lastDecision.size_usd, 0)}</span>}
                   {lastDecision.execution && (
-                    <span style={{ fontSize: "var(--fs-label)", padding: "2px 8px", borderRadius: "3px", background: EXECUTION_STYLE[lastDecision.execution.status]?.bg ?? "var(--bg-2)", color: EXECUTION_STYLE[lastDecision.execution.status]?.color ?? "var(--fg-2)", border: EXECUTION_STYLE[lastDecision.execution.status]?.border ? `1px solid ${EXECUTION_STYLE[lastDecision.execution.status].border}` : "none" }}>
+                    <span className={`chip ${EXECUTION_CHIP[lastDecision.execution.status] ?? ""}`}>
                       {lastDecision.execution.status}
                     </span>
                   )}
                 </div>
-                <p style={{ fontSize: "var(--fs-data)", color: "var(--text-muted)", margin: 0 }}>{lastDecision.reasoning}</p>
-                {lastDecision.execution?.reason && <p style={{ fontSize: "var(--fs-data)", color: "var(--warn)", margin: "4px 0 0" }}>{lastDecision.execution.reason}</p>}
-                {lastDecision.execution?.error && <p style={{ fontSize: "var(--fs-data)", color: "var(--down)", margin: "4px 0 0" }}>{String(lastDecision.execution.error).slice(0, 160)}</p>}
+                <p className="muted">{lastDecision.reasoning}</p>
+                {lastDecision.execution?.reason && <p className="muted text-warn">{lastDecision.execution.reason}</p>}
+                {lastDecision.execution?.error && <p className="muted text-negative">{String(lastDecision.execution.error).slice(0, 160)}</p>}
                 {lastDecision.execution?.client_order_index != null && (
-                  <p style={{ fontSize: "var(--fs-data)", color: "var(--text-muted)", fontFamily: "var(--font-mono)", margin: "4px 0 0" }}>
+                  <p className="muted num">
                     ордер #{lastDecision.execution.client_order_index} — по нему видно в Lighter, исполнился он или нет
                   </p>
                 )}
                 {lastDecision.execution?.tx_hash && (
-                  <p style={{ fontSize: "var(--fs-data)", color: "var(--text-muted)", fontFamily: "var(--font-mono)", margin: "4px 0 0" }}>tx {String(lastDecision.execution.tx_hash).slice(0, 18)}…</p>
+                  <p className="muted num">tx {String(lastDecision.execution.tx_hash).slice(0, 18)}…</p>
                 )}
               </div>
             )}
@@ -311,34 +319,34 @@ export default function Agent({ signedIn, subscription, currentMarket, setToast,
             </div>
           )}
           {memory && (
-            <div style={{ background: "var(--bg-1)", border: "1px solid var(--line)", borderRadius: "6px", padding: "16px" }}>
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px" }}>
-                <span style={{ fontSize: "var(--fs-label)", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.5px" }}>Память агента</span>
-                <span style={{ fontSize: "var(--fs-data)", color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
+            <div className="terminal-panel panel-pad">
+              <div className="row-between">
+                <span className="stat-label">Память агента</span>
+                <span className="muted num">
                   {memory.open_trades.length} открыто · {memory.closed_trades.length} закрыто ·{" "}
                   {memory.win_rate == null ? "нет закрытых сделок" : `${(memory.win_rate * 100).toFixed(0)}% в плюс`} · объём за день{" "}
                   {usd(memory.volume_today_usd, 0)}
                 </span>
               </div>
-              <pre style={{ fontSize: "var(--fs-data)", color: "var(--fg-2)", whiteSpace: "pre-wrap", fontFamily: "var(--font-mono)", marginBottom: "12px" }}>{memory.summary}</pre>
+              <pre className="mono-note">{memory.summary}</pre>
               {memory.open_trades.length > 0 && (
                 <div className="table-scroll">
-                <table style={{ width: "100%", fontSize: "var(--fs-data)", minWidth: "400px" }}>
+                <table className="data-table data-table--fit">
                   <thead>
-                    <tr style={{ textAlign: "left", fontSize: "var(--fs-label)", color: "var(--text-muted)", borderBottom: "1px solid var(--line)" }}>
-                      <th style={{ padding: "6px 0", fontWeight: 400 }}>Рынок</th>
-                      <th style={{ padding: "6px 0", fontWeight: 400 }}>Сторона</th>
-                      <th style={{ padding: "6px 0", fontWeight: 400 }}>Вход</th>
-                      <th style={{ padding: "6px 0", fontWeight: 400 }}>Объём</th>
+                    <tr>
+                      <th scope="col" className="left">Рынок</th>
+                      <th scope="col" className="left">Сторона</th>
+                      <th scope="col" className="left">Вход</th>
+                      <th scope="col" className="left">Объём</th>
                     </tr>
                   </thead>
                   <tbody>
                     {memory.open_trades.slice(-8).reverse().map((t) => (
-                      <tr key={t.id} style={{ borderBottom: "1px solid var(--line)" }}>
-                        <td style={{ padding: "6px 0", fontFamily: "var(--font-mono)", color: "var(--fg-2)" }}>#{t.market_id}</td>
-                        <td style={{ padding: "6px 0", fontFamily: "var(--font-mono)", color: t.side === "long" ? "var(--up)" : "var(--down)" }}>{t.side}</td>
-                        <td style={{ padding: "6px 0", fontFamily: "var(--font-mono)", color: "var(--fg-2)" }}>{fmt(t.entry_price, 2)}</td>
-                        <td style={{ padding: "6px 0", fontFamily: "var(--font-mono)", color: "var(--fg-2)" }}>{fmt(t.size, 4)}</td>
+                      <tr key={t.id}>
+                        <td className="num secondary">#{t.market_id}</td>
+                        <td className={`num ${t.side === "long" ? "text-positive" : "text-negative"}`}>{t.side}</td>
+                        <td className="num secondary">{fmt(t.entry_price, 2)}</td>
+                        <td className="num secondary">{fmt(t.size, 4)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -348,15 +356,15 @@ export default function Agent({ signedIn, subscription, currentMarket, setToast,
             </div>
           )}
 
-          <p style={{ fontSize: "var(--fs-data)", color: "var(--text-muted)" }}>
-            Решение считается на сервере (<code style={{ color: "var(--fg-2)" }}>backend/agent_runner.py</code>), перед этим проходит{" "}
-            <code style={{ color: "var(--fg-2)" }}>risk_limits.check_order()</code>. При <code style={{ color: "var(--fg-2)" }}>WAKE_DRY_RUN=true</code>{" "}
-            (по умолчанию) ордер на Lighter не отправляется — статус <code style={{ color: "var(--fg-2)" }}>dry_run</code>, но сделка записывается в память
+          <p className="panel-lead">
+            Решение считается на сервере (<code>backend/agent_runner.py</code>), перед этим проходит{" "}
+            <code>risk_limits.check_order()</code>. При <code>WAKE_DRY_RUN=true</code>{" "}
+            (по умолчанию) ордер на Lighter не отправляется — статус <code>dry_run</code>, но сделка записывается в память
             агента, чтобы ветка с закрытием и win_rate тоже были живыми. Память и дневной объём читаются из таблицы{" "}
-            <code style={{ color: "var(--fg-2)" }}>agent_trades</code>: рестарт сервиса их не обнуляет. Ордер больше лимита на транзакцию{" "}
-            <code style={{ color: "var(--fg-2)" }}>check_order()</code> не урезает, а отклоняет (статус{" "}
-            <code style={{ color: "var(--fg-2)" }}>blocked_by_risk_limit</code>); под оставшийся дневный объём и под остаток лимита позиции размер
-            урезается. Если сервис подписи оборвал соединение, шаг получает <code style={{ color: "var(--fg-2)" }}>unknown</code>: ордер мог
+            <code>agent_trades</code>: рестарт сервиса их не обнуляет. Ордер больше лимита на транзакцию{" "}
+            <code>check_order()</code> не урезает, а отклоняет (статус{" "}
+            <code>blocked_by_risk_limit</code>); под оставшийся дневный объём и под остаток лимита позиции размер
+            урезается. Если сервис подписи оборвал соединение, шаг получает <code>unknown</code>: ордер мог
             исполниться, повтор шага — это второй ордер с новым индексом, поэтому в память и в дневной объём такой шаг не попадает.
           </p>
         </div>

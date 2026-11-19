@@ -80,21 +80,20 @@ export default function OrderBookPanel({
         <tr key={`${row.side}-${row.price}`} className={`book-row ${row.side}`}>
           <td className="num book-price">
             <i className="book-bar" style={{ "--w": barWidth(row.fraction) } as CSSProperties} aria-hidden="true" />
-            <span style={{ color: row.side === "ask" ? "var(--down-hi)" : "var(--up)" }}>
+            <span>
               {fmt(row.price, decimals)}
             </span>
           </td>
-          <td className="num right">
+          <td className="num right secondary">
             <span
               key={change ? `${row.size}-${flash.serial}` : "steady"}
               className={change ? `book-flash-${change}` : undefined}
-              style={{ color: "var(--fg-2)" }}
             >
               {fmt(row.size, sizeDecimals)}
             </span>
           </td>
-          <td className="num right">
-            <span style={{ color: "var(--fg-3)" }}>{fmtUsdCompact(row.cumQuote)}</span>
+          <td className="num right muted">
+            <span>{fmtUsdCompact(row.cumQuote)}</span>
           </td>
         </tr>
       );
@@ -108,7 +107,7 @@ export default function OrderBookPanel({
       </div>
 
       {error && empty ? (
-        <p className="book-note" style={{ color: "var(--down)" }}>{error}</p>
+        <p className="book-note text-negative">{error}</p>
       ) : empty ? (
         <p className="book-note">
           {loading ? "загрузка…" : unavailable ? "Заявок нет: Lighter не ответил." : "Заявок в книге нет."}
@@ -121,7 +120,7 @@ export default function OrderBookPanel({
           <div className="book-mid">
             <span className="book-mid-cell">
               <i className="label">покупка</i>
-              <b className="num" style={{ color: "var(--up)" }}>
+              <b className="num text-positive">
                 {fmt(depth.bids[0]?.price ?? NaN, decimals)}
               </b>
             </span>
@@ -131,7 +130,7 @@ export default function OrderBookPanel({
             </span>
             <span className="book-mid-cell">
               <i className="label">продажа</i>
-              <b className="num" style={{ color: "var(--down-hi)" }}>
+              <b className="num text-negative-hi">
                 {fmt(depth.asks[0]?.price ?? NaN, decimals)}
               </b>
             </span>

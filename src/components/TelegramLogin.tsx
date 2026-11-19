@@ -68,5 +68,5 @@ export function TelegramLogin({ onLogin, onMissingConfig }: TelegramLoginProps) 
     );
   }
 
-  return <div ref={containerRef} style={{ display: "flex", justifyContent: "center" }} />;
+  return <div ref={containerRef} className="tg-slot" />;
 }

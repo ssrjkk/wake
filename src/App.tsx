@@ -1359,32 +1359,15 @@ export default function App() {
           {/* перемонтирование по сети: панели иначе держат данные со старой сети до следующего опроса */}
           <Suspense
             fallback={
-              <div
-                style={{
-                  padding: "24px",
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: "16px",
-                }}
-              >
+              <div className="panel-pad">
                 <div className="skeleton-row">
                   {[1, 2, 3, 4].map((i) => (
-                    <div
-                      key={i}
-                      className="skeleton"
-                      style={{ flex: 1, height: "80px" }}
-                    />
+                    <div key={i} className="skeleton skeleton-tile" />
                   ))}
                 </div>
-                <div
-                  style={{
-                    display: "grid",
-                    gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
-                    gap: "16px",
-                  }}
-                >
-                  <div className="skeleton" style={{ height: "400px" }} />
-                  <div className="skeleton" style={{ height: "400px" }} />
+                <div className="card-grid">
+                  <div className="skeleton skeleton-block" />
+                  <div className="skeleton skeleton-block" />
                 </div>
               </div>
             }
@@ -1669,14 +1652,7 @@ export default function App() {
                   </button>
                 ))}
               </div>
-              <p
-                style={{
-                  fontSize: "var(--fs-label)",
-                  color: "var(--text-muted)",
-                  margin: 0,
-                  lineHeight: 1.5,
-                }}
-              >
+              <p className="fineprint">
                 Категория определяется по списку тикеров: у книги Lighter нет
                 поля «тип инструмента». Всё, чего в списке нет, показывается как
                 Crypto — для отдельной строки это допущение, а не факт.

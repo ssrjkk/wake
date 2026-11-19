@@ -326,7 +326,7 @@ export default function Portfolio({ following, followsError, setTab, togglePause
       {signedIn && (
         <section>
           <div className="section-head">
-            <h2 style={{ fontSize: "var(--fs-heading)", fontWeight: 600, color: "var(--fg)", margin: 0 }}>Журнал копи-движка</h2>
+            <h2 className="section-title">Журнал копи-движка</h2>
             <span className="section-note">таблица mirror_log</span>
           </div>
           {mirrorLog === null ? (
@@ -365,7 +365,7 @@ export default function Portfolio({ following, followsError, setTab, togglePause
                   )}
                   {mirrorLog.slice(logWindow.start, logWindow.end).map((r) => (
                     <tr key={r.id} className="log-row">
-                      <td className="muted num" style={{ whiteSpace: "nowrap" }}>{new Date(r.created_at * 1000).toLocaleString("ru-RU")}</td>
+                      <td className="muted num">{new Date(r.created_at * 1000).toLocaleString("ru-RU")}</td>
                       <td className="left">{r.leader_handle}</td>
                       <td className="left">
                         {symbolOf(r.market_id)}

@@ -155,36 +155,33 @@ export default function Risk({ markets, setToast }: RiskProps) {
   return (
     <div className="terminal-layout terminal-stack">
       <div className="terminal-main">
-        <div className="terminal-header" style={{ flexDirection: "column", alignItems: "flex-start" }}>
-          <h2 style={{ fontSize: "var(--fs-heading)", fontWeight: 600, color: "var(--fg)", margin: 0 }}>Риск корзины</h2>
-          <p style={{ fontSize: "var(--fs-data)", color: "var(--text-muted)", margin: "4px 0 0" }}>
+        <div className="terminal-header terminal-header--stack">
+          <h2 className="section-title">Риск корзины</h2>
+          <p className="panel-lead">
             Единая маржа Lighter: риск считается по всему набору позиций разом, а не по одной ноге. Выбираешь позиции из{" "}
             {markets.length ? `${markets.length} живых рынков ` : "списка живых рынков "}
             Lighter во вкладке «Терминал» — корреляции считаются по их часовым свечам.
           </p>
         </div>
 
-        <div style={{ background: "var(--bg-1)", border: "1px solid var(--line)", borderRadius: "6px", padding: "16px", marginBottom: "12px" }}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "8px", flexWrap: "wrap", marginBottom: "12px" }}>
-            <span style={{ fontSize: "var(--fs-label)", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.5px" }}>Позиции для анализа</span>
-            <button
-              onClick={() => setRiskPickerOpen(true)}
-              style={{ background: "var(--bg-2)", color: "var(--fg)", fontSize: "var(--fs-data)", fontWeight: 500, padding: "8px 12px", borderRadius: "4px", border: "none", cursor: "pointer", minHeight: "var(--touch)", whiteSpace: "normal" }}
-            >
+        <div className="terminal-panel panel-pad">
+          <div className="row-between">
+            <span className="stat-label">Позиции для анализа</span>
+            <button onClick={() => setRiskPickerOpen(true)} className="btn-ghost">
               + Добавить
             </button>
           </div>
           {riskPositions.length === 0 ? (
-            <p style={{ fontSize: "var(--fs-ui)", color: "var(--text-muted)", padding: "16px 0", textAlign: "center", margin: 0 }}>Добавь хотя бы одну позицию с разных рынков, чтобы увидеть эффект диверсификации</p>
+            <p className="list-empty">Добавь хотя бы одну позицию с разных рынков, чтобы увидеть эффект диверсификации</p>
           ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
+            <div className="stack">
               {riskPositions.map((p, i) => (
-                <div key={`${p.marketId}:${p.side}`} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", background: "var(--bg-2)", borderRadius: "4px", padding: "8px 12px" }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                    <span style={{ fontSize: "var(--fs-label)", fontFamily: "var(--font-mono)", color: p.side === "long" ? "var(--up)" : "var(--down)" }}>{p.side === "long" ? "LONG" : "SHORT"}</span>
-                    <span style={{ color: "var(--fg)", fontSize: "var(--fs-ui)", fontWeight: 500 }}>{p.symbol}</span>
+                <div key={`${p.marketId}:${p.side}`} className="list-row">
+                  <div className="row">
+                    <span className={`stat-label ${p.side === "long" ? "text-positive" : "text-negative"}`}>{p.side === "long" ? "LONG" : "SHORT"}</span>
+                    <span className="cell-name">{p.symbol}</span>
                   </div>
-                  <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                  <div className="row">
                     <input
                       type="number"
                       aria-label={`Нотионал позиции ${p.symbol}, USD`}
@@ -196,11 +193,10 @@ export default function Risk({ markets, setToast }: RiskProps) {
                         const v = Number.isFinite(raw) ? raw : 0;
                         setRiskPositions((arr) => arr.map((x, idx) => (idx === i ? { ...x, notionalUsd: v } : x)));
                       }}
-                      className="input-mono"
-                      style={{ width: "120px" }}
+                      className="input-mono input-num"
                     />
-                    <button onClick={() => removeRiskPosition(i)} aria-label="Удалить позицию" style={{ color: "var(--text-muted)", background: "none", border: "none", cursor: "pointer", padding: "15px", display: "flex", alignItems: "center", justifyContent: "center" }}>
-                      <X style={{ width: "14px", height: "14px" }} />
+                    <button onClick={() => removeRiskPosition(i)} aria-label="Удалить позицию" className="icon-btn">
+                      <X size={14} />
                     </button>
                   </div>
                 </div>
@@ -208,28 +204,27 @@ export default function Risk({ markets, setToast }: RiskProps) {
             </div>
           )}
           {riskPositions.length > 0 && (
-            <div style={{ display: "flex", gap: "8px", marginTop: "12px", flexWrap: "wrap", alignItems: "center" }}>
+            <div className="row">
               <button
                 onClick={() => void analyzePortfolioRisk()}
                 disabled={riskBusy}
-                className="btn-primary"
-                style={{ flex: 1, minWidth: "160px" }}
+                className="btn-primary btn-grow"
               >
                 {riskBusy ? (
-                  <span style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: "6px" }}>
-                    <Loader2 style={{ width: "14px", height: "14px", animation: "spin 1s linear infinite" }} />
+                  <span className="label-row">
+                    <Loader2 size={14} className="spinner" />
                     Считаю на реальных свечах…
                   </span>
                 ) : "Проанализировать"}
               </button>
               {riskPositions.length > 1 && (
-                <label style={{ display: "flex", alignItems: "center", gap: "6px", fontSize: "var(--fs-label)", color: "var(--text-muted)" }}>
+                <label className="label-row muted">
                   хедж для
                   <select
                     aria-label="Позиция, для которой ищется хедж"
                     value={Math.min(hedgeTarget, riskPositions.length - 1)}
                     onChange={(e) => setHedgeTarget(Number(e.target.value))}
-                    style={{ background: "var(--on-accent)", color: "var(--fg)", border: "1px solid var(--line-strong)", borderRadius: "4px", padding: "8px", fontFamily: "var(--font-mono)", fontSize: "var(--fs-data)", minHeight: "var(--touch)" }}
+                    className="input-mono"
                   >
                     {riskPositions.map((p, i) => (
                       <option key={`${p.marketId}:${i}`} value={i}>
@@ -242,7 +237,7 @@ export default function Risk({ markets, setToast }: RiskProps) {
               <button
                 onClick={() => void findHedge()}
                 disabled={riskBusy || riskPositions.length < 1}
-                style={{ flex: 1, minWidth: "140px", background: riskBusy ? "var(--line-strong)" : "var(--bg-2)", color: "var(--fg)", fontSize: "var(--fs-ui)", fontWeight: 600, padding: "12px 8px", borderRadius: "4px", border: "1px solid var(--line-strong)", cursor: riskBusy ? "not-allowed" : "pointer", minHeight: "44px" }}
+                className="btn-ghost btn-grow"
               >
                 Найти хедж
               </button>
@@ -251,52 +246,52 @@ export default function Risk({ markets, setToast }: RiskProps) {
         </div>
 
       {riskResult && (
-        <div style={{ background: "var(--bg-1)", border: "1px solid var(--line)", borderRadius: "6px", padding: "16px", marginBottom: "12px" }}>
-          <div style={{ fontSize: "var(--fs-label)", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "12px" }}>Результат</div>
-          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px", marginBottom: "12px" }}>
-            <div>
-              <div style={{ fontSize: "var(--fs-data)", color: "var(--text-muted)", marginBottom: "4px" }}>Наивная сумма риска</div>
-              <div className="num" style={{ color: "var(--fg)" }}>{usd(riskResult.naive_dollar_volatility, 0)}</div>
+        <div className="terminal-panel panel-pad">
+          <div className="stat-label">Результат</div>
+          <div className="desk-stats">
+            <div className="desk-stat desk-stat-lg">
+              <span className="label">Наивная сумма риска</span>
+              <b>{usd(riskResult.naive_dollar_volatility, 0)}</b>
             </div>
-            <div>
-              <div style={{ fontSize: "var(--fs-data)", color: "var(--text-muted)", marginBottom: "4px" }}>Реальный риск портфеля</div>
-              <div className="num" style={{ color: "var(--info)" }}>{usd(riskResult.portfolio_dollar_volatility, 0)}</div>
+            <div className="desk-stat desk-stat-lg">
+              <span className="label">Реальный риск портфеля</span>
+              <b className="text-info">{usd(riskResult.portfolio_dollar_volatility, 0)}</b>
             </div>
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-            <div style={{ flex: 1, height: "8px", background: "var(--bg-2)", borderRadius: "4px", overflow: "hidden" }}>
-              <div style={{ height: "100%", background: "var(--up)", width: `${Math.min(100, Math.max(0, riskResult.diversification_score * 100)).toFixed(0)}%` }} />
+          <div className="market-prob">
+            <div className="prob-bar">
+              <i style={{ width: `${Math.min(100, Math.max(0, riskResult.diversification_score * 100)).toFixed(0)}%` }} />
             </div>
-            <span style={{ fontSize: "var(--fs-data)", fontFamily: "var(--font-mono)", color: "var(--fg-2)" }}>{Math.min(100, Math.max(0, riskResult.diversification_score * 100)).toFixed(0)}% диверсификация</span>
+            <span className="stat-value secondary">{Math.min(100, Math.max(0, riskResult.diversification_score * 100)).toFixed(0)}% диверсификация</span>
           </div>
         </div>
       )}
 
       {hedgeResult && (
-        <div style={{ background: "var(--warn-faint)", border: "1px solid var(--warn-line)", borderRadius: "6px", padding: "16px" }}>
-          <div style={{ fontSize: "var(--fs-label)", color: "var(--warn)", textTransform: "uppercase", letterSpacing: "0.5px", marginBottom: "8px" }}>
+        <div className="terminal-panel panel-pad panel-warn">
+          <div className="stat-label">
             Хедж к {hedgeResult.target.symbol} ({hedgeResult.target.side})
           </div>
           {hedgeResult.suggestion ? (
-            <div>
-              <p style={{ color: "var(--fg)", fontSize: "var(--fs-ui)", margin: "0 0 4px" }}>
+            <div className="stack">
+              <p className="primary-line">
                 {hedgeResult.suggestion.hedge_notional_usd < 0 ? "Short" : "Long"}{" "}
                 <span className="num">
                   {usd(Math.abs(hedgeResult.suggestion.hedge_notional_usd), 0)}
                 </span>{" "}
                 {hedgeResult.suggestion.symbol}
               </p>
-              <p style={{ color: "var(--text-muted)", fontSize: "var(--fs-data)", margin: 0 }}>
+              <p className="muted">
                 Корреляция {(hedgeResult.suggestion.correlation_to_target * 100).toFixed(0)}% · риск позиции{" "}
                 <span className="num">{usd(hedgeResult.suggestion.unhedged_vol_usd, 0)}</span> → с хеджем{" "}
-                <span className="num" style={{ color: "var(--up)" }}>
+                <span className="num text-positive">
                   {usd(hedgeResult.suggestion.resulting_portfolio_vol_usd, 0)}
                 </span>{" "}
                 на час
               </p>
             </div>
           ) : (
-            <p style={{ color: "var(--text-muted)", fontSize: "var(--fs-ui)", margin: 0 }}>
+            <p className="muted">
               Среди 15 рынков с наибольшим открытым интересом нет такого, рядом с которым риск этой позиции снижается.
             </p>
           )}
@@ -332,9 +327,9 @@ export default function Risk({ markets, setToast }: RiskProps) {
                 </p>
               )}
               {pickerMatches.map((m) => (
-                <div key={m.market_id} className="picker-row">
-                  <span style={{ color: "var(--fg)", fontSize: "var(--fs-ui)" }}>{m.symbol}</span>
-                  <div style={{ display: "flex", gap: "6px" }}>
+                <div key={m.market_id} className="list-row">
+                  <span className="primary-line">{m.symbol}</span>
+                  <div className="row">
                     <button onClick={() => addRiskPosition(m, "long")} className="btn-primary btn-up">
                       Long
                     </button>

@@ -145,34 +145,33 @@ export default function Dashboard({ setTab, setAsset, markets }: DashboardProps)
   return (
     <div className="terminal-layout terminal-stack">
       <div className="terminal-main">
-        <div className="terminal-header" style={{ flexDirection: "column", alignItems: "flex-start" }}>
+        <div className="terminal-header terminal-header--stack">
           <div className="panel-head-row">
-            <h2 className="panel-title" style={{ fontSize: "var(--fs-heading)" }}>Рынки Lighter</h2>
+            <h2 className="section-title">Рынки Lighter</h2>
             <span className="chip chip-accent">zkLighter</span>
             <button
               onClick={() => setNonce((n) => n + 1)}
-              className="btn-ghost"
-              style={{ marginLeft: "auto" }}
+              className="btn-ghost push-right"
               title="Обновить сейчас"
             >
-              <RefreshCw style={{ width: "12px", height: "12px" }} /> обновить
+              <RefreshCw size={12} /> обновить
             </button>
             {lastUpdated && (
-              <span style={{ fontSize: "var(--fs-label)", color: "var(--text-muted)", fontFamily: "var(--font-mono)" }}>
+              <span className="section-note">
                 {lastUpdated.toLocaleTimeString("ru-RU", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
               </span>
             )}
           </div>
-          <p style={{ fontSize: "var(--fs-data)", color: "var(--text-muted)", margin: "8px 0 0 0", maxWidth: "800px" }}>
+          <p className="panel-lead">
             Перпы на zkLighter, отсортированные по фактическому $-обороту за 24 часа: оборот — сумма 24 часовых свечей по каждому
             рынку, а не поле из книги (его в /orderBooks нет). Те же строки и тот же метод, что печатает{" "}
-            <code style={{ color: "var(--fg-2)", fontSize: "var(--fs-label)" }}>/markets</code> в Telegram-боте.
+            <code>/markets</code> в Telegram-боте.
           </p>
         </div>
 
       {marketsError && (
-        <div className="terminal-header" style={{ color: "var(--accent)", fontSize: "var(--fs-data)", alignItems: "flex-start" }}>
-          <TriangleAlert style={{ width: "14px", height: "14px", marginTop: "2px", flexShrink: 0 }} />
+        <div className="notice">
+          <TriangleAlert size={14} aria-hidden="true" />
           <span>
             Обзор рынка временно недоступен. Функция требует подключённый бэкенд Wake.
           </span>
@@ -180,7 +179,7 @@ export default function Dashboard({ setTab, setAsset, markets }: DashboardProps)
       )}
 
       {!overview && !marketsError ? (
-        <div className="terminal-header" style={{ flexDirection: "column", gap: "8px" }}>
+        <div className="terminal-header terminal-header--stack">
           {[0, 1, 2, 3, 4, 5].map((i) => (
             <Skeleton key={i} height="20px" />
           ))}
@@ -188,18 +187,16 @@ export default function Dashboard({ setTab, setAsset, markets }: DashboardProps)
       ) : !overview ? (
         null
       ) : rows.length === 0 ? (
-        <div className="terminal-header" style={{ justifyContent: "center", padding: "40px 16px" }}>
-          <div>
-            <p style={{ color: "var(--fg-2)", fontSize: "var(--fs-ui)", margin: 0 }}>Ни один рынок не собрался из живых данных</p>
-            <p style={{ color: "var(--text-muted)", fontSize: "var(--fs-label)", margin: "4px 0 0 0" }}>
-              Бэкенд вернул ответ без рядов — детали в no_market / no_data ниже.
-            </p>
-          </div>
+        <div className="empty-state">
+          <p className="panel-lead">Ни один рынок не собрался из живых данных</p>
+          <p className="muted">
+            Бэкенд вернул ответ без рядов — детали в no_market / no_data ниже.
+          </p>
         </div>
       ) : (
         <div className="terminal-panel">
           <div className="table-scroll">
-          <table className="data-table" style={{ minWidth: "700px" }} aria-label="Рынки Lighter">
+          <table className="data-table data-table--fit" aria-label="Рынки Lighter">
             <thead>
               <tr>
                 <th scope="col">#</th>
@@ -223,33 +220,33 @@ export default function Dashboard({ setTab, setAsset, markets }: DashboardProps)
               {visible.map((r, i) => (
                 <tr key={r.market_id} data-action onClick={() => openMarket(r)}>
                   <td className="muted num">{i + 1}</td>
-                  <td className="left" style={{ color: "var(--fg)", fontWeight: 600 }}>{r.symbol}</td>
-                  <td className="right num" style={{ color: "var(--fg)" }}>{fmtPrice(r.price)}</td>
-                  <td className={`right num ${r.change_24h >= 0 ? "text-positive" : "text-negative"}`} style={{ fontWeight: 500 }}>
+                  <td className="left cell-name">{r.symbol}</td>
+                  <td className="right num">{fmtPrice(r.price)}</td>
+                  <td className={`right num cell-em ${r.change_24h >= 0 ? "text-positive" : "text-negative"}`}>
                     {fmtPct(r.change_24h)}
                   </td>
-                  <td className="right num" style={{ color: "var(--fg-2)" }}>{fmtUsdCompact(r.quote_volume_24h)}</td>
-                  <td className="right num" style={{ color: "var(--fg-2)" }}>
+                  <td className="right num secondary">{fmtUsdCompact(r.quote_volume_24h)}</td>
+                  <td className="right num secondary">
                     {r.funding_hourly == null ? "—" : (r.funding_hourly * 100).toFixed(4)}
                   </td>
-                  <td className="right num" style={{ color: "var(--fg)", fontWeight: 500 }}>
+                  <td className="right num cell-em">
                     {r.funding_annualized == null ? "—" : `${(r.funding_annualized * 100).toFixed(1)}%`}
                   </td>
                   <td className="left">
                     {r.funding_payer == null ? (
                       <span className="muted">нет ставки</span>
                     ) : r.funding_payer === "long" ? (
-                      <span className="text-positive" style={{ fontWeight: 500 }}>лонги</span>
+                      <span className="text-positive cell-em">лонги</span>
                     ) : r.funding_payer === "short" ? (
-                      <span className="text-negative" style={{ fontWeight: 500 }}>шорты</span>
+                      <span className="text-negative cell-em">шорты</span>
                     ) : (
                       <span className="muted">никто (0%)</span>
                     )}
                   </td>
-                  <td className="right num" style={{ color: "var(--fg-2)" }}>
+                  <td className="right num secondary">
                     {r.open_interest_base > 0 ? r.open_interest_base.toLocaleString("en-US", { maximumFractionDigits: 2 }) : "—"}
                   </td>
-                  <td className="right num" style={{ color: "var(--fg-2)" }}>
+                  <td className="right num secondary">
                     {r.min_base_amount > 0 ? r.min_base_amount.toLocaleString("en-US", { maximumFractionDigits: 6 }) : "—"}
                   </td>
                   <td className="right">
@@ -263,7 +260,7 @@ export default function Dashboard({ setTab, setAsset, markets }: DashboardProps)
                         openMarket(r);
                       }}
                     >
-                      <ArrowRight style={{ width: "12px", height: "12px" }} />
+                      <ArrowRight size={12} />
                     </button>
                   </td>
                 </tr>
@@ -276,56 +273,50 @@ export default function Dashboard({ setTab, setAsset, markets }: DashboardProps)
               сеть {overview?.network} · рядов {rows.length}
             </span>
             {rows.length > SHOWN_BY_DEFAULT && (
-              <button
-                onClick={() => setShowAll((v) => !v)}
-                className="link-action"
-                style={{ fontSize: "inherit" }}
-              >
+              <button onClick={() => setShowAll((v) => !v)} className="link-action">
                 {showAll ? "свернуть" : `показать все ${rows.length}`}
               </button>
             )}
-            {missing.length > 0 && <span style={{ color: "var(--fg-2)" }}>без данных: {missing.join(", ")}</span>}
+            {missing.length > 0 && <span className="secondary">без данных: {missing.join(", ")}</span>}
           </div>
         </div>
       )}
 
-      <div className="terminal-header" style={{ flexDirection: "column", alignItems: "flex-start" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: "12px", width: "100%", flexWrap: "wrap" }}>
-          <h2 style={{ fontSize: "var(--fs-heading)", fontWeight: 600, color: "var(--fg)", margin: 0 }}>Рынки Arcus</h2>
+      <div className="terminal-header terminal-header--stack">
+        <div className="panel-head-row">
+          <h2 className="section-title">Рынки Arcus</h2>
           <span className="chip chip-up">Robinhood Chain</span>
           {arcusError && (
-            <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: "6px", fontSize: "var(--fs-label)", color: "var(--accent)" }}>
-              <TriangleAlert style={{ width: "12px", height: "12px" }} />
+            <div className="head-alert">
+              <TriangleAlert size={12} aria-hidden="true" />
               <span>{Object.keys(arcusPrices).length ? "Arcus не отвечает — показаны последние котировки" : "Arcus не отвечает"}</span>
             </div>
           )}
         </div>
-        <p style={{ fontSize: "var(--fs-data)", color: "var(--text-muted)", margin: "8px 0 0 0", maxWidth: "800px" }}>
-          Рынки из публичного API Arcus — все perpetual (поле <code style={{ color: "var(--fg-2)", fontSize: "var(--fs-label)" }}>type</code> = PERPETUAL), класс актива: крипта, акции, сырьё или индекс. Mid-цены с{" "}
-          <code style={{ color: "var(--fg-2)", fontSize: "var(--fs-label)" }}>api.arcus.xyz/v1/mids</code> каждые 30 секунд; это середина котировок, не цена исполнения. Funding читается из ответа{" "}
-          <code style={{ color: "var(--fg-2)", fontSize: "var(--fs-label)" }}>v1/markets</code>, а не пересчитывается: начисление почасовое, годовая = ставка × 24 × 365 для крипты и × 24 × 360 для RWA.
+        <p className="panel-lead">
+          Рынки из публичного API Arcus — все perpetual (поле <code>type</code> = PERPETUAL), класс актива: крипта, акции, сырьё или индекс. Mid-цены с{" "}
+          <code>api.arcus.xyz/v1/mids</code> каждые 30 секунд; это середина котировок, не цена исполнения. Funding читается из ответа{" "}
+          <code>v1/markets</code>, а не пересчитывается: начисление почасовое, годовая = ставка × 24 × 365 для крипты и × 24 × 360 для RWA.
         </p>
       </div>
 
       {arcusMarkets.length === 0 && !arcusError ? (
-        <div className="terminal-header" style={{ flexDirection: "column", gap: "8px" }}>
+        <div className="terminal-header terminal-header--stack">
           {[0, 1, 2, 3].map((i) => (
             <Skeleton key={i} height="20px" />
           ))}
         </div>
       ) : arcusMarkets.length === 0 ? (
-        <div className="terminal-header" style={{ justifyContent: "center", padding: "40px 16px" }}>
-          <div>
-            <p style={{ color: "var(--fg-2)", fontSize: "var(--fs-ui)", margin: 0 }}>Arcus не вернул рынков</p>
-            <p style={{ color: "var(--text-muted)", fontSize: "var(--fs-label)", margin: "4px 0 0 0" }}>
-              API доступен, но список markets пуст.
-            </p>
-          </div>
+        <div className="empty-state">
+          <p className="panel-lead">Arcus не вернул рынков</p>
+          <p className="muted">
+            API доступен, но список markets пуст.
+          </p>
         </div>
       ) : (
         <div className="terminal-panel">
           <div className="table-scroll">
-          <table className="data-table" style={{ minWidth: "860px" }} aria-label="Рынки Arcus">
+          <table className="data-table data-table--fit" aria-label="Рынки Arcus">
             <thead>
               <tr>
                 <th scope="col">#</th>
@@ -366,7 +357,7 @@ export default function Dashboard({ setTab, setAsset, markets }: DashboardProps)
                   >
                     <td className="muted num">{i + 1}</td>
                     <td className="left">
-                      <div style={{ color: "var(--fg)", fontWeight: 600 }}>{m.marketDisplayName}</div>
+                      <div className="cell-name">{m.marketDisplayName}</div>
                       <div className="muted num">{m.baseAsset}/{m.quoteAsset}</div>
                     </td>
                     <td className="left">
@@ -376,19 +367,19 @@ export default function Dashboard({ setTab, setAsset, markets }: DashboardProps)
                         <span className="muted">нет класса</span>
                       )}
                     </td>
-                    <td className="right num" style={{ color: "var(--fg)", fontWeight: 500 }}>
+                    <td className="right num cell-em">
                       {price ? fmtPrice(Number(price)) : "—"}
                     </td>
-                    <td className="right num" style={{ color: "var(--fg-2)" }}>
+                    <td className="right num secondary">
                       {hourly === null ? "—" : (hourly * 100).toFixed(4)}
                     </td>
-                    <td className="right num" style={{ color: "var(--fg)", fontWeight: 500 }}>
+                    <td className="right num cell-em">
                       {annual === null ? "—" : `${(annual * 100).toFixed(1)}%`}
                     </td>
-                    <td className="right num" style={{ color: "var(--fg-2)" }}>{m.tickSize}</td>
-                    <td className="right num" style={{ color: "var(--fg-2)" }}>{m.stepSize}</td>
+                    <td className="right num secondary">{m.tickSize}</td>
+                    <td className="right num secondary">{m.stepSize}</td>
                     <td className="left">
-                      <span className={online ? "text-positive" : "muted"} style={{ fontWeight: online ? 500 : 400 }}>
+                      <span className={online ? "text-positive cell-em" : "muted"}>
                         {online ? "торгуется" : "выключен"}
                       </span>
                     </td>
@@ -405,7 +396,7 @@ export default function Dashboard({ setTab, setAsset, markets }: DashboardProps)
                             setTab("terminal");
                           }}
                         >
-                          <ArrowRight style={{ width: "12px", height: "12px" }} />
+                          <ArrowRight size={12} />
                         </button>
                       ) : (
                         <span className="muted">нет на Lighter</span>
@@ -425,81 +416,81 @@ export default function Dashboard({ setTab, setAsset, markets }: DashboardProps)
         </div>
       )}
 
-      <div className="terminal-header" style={{ flexDirection: "column", alignItems: "flex-start" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: "8px", width: "100%" }}>
-          <BarChart3 style={{ width: "14px", height: "14px", color: "var(--info)" }} />
-          <h3 style={{ fontSize: "var(--fs-ui)", fontWeight: 600, color: "var(--fg)", margin: 0 }}>Predict — открытые рынки</h3>
-          <button onClick={() => setTab("predict")} className="link-action" style={{ marginLeft: "auto", fontSize: "var(--fs-label)", gap: "4px" }}>
-            торговать <ArrowRight style={{ width: "12px", height: "12px" }} />
+      <div className="terminal-header terminal-header--stack">
+        <div className="panel-head-row">
+          <BarChart3 size={14} className="text-info" aria-hidden="true" />
+          <h3 className="sub-title">Predict — открытые рынки</h3>
+          <button onClick={() => setTab("predict")} className="link-action push-right">
+            торговать <ArrowRight size={12} />
           </button>
         </div>
       </div>
         {predictError ? (
-          <div style={{ background: "var(--bg-2)", border: "1px solid var(--warn-line)", borderRadius: "6px", padding: "12px 16px", fontSize: "var(--fs-data)", color: "var(--warn)" }}>
+          <div className="notice notice-warn">
             Открытые рынки Predict временно недоступны. Функция требует подключённый бэкенд Wake.
           </div>
         ) : predict === null ? (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: "8px" }}>
+          <div className="card-grid">
             {[0, 1].map((i) => (
-              <div key={i} style={{ background: "var(--bg-1)", border: "1px solid var(--line)", borderRadius: "6px", padding: "16px" }}>
-                <div style={{ height: "12px", width: "96px", background: "var(--bg-2)", borderRadius: "3px", animation: "wakeShimmer 1.6s ease-in-out infinite" }} />
-                <div style={{ marginTop: "12px", height: "16px", background: "var(--bg-2)", borderRadius: "3px", animation: "wakeShimmer 1.6s ease-in-out infinite" }} />
-                <div style={{ marginTop: "8px", height: "6px", background: "var(--bg-2)", borderRadius: "3px", animation: "wakeShimmer 1.6s ease-in-out infinite" }} />
+              <div key={i} className="sk-card">
+                <Skeleton height="12px" width="96px" />
+                <Skeleton height="16px" />
+                <Skeleton height="6px" />
               </div>
             ))}
           </div>
         ) : predict.length === 0 ? (
-          <div style={{ background: "var(--bg-1)", border: "1px solid var(--line)", borderRadius: "6px", padding: "16px", fontSize: "var(--fs-data)", color: "var(--text-muted)" }}>
+          <div className="notice">
             Открытых рынков нет. Резолвленные с исходами — во вкладке Predict; создать рынок может только куратор
             (POST /predict/markets/price или /predict/markets/event с X-Curator-Token).
           </div>
         ) : (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))", gap: "8px" }}>
+          <div className="card-grid">
             {predict.slice(0, 4).map((m) => (
               <button key={m.id} className="nav-card" onClick={() => setTab("predict")}>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "8px" }}>
-                  <span style={{ fontSize: "var(--fs-label)", color: "var(--text-muted)", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                <div className="market-card-head">
+                  <span className="label">
                     {m.kind === "price" ? "цена на Lighter" : "событие"}
                   </span>
-                  <span style={{ fontSize: "var(--fs-label)", color: "var(--text-muted)" }}>{predictTimeLeft(m.resolve_at)}</span>
+                  <span className="sub-label push-right">{predictTimeLeft(m.resolve_at)}</span>
                 </div>
-                <div style={{ color: "var(--fg)", fontSize: "var(--fs-ui)", marginBottom: "12px" }}>{m.question}</div>
-                <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-                  <div style={{ flex: 1, height: "6px", background: "var(--bg-2)", borderRadius: "3px", overflow: "hidden" }}>
-                    <div style={{ height: "100%", background: "var(--up)", width: `${m.price_yes * 100}%` }} />
-                  </div>
-                  <span style={{ fontSize: "var(--fs-label)", fontFamily: "var(--font-mono)", color: "var(--fg-2)" }}>{(m.price_yes * 100).toFixed(0)}% YES</span>
-                  <span style={{ fontSize: "var(--fs-label)", fontFamily: "var(--font-mono)", color: "var(--text-muted)" }}>
-                    {fmtUsdCompact(m.volume_usd)} · {m.trade_count} сдел.
+                <p className="market-question">{m.question}</p>
+                <div className="market-prob">
+                  <span className="prob-bar">
+                    <i style={{ width: `${m.price_yes * 100}%` }} />
                   </span>
+                  <span className="num prob-value">{(m.price_yes * 100).toFixed(0)}% YES</span>
                 </div>
+                <p className="sub-label num">
+                  {fmtUsdCompact(m.volume_usd)} · {m.trade_count} сдел.
+                </p>
               </button>
             ))}
           </div>
         )}
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(250px, 1fr))", gap: "8px" }}>
+      <div className="card-grid">
         <button className="nav-card" onClick={() => setTab("discover")}>
-          <Users style={{ width: "14px", height: "14px", color: "var(--info)", marginBottom: "8px" }} />
-          <div style={{ color: "var(--fg)", fontWeight: 500, fontSize: "var(--fs-ui)", marginBottom: "4px" }}>Копирование сделок</div>
-          <div style={{ color: "var(--text-muted)", fontSize: "var(--fs-label)", lineHeight: 1.5 }}>
+          <Users size={14} className="text-info" aria-hidden="true" />
+          <span className="nav-card-title">Копирование сделок</span>
+          <span className="nav-card-body">
             Лидер торгует своим депозитом; его сделка повторяется пропорционально аллокации. Комиссия — б.п. от скопированной сделки,
             в базе она объявлена и пока не списывается.
-          </div>
+          </span>
         </button>
         <button className="nav-card" onClick={() => setTab("risk")}>
-          <ShieldAlert style={{ width: "14px", height: "14px", color: "var(--accent)", marginBottom: "8px" }} />
-          <div style={{ color: "var(--fg)", fontWeight: 500, fontSize: "var(--fs-ui)", marginBottom: "4px" }}>Риск корзины</div>
-          <div style={{ color: "var(--text-muted)", fontSize: "var(--fs-label)", lineHeight: 1.5 }}>
+          <ShieldAlert size={14} className="text-accent" aria-hidden="true" />
+          <span className="nav-card-title">Риск корзины</span>
+          <span className="nav-card-body">
             30 часовых закрытий, волатильность корзины и подбор хеджа из реальных рынков.
-          </div>
+          </span>
         </button>
         <button className="nav-card" onClick={() => setTab("funding")}>
-          <Percent style={{ width: "14px", height: "14px", color: "var(--up)", marginBottom: "8px" }} />
-          <div style={{ color: "var(--fg)", fontWeight: 500, fontSize: "var(--fs-ui)", marginBottom: "4px" }}>Funding и carry</div>
-          <div style={{ color: "var(--text-muted)", fontSize: "var(--fs-label)", lineHeight: 1.5 }}>
+          <Percent size={14} className="text-positive" aria-hidden="true" />
+          <span className="nav-card-title">Funding и carry</span>
+          <span className="nav-card-body">
             Ставки Lighter рядом с Binance, Bybit и Hyperliquid. Дельта-нейтральная связка с округлением под минимальный лот.
-          </div>
+          </span>
         </button>
       </div>
       </div>
