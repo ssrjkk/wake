@@ -1,7 +1,13 @@
 # pip install -r requirements.txt --break-system-packages
 
 # Core
-lighter-sdk>=1.1.8
+# Нижняя граница 1.1.9 (PyPI, опубликован 2026-11-18) — не косметика: 1.1.8
+# требует urllib3<2.1.0, то есть держит в наборе непатченный urllib3 2.0.7, а
+# pip-audit в CI больше не исключает ни одной адвизории — на 1.1.8 он краснеет
+# сам. Шаг «lighter-sdk must still allow a patched urllib3» в ci.yml сторонит
+# обратное: если предел вернётся upstream, список исключений придётся вернуть
+# вместе с таблицей в SECURITY.md, а не тихо пропустить дыру.
+lighter-sdk>=1.1.9
 fastapi
 # starlette импортируется напрямую (app.py берёт из неё HTTPException,
 # run_in_threadpool — семь модулей), а не только через fastapi. Без этой строки

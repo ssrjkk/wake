@@ -54,51 +54,29 @@ jobs:
         run: pip install pip-audit --quiet
       - name: Scan dependencies for vulnerabilities
         working-directory: backend
-        # urllib3 остаётся на 2.0.7, потому что lighter-sdk жёстко требует
-        # urllib3<2.1.0 (проверяется следующим шагом, а не глазами по
-        # `pip show`: проверка обязана краснеть в тот день, когда кап снимут).
-        # Каждая запись ниже — адвизория urllib3, у которой фикс лежит выше этого
-        # предела, то есть в этом проекте она неустранима иначе, чем снятием пина
-        # upstream. Список ведётся по обоим идентификаторам (CVE и PYSEC): алиасы
-        # pip-audit разрешает, и замер 2026-11-11 показал, что каждого из наборов
-        # по отдельности хватает, — оба здесь, чтобы строка лога называла ту же
-        # адвизорию, что SECURITY.md, независимо от того, какое имя отдаст OSV.
-        # Совпадение этого списка с таблицей SECURITY.md сверяет
-        # backend/test_local_gate_parity.py. Обзор риска и условие, при котором
-        # исключения снимаются, — там же.
-        run: |
-          pip-audit -r requirements.txt --strict \
-            --ignore-vuln CVE-2024-37891 \
-            --ignore-vuln CVE-2025-50181 \
-            --ignore-vuln CVE-2025-66418 \
-            --ignore-vuln CVE-2025-66471 \
-            --ignore-vuln CVE-2026-21441 \
-            --ignore-vuln CVE-2026-44431 \
-            --ignore-vuln CVE-2026-97687 \
-            --ignore-vuln CVE-2026-97689 \
-            --ignore-vuln PYSEC-2026-141 \
-            --ignore-vuln PYSEC-2026-1994 \
-            --ignore-vuln PYSEC-2026-1995 \
-            --ignore-vuln PYSEC-2026-1996 \
-            --ignore-vuln PYSEC-2026-1998 \
-            --ignore-vuln PYSEC-2026-1999 \
-            --ignore-vuln PYSEC-2026-4175 \
-            --ignore-vuln PYSEC-2026-4177
-      - name: Upstream cap on urllib3 must still be binding
-        # Вопросы «а нельзя уже убрать исключения» здесь решаются не памяти
-        # оператора, а реальным резолвером pip: пока lighter-sdk не отдаёт
-        # пропатченный urllib3, эта установка неразрешима, и шаг зелёный со
-        # внятной строкой в логе. В день, когда upstream снимет предел, pip
-        # соберёт такой set, шаг покраснеет и скажет, какой список править, —
-        # вместо того чтобы ещё один релиз пройти с действующими исключениями.
+        # Исключений нет ни одного, и это не забывчивость, а событие: 2026-11-18
+        # lighter-sdk 1.1.9 снял предел urllib3<2.1.0, из-за которого в наборе и
+        # висел непатченный urllib3 вместе с 16 записями --ignore-vuln (8 CVE и 8
+        # PYSEC-алиасов одних и тех же адвизорий). Замер 2026-11-19:
+        # `pip-audit -r requirements.txt --strict` без единого флага — «No known
+        # vulnerabilities found», exit 0. Следующий шаг краснеет в тот день,
+        # когда предел вернётся: тогда же надо вернуть и список здесь, и таблицу
+        # в SECURITY.md, а не молча оставить набор с дырой.
+        run: pip-audit -r requirements.txt --strict
+      - name: lighter-sdk must still allow a patched urllib3
+        # Обратная сторона снятых исключений: вопрос «а можно было их убрать»
+        # здесь решает не память оператора, а резолвер pip. В день, когда
+        # lighter-sdk снова запретит urllib3>=2.1.0, эта установка станет
+        # неразрешимой, шаг покраснеет и скажет, какой список возвращать, —
+        # вместо того чтобы ещё один релиз пройти с молча действующим пределом.
         # Сеть здесь не маскируется: pip-audit выше падает без PyPI сам.
         run: |
-          if pip install --dry-run --ignore-installed --quiet \
-               "urllib3>=2.1.0" "lighter-sdk>=1.1.8" >/dev/null 2>&1; then
-            echo "::error::lighter-sdk больше не запрещает urllib3>=2.1.0: снимите --ignore-vuln в шаге аудита и перепишите раздел «Проверка зависимостей» в SECURITY.md"
+          if ! pip install --dry-run --ignore-installed --quiet \
+               "urllib3>=2.1.0" "lighter-sdk>=1.1.9" >/dev/null 2>&1; then
+            echo "::error::предел urllib3<2.1.0 вернулся: верните --ignore-vuln в шаг аудита и таблицу в раздел «Dependency auditing» / «Проверка зависимостей» SECURITY.md"
             exit 1
           fi
-          echo "cap держится: urllib3>=2.1.0 неразрешим с lighter-sdk>=1.1.8"
+          echo "предела нет: urllib3>=2.1.0 разрешим вместе с lighter-sdk>=1.1.9"
 
   # ── Backend tests (pytest + Allure) ──────────────────────────────────────
   backend-tests:
@@ -238,25 +216,16 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Audit frontend dependencies
-        # Замер 2026-11-17: голая `npm audit` здесь краснеет из-за
-        # GHSA-fc5q-39xc-vjpf (picomatch, ReDoS, CWE-1333, CVSS 7.5). Адвизория
-        # опубликована 19.10, но диапазон `<= 4.0.7` в неё дописан 17.11 в
-        # 15:56Z, а `first_patched_version` остаётся null: пропатченного выпуска
-        # нет, и 4.0.7 — это latest. `npm audit fix --force` при этом предлагает
-        # vite 6.2.7 вместо 8.3.8, то есть откат через мажор, а не исправление.
-        # Разбор риска и условие снятия исключения — SECURITY.md, раздел про
-        # npm; скрипт сверяет продакшен-граф (исключений нет) и dev-граф
-        # (исключения названы GHSA-id, краснеет и на новую адвизорию, и на то,
-        # что список стал длиннее дерева).
-        run: node scripts/audit-check.mjs --ignore GHSA-fc5q-39xc-vjpf
-      - name: Upstream fix for the ignored npm advisory must still be missing
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        # Обратная сторона предыдущего шага, как `pip install --dry-run` после
-        # pip-audit: краснеет не в день, когда дыра появилась, а в день, когда
-        # она стала устранима. Пока исключение живёт в ci.yml без проверки, что
-        # патча всё ещё нет, оно переживает собственный резон.
-        run: node scripts/advisory-fix-check.mjs GHSA-fc5q-39xc-vjpf
+        # Замер 2026-11-19: `node scripts/audit-check.mjs` без единого --ignore —
+        # 0 адвизорий в продакшен-графе и 0 в dev-графе, exit 0. До 17 ноября
+        # здесь жила одна адвизория picomatch (GHSA-fc5q-39xc-vjpf, ReDoS,
+        # CVSS 7.5) с `first_patched_version: null`, и шаг держал её исключением;
+        # в этом прогоне npm её не вернул, то есть исключение стало проверкой
+        # пустоты. Отдельный шаг-страж «патча всё ещё нет» заодно удалён: без
+        # исключений он проверял бы ничего, а контракт «исключение обязано
+        # умирать» остаётся в самом audit-check — он краснеет и на новую
+        # адвизорию, и на то, что список стал длиннее дерева.
+        run: node scripts/audit-check.mjs
       - name: ESLint
         run: npm run lint -- --max-warnings 0
       - name: TypeScript type check

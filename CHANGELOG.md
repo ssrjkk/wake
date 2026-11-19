@@ -34,8 +34,19 @@ measured number goes stale while the text around it still looks fine.
   к шкале переписало бы ритм интерфейса ради красивого гейта. Проверено
   мутацией: `.panel-pad { padding: 13px }` краснеет четырьмя нарушениями на
   панель и называет класс; после отката — зелено, `git diff` пуст.
-
-### Added
+- Пустое множество исключений стало состоянием, которое проверяется, а не
+  отсутствием проверки. В `backend/test_local_gate_parity.py` добавлены
+  `section_body`, `empty_state_findings` и словарь маркеров: при нулевом списке
+  `--ignore-vuln` в ci.yml обе половины SECURITY.md обязаны нести строку
+  «Exceptions: none.» / «Исключений нет.» и не нести таблицы адвизорий, при
+  ненулевом — наоборот, а маркер рядом с живыми исключениями краснеет тоже.
+  Якорь по команде шага (`pip-audit -r requirements.txt --strict`) отличает
+  «исключений нет» от «разбор ничего не увидел»: без него опустевший ci.yml
+  выглядел бы зелёным. Краснота проверена мутациями: фантомная таблица при
+  пустом списке — одно падение, снятый русский маркер — одно, возврат обоих
+  исключений в ci.yml — три падения (обе половины документа и отсутствующий
+  страж), переименование метки в `scripts/gate.sh` — одно. После откатов sha256
+  всех трёх файлов совпали с замером до мутаций, `git diff` пуст.
 - `scripts/audit-check.mjs` и `scripts/advisory-fix-check.mjs` — аудит npm-зависимостей
   перестал быть одной `npm audit`. Причина живая: 2026-11-17 в 15:56Z адвизорию
   GHSA-fc5q-39xc-vjpf (`picomatch`, ReDoS, CWE-1333, CVSS 7.5) расширили диапазоном
@@ -1048,6 +1059,18 @@ measured number goes stale while the text around it still looks fine.
   выглядит чужой ошибкой.
 
 ### Changed
+- Исключения аудита зависимостей обнулились не решением человека, а шагом,
+  который для этого дня и был написан. `lighter-sdk` 1.1.9 (PyPI, опубликован
+  2026-11-18T14:15:03Z) заменил `urllib3<2.1.0` на `urllib3>=1.25.3`, и обратный
+  гейт в `backend-security` собрал set с пропатченным urllib3 — то есть покраснел
+  ровно так, как обещал. Замеры 2026-11-19: `pip-audit -r requirements.txt
+  --strict` без единого флага — `No known vulnerabilities found`, exit 0;
+  `pip install --dry-run "urllib3>=2.1.0" "lighter-sdk==1.1.8"` —
+  ResolutionImpossible, exit 1, значит страж краснеет на живом релизе с пределом,
+  а не на выдуманном ограничении. Нижняя граница SDK в
+  `backend/requirements.txt` поднята до 1.1.9: на 1.1.8 непатченный urllib3
+  возвращался бы транзитом, а исключений, которые бы это закрыли, в CI больше
+  нет.
 - `src/index.css`, `src/App.tsx`, `src/components/{Risk,Terminal,OrderBookPanel,Portfolio,TelegramLogin,Agent,Dashboard}.tsx`
   — волна добрана до остальных панелей. Счёт ведётся командой
   `git grep -o 'style=' <ревизия> -- src/components/*.tsx src/App.tsx | wc -l`,
@@ -1437,6 +1460,19 @@ measured number goes stale while the text around it still looks fine.
   blue for both buy and sell; it now reads the way the Terminal order ticket does.
 
 ### Removed
+- Два мёртвых исключения и шаг-страж над одним из них. Шестнадцать `--ignore-vuln`
+  из шага `pip-audit` — восемь адвизорий urllib3, названных дважды по CVE и по
+  PYSEC-алиасу, — ушли вместе с причиной: пределом `urllib3<2.1.0`, которого
+  больше нет. `--ignore GHSA-fc5q-39xc-vjpf` ушёл, потому что `npm audit` больше
+  не возвращает эту адвизорию (замер 2026-11-19: `node scripts/audit-check.mjs`
+  без аргументов — 0 в продакшен-графе, 0 в dev-графе, 0 разобранных
+  исключений, exit 0), а парный шаг `Upstream fix for the ignored npm advisory
+  must still be missing` — потому что страж над пустым списком проверяет
+  пустоту, и `test_an_empty_exception_list_removes_the_guard_step` не оставляет
+  ему на это права. `scripts/advisory-fix-check.mjs` остался в репозитории: это
+  инструмент на день возврата исключения, а не шаг для списка, которого нет, и
+  `test_the_guard_tool_stays_for_the_next_exception` сторожит именно файл,
+  потому что без него следующее исключение вернётся однополовинным.
 - Шестнадцать объявлений темы, которых не читал ни один файл: блок «Старые
   имена» в `src/index.css` (`--bg-primary` … `--text-tertiary`, `--orange`,
   `--blue`, `--yellow` — 14 алиасов) и `--green` с `--red`, повторявшие
@@ -1492,6 +1528,16 @@ measured number goes stale while the text around it still looks fine.
   импортов ни в `src/`, ни в `e2e/` не осталось.
 
 ### Fixed
+- `backend/test_inline_style_budget.py` не проходил `ruff format --check .` —
+  шаг CI `backend-lint / Format check` на залитом `ef8af57` покраснел
+  («Would reformat: test_inline_style_budget.py, 1 file would be reformatted,
+  99 files already formatted»), хотя четыре приёмочные команды были зелёные.
+  Причина не в дереве, а в списке: приёмка (`unittest discover`, `npm run
+  build`, `npm run test:run`, `npx playwright test`) этого шага не содержит, а
+  `scripts/gate.sh` содержит — в тот прогон он не запускался. Починено
+  `ruff format` по одному файлу; замер после: `ruff format --check .` —
+  «100 files already formatted», exit 0, тем же ruff 0.15.8, что стоит пином
+  в ci.yml.
 - `src/components/Funding.tsx`, `src/index.css` — чип-фильтр «только там, где есть и
   перп, и спот» на 320 px при удвоенной шкале занимал 553 px в полосе шириной 270 px и
   уезжал за правый край панели: базовый `.chip` держит `nowrap`. Для чипа, который

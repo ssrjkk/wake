@@ -327,89 +327,78 @@ market in one tick, and two parallel claims by the same user must pay once.
 
 ### Dependency auditing
 
-CI runs `pip-audit --strict` against `backend/requirements.txt`. Audit errors
-and advisories outside the exact list below fail the job, including new urllib3
-advisories. The frontend is audited as two graphs — what ships in `dist` and
-what only runs on the build machine — and the split is described in
-«npm dependency auditing» below.
+CI runs `pip-audit --strict` against `backend/requirements.txt` with no
+exceptions: any advisory and any audit error fails the job. The frontend is
+audited as two graphs — what ships in `dist` and what only runs on the build
+machine — and the split is described in «npm dependency auditing» below.
 
-The following urllib3 advisories were reviewed on 2026-10-25. `lighter-sdk`
-1.1.8 — published 2026-10-19 and still the newest release — requires
-`urllib3<2.1.0`, and `pip install --dry-run "urllib3>=2.1.0" "lighter-sdk>=1.1.8"`
-is unsolvable, so a patched urllib3 cannot be installed at all. CI checks that
-resolution instead of trusting this paragraph: the step after the audit fails on
-the first day the cap lifts, and says which list to delete.
+**Exceptions: none.**
 
-What actually touches urllib3 in this dependency set: `lighter/configuration.py`
-imports it for the logger name and retry constants, and the legacy generated
-`openapi_client` transport uses its pool — neither is on the order path. That
-path is the async `SignerClient`, whose REST calls go through aiohttp; the only
-requests-based (and therefore urllib3-based) call in the package is the
-synchronous nonce fallback, which the async path does not reach. Wake's own reads
-of market data use the standard library (`backend/lighter_rest.py`), not urllib3.
-Nothing here configures urllib3 proxy TLS, calls its low-level cross-origin proxy
-API, or streams a response through it.
+This list was not always empty. Until 2026-11-19 the audit step carried 16
+`--ignore-vuln` entries — the same eight urllib3 advisories written twice, once
+as CVE and once as the PYSEC id `pip-audit` prints — reviewed 2026-10-25. They
+existed for one reason: `lighter-sdk` 1.1.8 required `urllib3<2.1.0`, and
+`pip install --dry-run "urllib3>=2.1.0" "lighter-sdk>=1.1.8"` did not resolve, so
+a patched urllib3 could not be installed at all.
 
-These are bounded exceptions, not fixes: do not expose the signing service (the
-Host gate refuses it by default), add untrusted SDK hosts, or introduce those
-HTTP paths without revisiting the exceptions. Remove the exceptions when the SDK permits an update.
+The cap is gone. `lighter-sdk` 1.1.9 (PyPI, published 2026-11-18) replaced
+`urllib3<2.1.0` with `urllib3>=1.25.3`, so `backend/requirements.txt` now floors
+the SDK at 1.1.9. Measured 2026-11-19: `pip-audit -r requirements.txt --strict`
+without a single flag — `No known vulnerabilities found`, exit 0. The
+exceptions were deleted rather than left in place, because an exclusion whose
+reason has disappeared is a mute button, and the reason here was the cap, not
+the advisories.
 
-Each exclusion is listed twice, once by its CVE id and once by the PYSEC id that
-`pip-audit` prints. This is presentation, not a workaround: aliases are resolved,
-and on 2026-11-11 each half alone satisfied the audit (14 ignored, exit 0), so
-neither identifier is load-bearing on its own. What is checked is that the
-exclusion list and this table name the same set —
-`backend/test_local_gate_parity.py` fails if an advisory is ignored in CI but
-absent here, or documented but no longer excluded.
+The step after the audit watches the other direction.
+`lighter-sdk must still allow a patched urllib3` asks pip to resolve
+`"urllib3>=2.1.0" "lighter-sdk>=1.1.9"` and reddens the day that set becomes
+unsolvable again — which is the day the exceptions come back, together with the
+table this section no longer has. `backend/test_local_gate_parity.py` checks
+that ci.yml and both language halves of this section name the same exception set
+in both states: a table here with no `--ignore-vuln` in CI is as red as the
+reverse, and so is a marker line sitting next to live exceptions.
 
-| Advisory | Also published as | Affected path |
-| --- | --- | --- |
-| CVE-2024-37891 | PYSEC-2026-1995 | Proxy authorization header forwarded across origins |
-| CVE-2025-50181 | PYSEC-2026-1999 | Pool-level redirect limits ignored |
-| CVE-2025-66418 | PYSEC-2026-1998 | Unbounded chained response decompression |
-| CVE-2025-66471 | PYSEC-2026-1994 | Streaming response decompression exceeds read limits |
-| CVE-2026-21441 | PYSEC-2026-1996 | Redirect response decompression during streaming |
-| CVE-2026-44431 | PYSEC-2026-141 | Sensitive headers forwarded by the low-level proxy API |
-| CVE-2026-97687 | PYSEC-2026-4175 | Proxy and target TLS policies mixed |
-| CVE-2026-97689 | PYSEC-2026-4177 | Unbounded chunk-size field while streaming |
-
-The decompression exceptions remain residual risk for dependency code that reads
-responses in full; trusted HTTPS hosts reduce exposure but do not remove it.
+What the exceptions used to cover, kept because it explains the exposure rather
+than a current risk: `lighter/configuration.py` imports urllib3 for the logger
+name and retry constants, and the legacy generated `openapi_client` transport
+uses its pool — neither is on the order path. That path is the async
+`SignerClient`, whose REST calls go through aiohttp; the only requests-based
+(and therefore urllib3-based) call in the package is the synchronous nonce
+fallback, which the async path does not reach. Wake's own reads of market data
+use the standard library (`backend/lighter_rest.py`), not urllib3. Nothing here
+configures urllib3 proxy TLS, calls its low-level cross-origin proxy API, or
+streams a response through it.
 
 ### npm dependency auditing
 
 The frontend is audited in two graphs, because the two are not the same risk.
 `npm audit --omit=dev` reads the graph that gets compiled into `dist`: zero
-exceptions are possible there, and the measurement on 2026-11-17 is zero
-advisories across 45 production packages. The build-time graph — `vite`,
-`vitest`, `@typescript-eslint` — is gated by `scripts/audit-check.mjs`, which
-fails on any advisory whose GHSA id the CI step did not name, and fails in the
-other direction too: an `--ignore` that `npm audit` no longer returns is itself
-a red step. An exception list that cannot shrink is not an exception list but a
-mute button.
+exceptions are possible there. The build-time graph — `vite`, `vitest`,
+`@typescript-eslint` — is gated by `scripts/audit-check.mjs`, which fails on any
+advisory whose GHSA id the CI step did not name, and fails in the other
+direction too: an `--ignore` that `npm audit` no longer returns is itself a red
+step. An exception list that cannot shrink is not an exception list but a mute
+button, and that is exactly how the last entry in this section died.
 
-| Advisory | Package | Why the exception holds |
-| --- | --- | --- |
-| GHSA-fc5q-39xc-vjpf | picomatch, range `<= 4.0.7` | ReDoS (CWE-1333, CVSS 7.5) in glob matching that runs at build and test time, over globs taken from this repository's own config; the code never enters the bundle |
+**Exceptions: none.**
 
-The advisory was published 2026-10-19, and the `<= 4.0.7` range was added to it
-on 2026-11-17 at 15:56Z — the same day CI turned red — while
-`first_patched_version` is still `null`: 4.0.7 is the newest release, so there
-is nothing to move to. `npm audit fix --force` proposes replacing `vite` 8.3.8
-with 6.2.7, which is a major downgrade rather than a fix, so the gate reads the
-advisory record and the installed versions instead of acting on that suggestion.
-The exposure the exception describes is a build machine pointed at a hostile
-glob pattern, which in this repository means a commit to `vite.config.ts` or the
-test include lists — already a code-execution position, not one this advisory
-adds.
+Measured 2026-11-19: `node scripts/audit-check.mjs` with no arguments — 0
+advisories in the production graph, 0 in the dev graph, 0 exceptions consumed,
+exit 0. GHSA-fc5q-39xc-vjpf (picomatch, ReDoS, CWE-1333, CVSS 7.5, range
+`<= 4.0.7`, held since 2026-11-17 because `first_patched_version` was then
+`null`) is no longer returned by `npm audit`, so its `--ignore` left ci.yml and
+with it the companion step
+`Upstream fix for the ignored npm advisory must still be missing`: a guard over
+an empty list verifies nothing and would have to be re-added with the exception
+it guards. `scripts/advisory-fix-check.mjs` stays in the repository as the tool
+for that day, not as a step for a list that is not there.
 
-The step after the audit, `Upstream fix for the ignored npm advisory must still
-be missing`, asks the GitHub advisory database whether a patched release now
-exists and fails the job the day it does, or the day the advisory is withdrawn,
-so the exception cannot outlive the condition that made it necessary.
-`backend/test_local_gate_parity.py` checks that the `--ignore` list, the
-arguments of that step and this table name one and the same set, in both
-language halves.
+Re-opening an npm exception is a set of coordinated edits, and the parity test is
+what makes them simultaneous: `--ignore <GHSA>` in the audit step, the same id
+as the argument of a restored guard step, and a row in this section of both
+language halves. `bash scripts/gate.sh` reads both lists out of ci.yml at launch,
+so the local mirror follows by itself; `backend/test_local_gate_parity.py`
+reddens on any subset of those that disagrees, in either state, empty included.
 
 ## What These Measures Do Not Cover
 
@@ -759,87 +748,78 @@ price-рынка в этот момент уже определён оракул
 
 ### Проверка зависимостей
 
-CI запускает `pip-audit --strict` по `backend/requirements.txt`. Ошибки аудита
-и уязвимости вне точного списка ниже роняют джоб, включая новые уязвимости
-urllib3. Фронтенд проверяется двумя графами — то, что попадает в `dist`, и то,
-что живёт только на машине сборки; раздел про npm ниже.
+CI запускает `pip-audit --strict` по `backend/requirements.txt` без единого
+исключения: любая адвизория и любая ошибка аудита роняют джоб. Фронтенд
+проверяется двумя графами — то, что попадает в `dist`, и то, что живёт только на
+машине сборки; раздел про npm ниже.
 
-Перечисленные уязвимости urllib3 проверены 2026-10-25. `lighter-sdk` 1.1.8 —
-опубликован 2026-10-19 и остаётся свежим релизом — требует `urllib3<2.1.0`, а
-`pip install --dry-run "urllib3>=2.1.0" "lighter-sdk>=1.1.8"` не разрешается, то
-есть пропатченный urllib3 нельзя поставить вообще. CI проверяет именно это
-разрешение, а не верит абзацу: шаг после аудита краснеет в первый день, когда
-предел снимут, и говорит, какой список удалять.
+**Исключений нет.**
 
-Что на самом деле задевает urllib3 в этом наборе зависимостей:
-`lighter/configuration.py` импортирует его ради имени логгера и констант повторов,
-а легаси-транспорт `openapi_client` работает через его пул — ни то, ни другое на
-пути ордера не лежит. Путь ордера — это асинхронный `SignerClient`, чьи запросы
-ходят через aiohttp; единственный requests-вызов (а значит и urllib3-вызов) в
-пакете — синхронный запасной путь за nonce, до которого асинхронная ветка не
-доходит. Собственные данные Lighter Wake читает стандартной библиотекой
-(`backend/lighter_rest.py`), не urllib3. TLS прокси urllib3 здесь никто не
-настраивает, низкоуровневый междоменный прокси-API не вызывает, потоковые ответы
-через него не читаются.
+Пустым список был не всегда. До 2026-11-19 шаг аудита нёс 16 записей
+`--ignore-vuln` — те же восемь уязвимостей urllib3, названные дважды: по CVE и
+по PYSEC-имени, которое печатает `pip-audit`; разбор — 2026-10-25. Причина была
+одна: `lighter-sdk` 1.1.8 требовал `urllib3<2.1.0`, а
+`pip install --dry-run "urllib3>=2.1.0" "lighter-sdk>=1.1.8"` не разрешался, то
+есть пропатченный urllib3 нельзя было поставить вообще.
 
-Это ограниченные исключения, а не исправления: публикация сервиса подписи (её
-теперь не пропускает гейт по `Host`), недоверенные хосты SDK или добавление этих
-HTTP-путей требуют пересмотра исключений. После снятия ограничения SDK исключения надо удалить.
+Предела больше нет. `lighter-sdk` 1.1.9 (PyPI, опубликован 2026-11-18) заменил
+`urllib3<2.1.0` на `urllib3>=1.25.3`, поэтому `backend/requirements.txt` держит
+нижнюю границу SDK на 1.1.9. Замер 2026-11-19:
+`pip-audit -r requirements.txt --strict` без единого флага —
+`No known vulnerabilities found`, exit 0. Исключения удалены, а не оставлены:
+запись, у которой пропал резон, — это кнопка «заглушить звук», а резон здесь был
+в пределе, а не в адвизориях.
 
-Каждое исключение названо дважды — по CVE и по PYSEC-имени, которое печатает
-`pip-audit`. Это оформление, а не обход: алиасы разрешаются, и 2026-11-11
-каждый из двух наборов по отдельности удовлетворял аудит (14 ignored, exit 0),
-то есть ни один идентификатор сам по себе не держит гейт. Проверяется другое —
-что список исключений и эта таблица называют одинаковое множество:
-`backend/test_local_gate_parity.py` краснеет, если адвизория исключена в CI, но
-не описана здесь, или описана, но уже не исключается.
+В обратную сторону смотрит шаг после аудита, `lighter-sdk must still allow a
+patched urllib3`: он просит pip разрешить `"urllib3>=2.1.0"
+"lighter-sdk>=1.1.9"` и краснеет в тот день, когда такой set снова станет
+неразрешимым, — то есть в тот день, когда исключения надо вернуть вместе с
+таблицей, которой в этом разделе больше нет.
+`backend/test_local_gate_parity.py` сверяет ci.yml и обе половины документа в
+обоих состояниях: таблица здесь без `--ignore-vuln` в CI краснеет так же, как
+наоборот, а строка «исключений нет» рядом с живыми исключениями — тоже.
 
-| Уязвимость | Также публикуется как | Затронутый путь |
-| --- | --- | --- |
-| CVE-2024-37891 | PYSEC-2026-1995 | Передача заголовка авторизации прокси другому хосту |
-| CVE-2025-50181 | PYSEC-2026-1999 | Игнорирование запрета редиректов на уровне пула |
-| CVE-2025-66418 | PYSEC-2026-1998 | Неограниченная цепочка распаковки ответа |
-| CVE-2025-66471 | PYSEC-2026-1994 | Распаковка потокового ответа превышает лимит чтения |
-| CVE-2026-21441 | PYSEC-2026-1996 | Распаковка ответа редиректа при потоковом чтении |
-| CVE-2026-44431 | PYSEC-2026-141 | Передача секретных заголовков низкоуровневым API прокси |
-| CVE-2026-97687 | PYSEC-2026-4175 | Смешивание TLS-настроек прокси и целевого сервера |
-| CVE-2026-97689 | PYSEC-2026-4177 | Неограниченное поле размера чанка при потоковом чтении |
-
-Распаковка остаётся остаточным риском для кода зависимостей, читающего ответ
-целиком: доверенные HTTPS-хосты уменьшают риск, но не устраняют его.
+Что исключения задевали — оставлено, потому что это описание поверхности, а не
+текущего риска: `lighter/configuration.py` импортирует urllib3 ради имени
+логгера и констант повторов, а легаси-транспорт `openapi_client` работает через
+его пул — ни то, ни другое на пути ордера не лежит. Путь ордера — это
+асинхронный `SignerClient`, чьи запросы ходят через aiohttp; единственный
+requests-вызов (а значит и urllib3-вызов) в пакете — синхронный запасной путь за
+nonce, до которого асинхронная ветка не доходит. Собственные данные Lighter Wake
+читает стандартной библиотекой (`backend/lighter_rest.py`), не urllib3. TLS
+прокси urllib3 здесь никто не настраивает, низкоуровневый междоменный прокси-API
+не вызывает, потоковые ответы через него не читает.
 
 ### Проверка npm-зависимостей
 
 Фронтенд аудируется двумя графами, потому что это разные риски.
 `npm audit --omit=dev` смотрит на граф, который компилируется в `dist`:
-исключений в нём не бывает вовсе, а замер 2026-11-17 даёт ноль адвизорий на 45
-продакшен-пакетов. Сборочный граф — `vite`, `vitest`, `@typescript-eslint` —
-держит `scripts/audit-check.mjs`: он краснеет на любую адвизорию, чей GHSA-id
-не назван в шаге CI, и краснеет в обратную сторону, если `--ignore` больше не
-встречается в отчёте npm. Список исключений, который не умеет уменьшаться, —
-это не список исключений, а кнопка «заглушить звук».
+исключений в нём не бывает вовсе. Сборочный граф — `vite`, `vitest`,
+`@typescript-eslint` — держит `scripts/audit-check.mjs`: он краснеет на любую
+адвизорию, чей GHSA-id не назван в шаге CI, и краснеет в обратную сторону, если
+`--ignore` больше не встречается в отчёте npm. Список исключений, который не
+умеет уменьшаться, — это не список исключений, а кнопка «заглушить звук»; именно
+так и умерла последняя строка этого раздела.
 
-| Адвизория | Пакет | Почему исключение держится |
-| --- | --- | --- |
-| GHSA-fc5q-39xc-vjpf | picomatch, диапазон `<= 4.0.7` | ReDoS (CWE-1333, CVSS 7.5) в сопоставлении glob-паттернов, которое исполняется на сборке и в тестах, где паттерны берутся из конфигов самого репозитория; в бандл код не попадает |
+**Исключений нет.**
 
-Адвизория опубликована 2026-10-19, диапазон `<= 4.0.7` в неё дописан
-2026-11-17 в 15:56Z — в тот же день CI покраснел, — а `first_patched_version`
-по-прежнему `null`: 4.0.7 и есть свежий релиз, переходить некуда.
-`npm audit fix --force` предлагает заменить `vite` 8.3.8 на 6.2.7, то есть
-откат через мажор вместо исправления, поэтому гейт читывает запись адвизории и
-установленные версии, а не это предложение. Риск, который описывает исключение,
-— сборочная машина, которой подсунули враждебный glob; в этом репозитории это
-коммит в `vite.config.ts` или в списки include тестов, то есть позиция с правом
-исполнять код, а не что-то новое из этой адвизории.
+Замер 2026-11-19: `node scripts/audit-check.mjs` без аргументов — 0 адвизорий в
+продакшен-графе, 0 в dev-графе, 0 разобранных исключений, exit 0.
+GHSA-fc5q-39xc-vjpf (picomatch, ReDoS, CWE-1333, CVSS 7.5, диапазон `<= 4.0.7`,
+держалась с 2026-11-17, потому что `first_patched_version` тогда был `null`)
+больше не возвращается `npm audit`, поэтому её `--ignore` ушёл из ci.yml вместе
+с парным шагом `Upstream fix for the ignored npm advisory must still be
+missing`: страж над пустым списком ничего не проверяет и вернулся бы вместе с
+исключением, которое он сторожит. `scripts/advisory-fix-check.mjs` остаётся в
+репозитории инструментом на тот день, а не шагом для списка, которого нет.
 
-Шаг после аудита, `Upstream fix for the ignored npm advisory must still be
-missing`, спрашивает базу адвизорий GitHub, появился ли пропатченный выпуск, и
-роняет джоб в первый день, когда появится или когда адвизорию отзовут, — так
-исключение не переживает причину, по которой оно нужно.
-`backend/test_local_gate_parity.py` сверяет, что список `--ignore`, аргументы
-этого шага и таблица выше называют одно и то же множество, в обеих половинах
-документа.
+Вернуть npm-исключение — это согласованный набор правок, и парный тест делает их
+одновременными: `--ignore <GHSA>` в шаге аудита, тот же идентификатор в
+аргументах восстановленного шага-стража и строка в этом разделе обеих половин
+документа. `bash scripts/gate.sh` вычитывает оба списка из ci.yml при запуске,
+поэтому локальное зеркало подстраивается само;
+`backend/test_local_gate_parity.py` краснеет на любой набор, где эти места
+расходятся, в обоих состояниях, пустой список включительно.
 
 ## Что эти меры НЕ закрывают
 

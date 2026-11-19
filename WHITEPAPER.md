@@ -52,7 +52,7 @@ Predict-рынки на LMSR и расчёт хеджа корзины. Дист
 и `mirror_positions` двигается на него, а не на заказанный. Ключ подписчика для
 сверки не используется второй раз — лента публична.
 
-Качество на 2026-11-19: 983 backend-теста (`python -m unittest discover`, один
+Качество на 2026-11-19: 984 backend-теста (`python -m unittest discover`, один
 пропущен — `test_key_store.TestConstructionAndRoundTrip::test_file_is_owner_readable_only`,
 он проверяет права на файл там, где они работают, то есть на POSIX), 552 frontend-тестов
 (vitest в 30 файлах), 83 e2e-теста

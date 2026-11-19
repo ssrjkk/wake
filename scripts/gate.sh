@@ -80,12 +80,17 @@ NPM_IGNORES=()
 while IFS= read -r id; do
     [ -n "$id" ] && NPM_IGNORES+=("--ignore" "$id")
 done < <(grep -oE -- '--ignore +GHSA-[0-9a-z-]+' "$CI_FILE" | awk '{print $2}')
-NPM_ADVISORIES="$(grep -oE 'advisory-fix-check\.mjs( +GHSA-[0-9a-z-]+)+' "$CI_FILE" | sed -E 's/advisory-fix-check\.mjs +//')"
+# Пустой список исключений — законное состояние, а не сломанный разбор: с
+# 2026-11-19 их ноль с обеих сторон. Чтобы «исключений нет» не выглядело как
+# «ci.yml прочитан криво», проверяется якорь: сама команда аудита обязана в
+# workflow стоять. Исчезнет шаг — гейт краснеет на старте, а не молча прогонит
+# пустоту вместо аудита.
 if [ -z "$RUFF_PIN" ] || [ -z "$CI_PYTHON" ] || [ -z "$CI_NODE" ] ||
-    [ ${#IGNORES[@]} -eq 0 ] || [ -z "$MIGRATE_URL" ] || [ -z "$TEST_URL" ] ||
-    [ -z "$NPM_ADVISORIES" ]; then
+    [ -z "$MIGRATE_URL" ] || [ -z "$TEST_URL" ] ||
+    ! grep -qE 'pip-audit -r requirements\.txt --strict' "$CI_FILE" ||
+    ! grep -qE 'node scripts/audit-check\.mjs' "$CI_FILE"; then
     echo "ci.yml прочитан не до конца: пин ruff, версии Python/Node, имена баз"
-    echo "alembic/pytest, список --ignore-vuln или аргументы advisory-fix-check не найдены"
+    echo "alembic/pytest или команды аудита зависимостей не найдены"
     exit 1
 fi
 
@@ -387,13 +392,13 @@ else
          $audit -r requirements.txt --strict '"${IGNORES[*]}"
 fi
 
-# ci: backend-security / Upstream cap on urllib3 must still be binding
-step "backend-security" "Upstream cap on urllib3 must still be binding" \
-    'if pip install --dry-run --ignore-installed --quiet "urllib3>=2.1.0" "lighter-sdk>=1.1.8" >/dev/null 2>&1; then
-       echo "lighter-sdk больше не запрещает urllib3>=2.1.0: пора снимать --ignore-vuln и переписывать раздел в SECURITY.md"
+# ci: backend-security / lighter-sdk must still allow a patched urllib3
+step "backend-security" "lighter-sdk must still allow a patched urllib3" \
+    'if ! pip install --dry-run --ignore-installed --quiet "urllib3>=2.1.0" "lighter-sdk>=1.1.9" >/dev/null 2>&1; then
+       echo "предел urllib3<2.1.0 вернулся: надо вернуть --ignore-vuln и таблицу в SECURITY.md"
        exit 1
      fi
-     echo "cap держится: urllib3>=2.1.0 неразрешим с lighter-sdk>=1.1.8"'
+     echo "предела нет: urllib3>=2.1.0 разрешим вместе с lighter-sdk>=1.1.9"'
 
 # ── backend-tests ──────────────────────────────────────────────────────────
 # Пригодность окружения вычисляется один раз и по двум причинам отдельно: без
@@ -467,7 +472,6 @@ fi
 # ── фронтенд ───────────────────────────────────────────────────────────────
 if [ "$GATE_LIST" = "0" ] && ! command -v npm >/dev/null 2>&1; then
     unavailable "frontend-check" "Audit frontend dependencies" "npm не установлен"
-    unavailable "frontend-check" "Upstream fix for the ignored npm advisory must still be missing" "npm не установлен"
     unavailable "frontend-check" "ESLint" "npm не установлен"
     unavailable "frontend-check" "TypeScript type check" "npm не установлен"
     unavailable "frontend-check" "Build" "npm не установлен"
@@ -477,9 +481,6 @@ else
     # ci: frontend-check / Audit frontend dependencies
     step "frontend-check" "Audit frontend dependencies" \
         "node scripts/audit-check.mjs ${NPM_IGNORES[*]}"
-    # ci: frontend-check / Upstream fix for the ignored npm advisory must still be missing
-    step "frontend-check" "Upstream fix for the ignored npm advisory must still be missing" \
-        "node scripts/advisory-fix-check.mjs $NPM_ADVISORIES"
     # ci: frontend-check / ESLint
     step "frontend-check" "ESLint" "npm run lint -- --max-warnings 0"
     # ci: frontend-check / TypeScript type check

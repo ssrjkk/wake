@@ -234,13 +234,13 @@ Playwright starts its own dev server with `VITE_TELEGRAM_BOT_NAME` and `VITE_WAL
 
 ```bash
 cd backend && pip-audit -r requirements.txt
-node scripts/audit-check.mjs --ignore <GHSA-id>   # список живёт в .github/workflows/ci.yml
-node scripts/advisory-fix-check.mjs <GHSA-id>
+node scripts/audit-check.mjs                     # список исключений живёт в .github/workflows/ci.yml
+node scripts/advisory-fix-check.mjs <GHSA-id>    # нужен, только когда в ci.yml вернётся живое исключение
 ```
 
-CI uses `pip-audit --strict` with the exact advisory exceptions reviewed in [SECURITY.md](SECURITY.md#dependency-auditing). The SDK's `urllib3<2.1.0` constraint still blocks patched releases. New advisories, including urllib3 advisories outside that list, and audit execution errors fail the job. Exceptions do not mean the dependency is patched.
+CI uses `pip-audit --strict` with no exception flags at all. The exceptions were not a style choice: `lighter-sdk` 1.1.8 required `urllib3<2.1.0`, so no patched urllib3 could be installed next to it, and 16 `--ignore-vuln` entries held the advisories that limitation produced. `lighter-sdk` 1.1.9 lifted the cap on 2026-11-18, `backend/requirements.txt` now floors the SDK there, and the measurement on 2026-11-19 is `No known vulnerabilities found` with an empty ignore list. The step that follows asks pip to resolve `"urllib3>=2.1.0" "lighter-sdk>=1.1.9"` and fails the job the day the cap returns — which is the day the exceptions come back. New advisories and audit execution errors fail the job either way. [SECURITY.md](SECURITY.md#dependency-auditing) holds the review and the re-open contract.
 
-The frontend audit is one script for two graphs, because the two are not the same risk: what ships in `dist` may have no exceptions at all, while build-time packages are gated by `scripts/audit-check.mjs`, which fails on an unnamed advisory and equally fails on an `--ignore` that npm no longer returns. `npm audit` alone cannot say both of those, and on 2026-11-17 it went red over a `picomatch` advisory whose `first_patched_version` is still `null` — while `npm audit fix --force` proposed downgrading `vite` by a major version. Risk review and the removal condition for each exception: [SECURITY.md](SECURITY.md#npm-dependency-auditing). Locally you do not retype the identifiers: `bash scripts/gate.sh` reads them out of the workflow, which is what its parity test requires.
+The frontend audit is one script for two graphs, because the two are not the same risk: what ships in `dist` may have no exceptions at all, while build-time packages are gated by `scripts/audit-check.mjs`, which fails on an unnamed advisory and equally fails on an `--ignore` that npm no longer returns. `npm audit` alone cannot say both of those: on 2026-11-17 it went red over a `picomatch` advisory whose `first_patched_version` was then `null`, and on 2026-11-19 the same script returns zero advisories in both graphs, so the exception and its companion guard step are gone. Risk review and the re-open condition: [SECURITY.md](SECURITY.md#npm-dependency-auditing). Locally you do not retype the identifiers: `bash scripts/gate.sh` reads whatever list the workflow holds out of it, which is what its parity test requires.
 
 Adding a dependency: it goes into `backend/requirements.txt` (which is what the image installs) or into `package.json`. Test-only tools stay out of `requirements.txt` — `pytest`, `allure-pytest` and `fakeredis` are installed by the CI job, not by the production image.
 
@@ -249,9 +249,9 @@ Adding a dependency: it goes into `backend/requirements.txt` (which is what the 
 | Job | What it checks |
 | --- | --- |
 | backend-lint | `ruff check .` and `ruff format --check .` with ruff 0.15.8 |
-| backend-security | `pip-audit --strict -r requirements.txt`, with only the reviewed advisory IDs in `SECURITY.md` excluded |
+| backend-security | `pip-audit --strict -r requirements.txt` with an empty exception list, then `pip install --dry-run "urllib3>=2.1.0" "lighter-sdk>=1.1.9"` so a returned upstream cap cannot pass unnoticed |
 | backend-tests | creates `wake_test`, `alembic upgrade head`, `alembic check`, `pytest` with an Allure report, then a runtime smoke under real uvicorn: `/health`, `/ready` must say ready, `/subscription` without a token must answer 401 with `"code":"SESSION_REQUIRED"` |
-| frontend-check | `node scripts/audit-check.mjs --ignore <GHSA>`, `node scripts/advisory-fix-check.mjs <GHSA>`, `npm run lint -- --max-warnings 0`, `npx tsc --noEmit`, `npm run build` |
+| frontend-check | `node scripts/audit-check.mjs`, `npm run lint -- --max-warnings 0`, `npx tsc --noEmit`, `npm run build` |
 | frontend-tests | `npm run test:run -- --coverage` |
 | e2e-tests | Playwright in chromium against the dev server |
 | docker-build | builds the image on every push and every pull request to `main`, then runs `import app` and `alembic heads` inside it with no network |
@@ -571,13 +571,13 @@ Playwright поднимает собственный dev-сервер с явн�
 
 ```bash
 cd backend && pip-audit -r requirements.txt
-node scripts/audit-check.mjs --ignore <GHSA-id>   # список живёт в .github/workflows/ci.yml
-node scripts/advisory-fix-check.mjs <GHSA-id>
+node scripts/audit-check.mjs                     # список исключений живёт в .github/workflows/ci.yml
+node scripts/advisory-fix-check.mjs <GHSA-id>    # нужен, только когда в ci.yml вернётся живое исключение
 ```
 
-CI использует `pip-audit --strict` с точечными исключениями, разобранными в [SECURITY.md](SECURITY.md#проверка-зависимостей). Ограничение SDK `urllib3<2.1.0` всё ещё запрещает исправленные версии. Новые уязвимости, включая новые уязвимости urllib3 вне списка, и ошибки самого аудита роняют джоб. Исключения не означают, что зависимость исправлена.
+CI использует `pip-audit --strict` без единого флага-исключения. Исключения были не стилем: `lighter-sdk` 1.1.8 требовал `urllib3<2.1.0`, исправленные версии нельзя было поставить рядом, и 16 записей `--ignore-vuln` держали адвизории этого предела. `lighter-sdk` 1.1.9 снял предел 2026-11-18, `backend/requirements.txt` держит нижнюю границу на нём, и замер 2026-11-19 — `No known vulnerabilities found` при пустом списке. Шаг после аудита просит pip разрешить `"urllib3>=2.1.0" "lighter-sdk>=1.1.9"` и роняет джоб в тот день, когда предел вернётся, — то есть в тот день, когда вернутся и исключения. Новые уязвимости и ошибки самого аудита роняют джоб в любом случае. Разбор и контракт возврата — [SECURITY.md](SECURITY.md#проверка-зависимостей).
 
-Аудит фронтенда — один скрипт на два графа, потому что это разные риски: в графе, который попадает в `dist`, исключений не бывает вовсе, а сборочный граф держит `scripts/audit-check.mjs`; он краснеет на неназванную адвизорию и краснеет ровно так же, если `--ignore` перестал возвращаться в отчёте npm. Одиночная `npm audit` так сказать не умеет и 2026-11-17 покраснела из-за `picomatch`, у которого `first_patched_version` до сих пор `null`, — при этом `npm audit fix --force` предлагала откатить `vite` через мажор. Разбор риска и условие снятия каждого исключения — [SECURITY.md](SECURITY.md#проверка-npm-зависимостей). Локально идентификаторы не переписываются: `bash scripts/gate.sh` вычитывает их из workflow, чего требует тест дрейфа.
+Аудит фронтенда — один скрипт на два графа, потому что это разные риски: в графе, который попадает в `dist`, исключений не бывает вовсе, а сборочный граф держит `scripts/audit-check.mjs`; он краснеет на неназванную адвизорию и краснеет ровно так же, если `--ignore` перестал возвращаться в отчёте npm. Одиночная `npm audit` так сказать не умеет: 2026-11-17 она покраснела из-за `picomatch`, у которого `first_patched_version` тогда был `null`, а 2026-11-19 тот же скрипт даёт ноль адвизорий в обоих графах, — поэтому исключения и парного шага-стража больше нет. Разбор риска и условие возврата — [SECURITY.md](SECURITY.md#проверка-npm-зависимостей). Локально идентификаторы не переписываются: `bash scripts/gate.sh` вычитывает из workflow тот список, который в нём лежит, чего требует тест дрейфа.
 
 Новая зависимость идёт в `backend/requirements.txt` (его ставит образ) или в `package.json`. Тестовые инструменты в `requirements.txt` не попадают: `pytest`, `allure-pytest` и `fakeredis` ставит CI-джоб, а не продакшн-образ.
 
@@ -586,9 +586,9 @@ CI использует `pip-audit --strict` с точечными исключ�
 | Джоб | Что проверяет |
 | --- | --- |
 | backend-lint | `ruff check .` и `ruff format --check .` на ruff 0.15.8 |
-| backend-security | `pip-audit --strict -r requirements.txt`, исключены только разобранные в `SECURITY.md` ID уязвимостей |
+| backend-security | `pip-audit --strict -r requirements.txt` при пустом списке исключений, затем `pip install --dry-run "urllib3>=2.1.0" "lighter-sdk>=1.1.9"` — чтобы вернувшийся предел upstream не прошёл незамеченным |
 | backend-tests | создаёт `wake_test`, `alembic upgrade head`, `alembic check`, `pytest` c Allure-отчётом, затем runtime-smoke под настоящим uvicorn: `/health`, `/ready` обязан ответить ready, `/subscription` без токена — 401 с `"code":"SESSION_REQUIRED"` |
-| frontend-check | `node scripts/audit-check.mjs --ignore <GHSA>`, `node scripts/advisory-fix-check.mjs <GHSA>`, `npm run lint -- --max-warnings 0`, `npx tsc --noEmit`, `npm run build` |
+| frontend-check | `node scripts/audit-check.mjs`, `npm run lint -- --max-warnings 0`, `npx tsc --noEmit`, `npm run build` |
 | frontend-tests | `npm run test:run -- --coverage` |
 | e2e-tests | Playwright в chromium против dev-сервера |
 | docker-build | собирает образ на каждый push и каждый pull request в `main`, затем внутри него без сети выполняет `import app` и `alembic heads` |

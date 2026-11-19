@@ -85,7 +85,9 @@ def source_files() -> list[Path]:
 class TestInlineStyleBudget(unittest.TestCase):
     def test_table_names_exactly_the_files_with_inlines(self):
         found = {
-            str(path.relative_to(ROOT).as_posix()): len(inline_lines(path.read_text(encoding="utf-8")))
+            str(path.relative_to(ROOT).as_posix()): len(
+                inline_lines(path.read_text(encoding="utf-8"))
+            )
             for path in source_files()
             if inline_lines(path.read_text(encoding="utf-8"))
         }
@@ -108,12 +110,18 @@ class TestInlineStyleBudget(unittest.TestCase):
                 )
 
     def test_total_budget_is_the_measured_number(self):
-        self.assertEqual(sum(BUDGET.values()), 12, "сумма бюджета обязана быть измерена, а не выведена из строк")
+        self.assertEqual(
+            sum(BUDGET.values()),
+            12,
+            "сумма бюджета обязана быть измерена, а не выведена из строк",
+        )
 
     def test_no_raw_geometry_or_color_literal_in_surviving_inlines(self):
         offenders: list[str] = []
         for rel in sorted(BUDGET):
-            for number, line in inline_lines((ROOT / Path(rel)).read_text(encoding="utf-8")):
+            for number, line in inline_lines(
+                (ROOT / Path(rel)).read_text(encoding="utf-8")
+            ):
                 body = line[line.index("style={{") :]
                 if RAW_VALUE.search(body):
                     offenders.append(f"{rel}:{number}: {body[:90]}")

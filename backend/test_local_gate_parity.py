@@ -68,6 +68,10 @@ GATE_FILE = ROOT / "scripts" / "gate.sh"
 CONTRIBUTING_FILE = ROOT / "CONTRIBUTING.md"
 SECURITY_FILE = ROOT / "SECURITY.md"
 GITATTRIBUTES_FILE = ROOT / ".gitattributes"
+# Инструмент обратного гейта по npm-адвизориям. Шага с ним в CI сейчас нет —
+# исключений ноль, — но тест ниже сторожит сам файл: без него следующее
+# исключение вернётся без проверки.
+GUARD_SCRIPT = ROOT / "scripts" / "advisory-fix-check.mjs"
 
 # Сколько шагов с `run:` обязан видеть разбор. Без пола опустевший workflow или
 # опустевший скрипт давали бы зелёный гейт на пустом множестве.
@@ -291,6 +295,51 @@ ADVISORY_ID = re.compile(r"(?:CVE|PYSEC)-[0-9]{4}-[0-9]+")
 # регулярное выражение вместо списка.
 NPM_AUDIT_HEADINGS = ("### npm dependency auditing", "### Проверка npm-зависимостей")
 GHSA_ID = re.compile(r"GHSA-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4}")
+# Ноль исключений — тоже состояние, которое документ обязан назвать. Пустой
+# список по-разному выглядит в разборе «раздела нет», «таблица была, её
+# стерли» и «исключений правда ноль», а решение человек принимает по тексту
+# раздела. Поэтому у пустого множества есть своя строка-маркер: она обязательна
+# ровно тогда, когда таблицы нет, и запрещена ровно тогда, когда таблица есть.
+NO_EXCEPTIONS = {
+    "### Dependency auditing": "**Exceptions: none.**",
+    "### Проверка зависимостей": "**Исключений нет.**",
+    "### npm dependency auditing": "**Exceptions: none.**",
+    "### Проверка npm-зависимостей": "**Исключений нет.**",
+}
+
+
+def section_body(markdown: str, heading: str) -> list:
+    """Строки раздела под заголовком `###` — до следующего заголовка."""
+    lines = markdown.splitlines()
+    starts = [i for i, line in enumerate(lines) if line.strip() == heading]
+    if not starts:
+        return []
+    body = []
+    for line in lines[starts[0] + 1 :]:
+        if line.startswith("#"):
+            break
+        body.append(line)
+    return body
+
+
+def empty_state_findings(markdown: str, heading: str) -> list:
+    """Чем раздел расходится с «исключений ноль»: маркер обязателен, таблица — нет."""
+    body = section_body(markdown, heading)
+    if not body:
+        return [f"{heading}: раздела в SECURITY.md нет, а в ci.yml исключений ноль"]
+    found = []
+    if NO_EXCEPTIONS[heading] not in body:
+        found.append(
+            f"{heading}: исключений в ci.yml ноль, а строки-маркера "
+            f"«{NO_EXCEPTIONS[heading]}» в разделе нет"
+        )
+    rows = advisory_rows(markdown, heading)
+    if rows:
+        found.append(
+            f"{heading}: таблица на {len(rows)} строк при нулевом списке "
+            "исключений в ci.yml"
+        )
+    return found
 
 
 def advisory_rows(markdown: str, heading: str) -> list:
@@ -325,6 +374,9 @@ def advisory_findings(markdown: str, excluded: set) -> list:
     """
     found = []
     for heading in AUDIT_HEADINGS:
+        if not excluded:
+            found.extend(empty_state_findings(markdown, heading))
+            continue
         rows = advisory_rows(markdown, heading)
         if not rows:
             found.append(
@@ -332,6 +384,11 @@ def advisory_findings(markdown: str, excluded: set) -> list:
                 f"а в ci.yml их {len(excluded)}"
             )
             continue
+        if NO_EXCEPTIONS[heading] in section_body(markdown, heading):
+            found.append(
+                f"{heading}: строка «исключений нет» живёт рядом с {len(excluded)} "
+                "исключениями в ci.yml — раздел противоречит сам себе"
+            )
         for row in rows:
             if not (ADVISORY_ID.fullmatch(row[0]) and ADVISORY_ID.fullmatch(row[1])):
                 found.append(
@@ -866,26 +923,35 @@ class TestCiTablesMatchDocs(unittest.TestCase):
 
 
 class TestAdvisoryExceptionsAreDocumented(unittest.TestCase):
-    """Список `--ignore-vuln` и две таблицы SECURITY.md обязаны называть одно и то же.
+    """Список `--ignore-vuln` и разделы SECURITY.md называют одно и то же, пустой список включительно.
 
     Повод: абзац про риски читается чаще, чем workflow, и «это уже снято»
     решают по документу. Пока совпадение списка с таблицей — память человека,
     снятое в CI исключение живёт в доке ещё один релиз, а новое исключение
-    появляется в логе без объяснения.
+    появляется в логе без объяснения. С 2026-11-19 список пуст, и ноль — это
+    тоже состояние, которое документ обязан назвать словами: для глаза
+    «исключений нет» и «разбор ничего не нашёл» выглядят одинаково, а
+    расходятся ровно в тот момент, когда это дорого.
     """
 
     @classmethod
     def setUpClass(cls):
         ci_text = CI_FILE.read_text(encoding="utf-8")
+        cls.ci_text = ci_text
         cls.raw = re.findall(r"--ignore-vuln\s+([A-Za-z0-9._-]+)", ci_text)
         cls.excluded = set(cls.raw)
         cls.security = SECURITY_FILE.read_text(encoding="utf-8")
 
     def test_the_exclusion_list_is_seen(self):
-        self.assertGreaterEqual(
-            len(self.excluded),
-            8,
-            f"разбор увидел только {len(self.excluded)} исключений — ci.yml прочитан не весь",
+        # Пустой список — состояние, а не провал разбора: с 2026-11-19
+        # исключений ноль. Различает их якорь по команде шага: без него криво
+        # прочитанный ci.yml выглядел бы как «всё чисто», и ровно этого
+        # тестирование пустого множества не переживает.
+        self.assertIn(
+            "pip-audit -r requirements.txt --strict",
+            self.ci_text,
+            "в ci.yml нет строки аудита без флагов: ноль найденных исключений "
+            "неотличима от сломанного разбора",
         )
 
     def test_ci_does_not_ignore_the_same_advisory_twice(self):
@@ -938,12 +1004,18 @@ class TestNpmAdvisoryExceptionsAreGuarded(unittest.TestCase):
         )
         return GHSA_ID.findall(run)
 
-    def test_both_steps_exist(self):
-        for step in (self.AUDIT_STEP, self.GUARD_STEP):
-            self.assertIn(step, self.steps, f"в ci.yml нет шага {step[0]} / {step[1]}")
+    def test_the_audit_step_exists(self):
+        # Страж проверяется ниже и по другому признаку: он обязан исчезнуть
+        # вместе со списком, так что требовать его в этом тесте — значит
+        # запрещать пустое множество.
+        self.assertIn(self.AUDIT_STEP, self.steps, "в ci.yml нет шага аудита npm")
 
     def test_the_exception_ids_are_the_guarded_ids(self):
         ignored = self.ids_of(self.AUDIT_STEP, "audit-check.mjs")
+        if not ignored:
+            # Пустой список: сверять нечего, а страж над ним проверяет пустоту —
+            # его отсутствие проверяет соседний тест, не этот.
+            return
         guarded = self.ids_of(self.GUARD_STEP, "advisory-fix-check.mjs")
         self.assertEqual(
             sorted(ignored),
@@ -967,10 +1039,26 @@ class TestNpmAdvisoryExceptionsAreGuarded(unittest.TestCase):
                 "он проверяет пустой список"
             )
 
+    def test_the_guard_tool_stays_for_the_next_exception(self):
+        """Шаг уходит вместе со списком, инструмент остаётся.
+
+        Разница не косметическая: без строки в репозитории следующее исключение
+        вернётся с одной половинкой — `--ignore` без проверки, что патчи ещё нет,
+        — и переживёт собственный резон ровно так, как пережило его это.
+        """
+        self.assertTrue(
+            GUARD_SCRIPT.is_file(),
+            f"{GUARD_SCRIPT.name} удалён вместе с шагом: восстанавливать страж "
+            "придётся с нуля, а значит — не восстанавливать",
+        )
+
     def test_documented_advisories_are_the_ignored_ones(self):
         excluded = set(self.ids_of(self.AUDIT_STEP, "audit-check.mjs"))
         findings = []
         for heading in NPM_AUDIT_HEADINGS:
+            if not excluded:
+                findings.extend(empty_state_findings(self.security, heading))
+                continue
             if f"\n{heading}\n" not in self.security:
                 findings.append(f"{heading}: раздела в SECURITY.md нет")
                 continue
