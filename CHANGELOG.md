@@ -1024,6 +1024,30 @@ measured number goes stale while the text around it still looks fine.
   выглядит чужой ошибкой.
 
 ### Changed
+- `src/index.css`, `src/App.tsx`, `src/components/{Risk,Terminal,OrderBookPanel,Portfolio,TelegramLogin,Agent,Dashboard}.tsx`
+  — волна добрана до остальных панелей. Счёт ведётся командой
+  `git grep -o 'style=' <ревизия> -- src/components/*.tsx src/App.tsx | wc -l`,
+  которой я мерил оба среза сейчас: 563 на `52d02a3` (до волны), 255 на `86d2c8c`
+  (шесть панелей), 12 на HEAD. Все двенадцать — числа, пришедшие из ответа
+  площадки: доля уровня лестницы и баланс сторон, полоса диверсификации, ширина
+  процента yes, высота окна виртуализации, размеры скелетона. Прошлая запись
+  этого файла называла 568 → 253 и не приводила команду; на закоммиченных
+  деревьях те же два среза дают 563 и 255, то есть та пара мерилась по рабочему
+  дереву в середине волны, а не по ревизиям, и точной проверки не проходит.
+  Два переноса, без которых миграция врала бы:
+  `.book-row.ask/.bid .book-price` держит краску цены, а класс мигания остался
+  на `<td>` — на span внутри клетки className и так несёт `book-flash-*`, и
+  переезд краски туда сделал бы составной класс, чего тесты книги не ждут;
+  строки пикера риска пересажены на `.list-row`, потому что `.picker-row`
+  даёт только высоту и flex и в одиночку строку не раскладывает.
+- `src/components/Funding.test.tsx` проходит `npm run lint`. Четыре ошибки
+  (`no-redundant-type-constituents` на `unknown | (fn)`, `no-unsafe-return` и
+  `no-base-to-string` на `String(raw)`) пришли не из `origin/main`, а вместе с
+  первым коммитом этой же волны: файл вырос на 181 строку в `86d2c8c`, и его
+  содержание из `86d2c8c` — ровно то, что лежалось в рабочем дереве до правки
+  и что давало `npm run lint` = 4 error, exit=1 (замер 2026-11-19).
+  Union с `unknown` ни к чему не обязывает, а `String()` на неразбираемом теле
+  печатал `[object Object]` и ловил исключение вместо ответа.
 - `src/index.css`, `src/App.tsx`, `src/components/{Portfolio,Discover,Funding,Earn,Predict,ErrorBoundary}.tsx`
   — шесть панелей переведены с инлайн-стилей на классы темы: `style={{` в
   `src/components/*.tsx` и `src/App.tsx` — 568 → 253 (замер 2026-11-19). Разметка
