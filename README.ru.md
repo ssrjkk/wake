@@ -397,6 +397,7 @@ docker compose up predict-resolver
 - [SECURITY.md](SECURITY.md) — границы доверия и чеклист перед запуском
 - [CHANGELOG.md](CHANGELOG.md)
 - [LICENSE](LICENSE) — MIT
+- [Whitepaper](WHITEPAPER.md)
 
 ## Лицензия
 
