@@ -21,7 +21,7 @@ uvicorn
 websockets
 
 # Database — PostgreSQL (async)
-sqlalchemy[asyncio]>=2.1.8
+sqlalchemy[asyncio]>=2.1.9
 asyncpg
 alembic
 
