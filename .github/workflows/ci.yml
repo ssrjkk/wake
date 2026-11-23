@@ -144,7 +144,11 @@ jobs:
           # реальный Redis. В requirements.txt её нет намеренно: этот файл уходит
           # в Dockerfile, а продакшн-образ должен ставить redis-клиент, а не его
           # подделку.
-          pip install pytest allure-pytest fakeredis --quiet
+          # fakeredis 2.40.0 в паре с redis 8.2.0 (вышел 2026-11-23 в 08:31 UTC) падает:
+          # _clients/_setup.py:25 читает method.__closure__, а в 8.2.0 это method_descriptor.
+          # Верхняя граница только для тестовой установки — продакшн ставит redis из
+          # requirements.txt без ограничений.
+          pip install pytest allure-pytest fakeredis "redis<8.2" --quiet
       - name: Create the pytest database
         run: psql "postgresql://wake:wake@localhost:5432/postgres" -c "CREATE DATABASE wake_test"
         env:
