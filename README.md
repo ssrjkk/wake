@@ -5,7 +5,7 @@ Trading terminal for [Lighter](https://lighter.xyz) (zk perp DEX): a React web a
 Default configuration is **mainnet** with `WAKE_DRY_RUN=true`: real market data from the real network, and no order ever leaves the process until you turn dry-run off yourself.
 
 Live frontend: https://wake-7k6.pages.dev  
-Live backend: https://wake-backend-production-3483.up.railway.app — its current state is one `curl` away, not a paragraph: `curl -s …/health` answers whether the process is deployed at all, `curl -s …/ready` names the missing dependency (`database`, `redis`). The division of panels follows that answer: market data works without the Wake backend, sign-in, copy trading and Predict do not. [docs/RAILWAY_DEPLOY.md](docs/RAILWAY_DEPLOY.md) is the path from a not-ready service to a ready one.
+Backend: https://wake-backend-production-3483.up.railway.app — as measured on 2026-11-23 both `/health` and `/ready` answer `404 {"status":"error","code":404,"message":"Application not found"}`: the Railway service is deleted, so the deployed URL serves nothing until it is redeployed. When it is up, its state is one `curl` away rather than a paragraph: `/health` says whether the process answers, `/ready` names the missing dependency (`database`, `redis`). The division of panels follows that answer: market data works without the Wake backend, sign-in, copy trading and Predict do not. [docs/RAILWAY_DEPLOY.md](docs/RAILWAY_DEPLOY.md) is the path from a deleted or not-ready service to a ready one.
 
 ## Contact
 
@@ -332,7 +332,7 @@ npm run check:lighthouse       # live scores: gate at 95, worst of three runs
 npx wrangler pages deploy dist --project-name wake
 ```
 
-### Backend: Railway (this is what runs)
+### Backend: Railway (the deployment target — the service itself is currently deleted)
 
 The image is built from the `Dockerfile` at the repo root (`railway.json` configures the build). Variables are set through the dashboard or the CLI:
 
