@@ -397,6 +397,7 @@ To use this with real funds: get an external security audit, replace the file ke
 - [SECURITY.md](SECURITY.md) — trust boundaries and the production checklist
 - [CHANGELOG.md](CHANGELOG.md)
 - [LICENSE](LICENSE) — MIT
+- [Whitepaper](WHITEPAPER.md)
 
 ## License
 
