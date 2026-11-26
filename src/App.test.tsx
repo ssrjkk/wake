@@ -301,6 +301,13 @@ describe("App", () => {
     await expectSelected(TABS[2].label);
   });
 
+  it("статус бэкенда остаётся тем же узлом после проверки", async () => {
+    mount();
+    const status = screen.getByRole("status");
+    await screen.findByText(/Бэкенд Wake готов/);
+    expect(screen.getByRole("status")).toBe(status);
+  });
+
   it("без ответа бэкенда показывает причину, а не пустые панели", async () => {
     mode = "backend-down";
     mount();

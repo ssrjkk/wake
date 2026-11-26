@@ -1847,6 +1847,9 @@
     margin-bottom: 12px;
   }
 
+  .backend-status { min-height: 72px; }
+  .notice-ready { border-left-color: var(--up); }
+  .notice-ready > svg { color: var(--up); }
   .notice-warn { border-left-color: var(--warn); color: var(--fg-2); }
   .notice-error { border-left-color: var(--down); color: var(--fg-2); }
   .notice-error svg { color: var(--down); }
