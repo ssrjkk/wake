@@ -1314,7 +1314,8 @@ export default function App() {
           <main>
           <div
             className={`notice backend-status${backendChecked && !backend ? " notice-error" : backend && backend.network !== network ? " notice-warn" : " notice-ready"}`}
-            role="status"
+            role="region"
+            aria-label="Состояние бэкенда"
             aria-live="polite"
           >
             {!backendChecked ? (
