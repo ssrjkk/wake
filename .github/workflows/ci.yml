@@ -236,6 +236,12 @@ jobs:
         run: npx tsc --noEmit
       - name: Build
         run: npm run build
+      - name: Upload frontend bundle
+        uses: actions/upload-artifact@v7
+        with:
+          name: wake-frontend-${{ github.sha }}
+          path: dist
+          retention-days: 7
 
   # ── Frontend tests ───────────────────────────────────────────────────────
   frontend-tests:
