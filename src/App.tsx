@@ -1321,7 +1321,7 @@ export default function App() {
               <RefreshCw className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
             ) : backend ? (
               backend.network !== network ? (
-                <TriangleAlert className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+                <AlertTriangle className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
               ) : (
                 <Check className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
               )
