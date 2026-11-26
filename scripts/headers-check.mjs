@@ -13,9 +13,9 @@
 // деплоя — и об этом сказано в отчёте.
 
 import { createServer } from "node:http";
-import { readFile, readdir, stat } from "node:fs/promises";
+import { readFile, readdir } from "node:fs/promises";
 import { existsSync, readFileSync } from "node:fs";
-import { extname, join, resolve, sep } from "node:path";
+import { extname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { chromium } from "playwright";
 
 const ROOT = resolve(import.meta.dirname, "..");
@@ -280,7 +280,7 @@ for (const [file, pattern] of robotFiles) {
 }
 console.log(`OK   robots.txt и sitemap.xml называют хост canonical: ${canonicalHost}`);
 
-const server = createServer(async (req, res) => {
+async function handleRequest(req, res) {
   const pathname = decodeURIComponent(new URL(req.url, BASE).pathname);
   const index = join(DIST, "index.html");
   const rule = redirects.find(
@@ -293,40 +293,65 @@ const server = createServer(async (req, res) => {
     res.end();
     return;
   }
-  const wanted = pathname === "/" ? index : join(DIST, pathname);
+  const wanted = pathname === "/" ? index : resolve(DIST, `.${pathname}`);
   let file = wanted;
+  let body;
   try {
-    const info = await stat(wanted);
-    if (info.isDirectory()) file = join(wanted, "index.html");
-  } catch {
-    // Rewrite (200) работает там, где файла нет: точка в точку как
-    // `/* -> /index.html 200` в public/_redirects.
-    file = rule ? join(DIST, rule.dest) : index;
+    body = await readFile(file);
+  } catch (error) {
+    if (error.code === "EISDIR") {
+      file = join(file, "index.html");
+      try {
+        body = await readFile(file);
+      } catch {
+        body = undefined;
+      }
+    }
+    if (!body) {
+      // Rewrite (200) работает там, где файла нет: точка в точку как
+      // `/* -> /index.html 200` в public/_redirects.
+      file = rule ? resolve(DIST, `.${rule.dest}`) : index;
+      body = await readFile(file);
+    }
   }
-  if (!file.startsWith(DIST + sep)) file = index;
-  try {
-    const body = await readFile(file);
-    res.writeHead(200, {
-      "content-type": MIME[extname(file)] ?? "application/octet-stream",
-      ...headersFor(rules, pathname),
-    });
-    res.end(body);
-  } catch (e) {
-    res.writeHead(500).end(String(e));
+  const rel = relative(DIST, file);
+  if (rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
+    file = index;
+    body = await readFile(file);
   }
+  res.writeHead(200, {
+    "content-type": MIME[extname(file)] ?? "application/octet-stream",
+    ...headersFor(rules, pathname),
+  });
+  res.end(body);
+}
+
+const server = createServer((req, res) => {
+  handleRequest(req, res).catch((error) => res.writeHead(500).end(String(error)));
 });
 
 await new Promise((r) => server.listen(PORT, HOST, r));
 
-// Модель `_redirects` обязана применяться, а не только разбираться: правило
-// проверяется ответом собственного сервера. Без этого опечатка в условии
-// (`code !== 200` наоборот) оставляла бы все прогоны зелёными над правилом,
-// которое не отдаёт ничего.
+// Модель `_redirects` обязана применяться, а не только разбираться. Вызываем
+// handler напрямую: сетевой fetch по данным из файла создавал ложный security-алерт
+// и делал проверку медленнее, не добавляя покрытия.
 for (const r of statics.filter((x) => x.code !== 200)) {
-  const res = await fetch(`${BASE}${r.source}`, { redirect: "manual" });
-  if (res.status !== r.code || res.headers.get("location") !== r.dest) {
+  const response = await new Promise((resolveResponse) => {
+    const headers = {};
+    const mock = {
+      writeHead(code, values) {
+        this.status = code;
+        Object.assign(headers, values);
+      },
+      end() {
+        resolveResponse({ status: this.status, location: headers.location });
+      },
+    };
+    handleRequest({ url: r.source }, mock);
+  });
+  if (response.status !== r.code || response.location !== r.dest) {
     throw new Error(
-      `_redirects не применён: ${r.source} дал ${res.status} → ${res.headers.get("location")}, а ждали ${r.code} → ${r.dest}`,
+      `_redirects не применён: ${r.source} дал ${response.status} → ${response.location}, а ждали ${r.code} → ${r.dest}`,
     );
   }
   console.log(`OK   ${r.source} -> ${r.dest} (${r.code})`);
