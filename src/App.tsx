@@ -1312,49 +1312,49 @@ export default function App() {
           </header>
 
           <main>
-          {backendChecked && !backend && (
-            <div className="notice animate-fade-in">
-              <ServerOff className="w-3.5 h-3.5 shrink-0" />
-              <span>
-                Бэкенд Wake не готов: работают Терминал, Funding и Портфель —
-                они читают публичный API Lighter. Копи-трейд, Predict, агент и
-                обзор рынка хранят состояние в базе Wake.
-                {backendReason && (
-                  <span className="notice-reason">
-                    {" "}
-                    Причина: {errorText(backendReason, 200)}
-                  </span>
-                )}
-              </span>
-              <details className="notice-more">
-                <summary>Почему так</summary>
-                <p>
-                  Сайт — статика на Cloudflare Pages, Wake-бэкенд — отдельный
-                  сервис: он подписывает ордера, ведёт базу и проверяет вход.
-                  Без него панели, которым нужна база, честно показывают эту
-                  строку, а не пустые таблицы.
-                </p>
-              </details>
-              <button onClick={checkBackend} className="btn-ghost shrink-0">
-                <RefreshCw className="w-3 h-3" />
-                Проверить
-              </button>
-            </div>
-          )}
-
-          {backend && backend.network !== network && (
-            <div className="notice notice-warn animate-fade-in">
-              <span>
-                Бэкенд работает в сети{" "}
-                <code className="num">{backend.network}</code>, а сайт
-                переключён в <code className="num">{network}</code>: обзор
-                рынка, Predict и копи-трейд приходят из{" "}
-                <code className="num">{backend.network}</code>. Сеть у бэкенда
-                задаёт <code className="num">WAKE_LIGHTER_NETWORK</code>, с
-                фронтенда она не переключается.
-              </span>
-            </div>
-          )}
+          <div
+            className={`notice backend-status${backendChecked && !backend ? " notice-error" : backend && backend.network !== network ? " notice-warn" : " notice-ready"}`}
+            role="region"
+            aria-label="Состояние бэкенда"
+            aria-live="polite"
+          >
+            {!backendChecked ? (
+              <RefreshCw className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+            ) : backend ? (
+              backend.network !== network ? (
+                <AlertTriangle className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+              ) : (
+                <Check className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+              )
+            ) : (
+              <ServerOff className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+            )}
+            <span>
+              {!backendChecked
+                ? "Проверяю бэкенд Wake…"
+                : backend
+                  ? backend.network !== network
+                    ? `Сети расходятся: бэкенд ${backend.network}, сайт ${network}.`
+                    : `Бэкенд Wake готов · ${backend.network} · ${backend.dry_run ? "dry-run" : "live"}`
+                  : "Бэкенд Wake не готов · Терминал, Funding и Портфель работают."}
+            </span>
+            {backendChecked && !backend && (
+              <>
+                <span className="sr-only">
+                  {" "}Копи-трейд, Predict, агент и обзор рынка хранят состояние в базе Wake.
+                  {backendReason ? ` Причина: ${errorText(backendReason, 200)}` : ""}
+                </span>
+                <button
+                  onClick={checkBackend}
+                  className="btn-ghost shrink-0"
+                  aria-label="Проверить бэкенд"
+                  title="Проверить бэкенд"
+                >
+                  <RefreshCw className="w-3 h-3" />
+                </button>
+              </>
+            )}
+          </div>
 
           {/* перемонтирование по сети: панели иначе держат данные со старой сети до следующего опроса */}
           <Suspense
