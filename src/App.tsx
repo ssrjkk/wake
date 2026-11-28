@@ -160,6 +160,7 @@ export default function App() {
   );
   const [tab, setTab] = useState<Tab>(entry.tab);
   const navRef = useRef<HTMLDivElement>(null);
+  const walletMenuTriggerRef = useRef<HTMLButtonElement>(null);
   const [walletMenuOpen, setWalletMenuOpen] = useState(false);
   const [connectPickerOpen, setConnectPickerOpen] = useState(false);
   const [accountResult, setAccountResult] = useState<{
@@ -212,6 +213,15 @@ export default function App() {
   const userId = session?.userId ?? null;
   const signedIn = session !== null;
   const backendUp = backend !== null;
+  const backendNetworkMismatch = backend !== null && backend.network !== network;
+
+  function rejectBackendNetworkMismatch(): boolean {
+    if (!backendNetworkMismatch) return false;
+    setToast(
+      `Сети расходятся: сайт ${network}, бэкенд ${backend?.network}. Операция отменена, чтобы не писать не в ту сеть.`,
+    );
+    return true;
+  }
 
   // Один вариант ответа «бэкенда нет» на весь файл: состояние выставляет только
   // этот путь, и кнопка «Проверить», и загрузка страницы не могут разойтись в
@@ -232,6 +242,11 @@ export default function App() {
   function checkBackend() {
     setBackendChecked(false);
     probeBackendState();
+  }
+
+  function closeWalletMenu(restoreFocus = false) {
+    if (restoreFocus) walletMenuTriggerRef.current?.focus();
+    setWalletMenuOpen(false);
   }
 
   useEffect(() => {
@@ -289,6 +304,7 @@ export default function App() {
         if (!live) return;
         setIsCopyable(false);
         setLeaderId(null);
+        setLeaderFeeBps(8);
       });
     return () => {
       live = false;
@@ -298,7 +314,6 @@ export default function App() {
   const [toast, setToastState] = useState<{
     msg: string;
     variant: "success" | "error" | "info";
-    ts: number;
   } | null>(null);
 
   function setToast(msg: string | null) {
@@ -307,7 +322,7 @@ export default function App() {
       return;
     }
     const variant = toastVariant(msg);
-    setToastState({ msg, variant, ts: Date.now() });
+    setToastState({ msg, variant });
     // Тот же итог, что и строка внизу экрана, но в руке: в мини-аппе человек
     // смотрит на график, а не вниз, и исход ордера обязан ощущаться.
     telegramNotify(variant);
@@ -362,7 +377,7 @@ export default function App() {
       if (e.key === "Escape") {
         setConnectPickerOpen(false);
         setMarketPickerOpen(false);
-        setWalletMenuOpen(false);
+        closeWalletMenu(walletMenuOpen);
         setCopyModal(null);
         return;
       }
@@ -381,7 +396,7 @@ export default function App() {
     }
     window.addEventListener("keydown", handleKey);
     return () => window.removeEventListener("keydown", handleKey);
-  }, []);
+  }, [walletMenuOpen]);
 
   // Стрелки внутри ленты выбирают вкладку сразу (automatic activation из
   // ARIA-паттерна tablist): фокус и выбранная панель должны сходиться в одном
@@ -545,6 +560,7 @@ export default function App() {
     setFollowsError(null);
     setSubscription(null);
     setLeaderId(null);
+    setLeaderFeeBps(8);
     setIsCopyable(false);
     setCopyModal(null);
     setConnectPickerOpen(false);
@@ -672,7 +688,7 @@ export default function App() {
     if (!isTelegramWebView()) return;
     setTelegramBackHandler(overlayOpen, () => {
       if (closeTopLayer()) return;
-      setWalletMenuOpen(false);
+      closeWalletMenu(true);
     });
     return () => setTelegramBackHandler(false, () => {});
   }, [overlayOpen]);
@@ -687,6 +703,7 @@ export default function App() {
       setSubscription(null);
       setIsCopyable(false);
       setLeaderId(null);
+      setLeaderFeeBps(8);
     }
     window.addEventListener(SIGNED_OUT_EVENT, onSignedOut);
     return () => window.removeEventListener(SIGNED_OUT_EVENT, onSignedOut);
@@ -703,7 +720,8 @@ export default function App() {
     setSubscription(null);
     setIsCopyable(false);
     setLeaderId(null);
-    setWalletMenuOpen(false);
+    setLeaderFeeBps(8);
+    closeWalletMenu();
   }
 
   async function confirmCopy() {
@@ -714,6 +732,11 @@ export default function App() {
       );
       return;
     }
+    if (!backendUp) {
+      setToast("Бэкенд не отвечает — подписки не запишутся");
+      return;
+    }
+    if (rejectBackendNetworkMismatch()) return;
     // Сервер отказывает на этом же условии (POST /follows →
     // LIGHTER_ACCOUNT_NOT_LINKED): без подтверждённого индекса нечего зеркалить,
     // и строка follows осталась бы пустой записью с обещанием копирования.
@@ -805,6 +828,7 @@ export default function App() {
       setToast("Бэкенд не отвечает — подписки не запишутся");
       return;
     }
+    if (rejectBackendNetworkMismatch()) return;
     if (session?.lighterAccountIndex == null) {
       setToast(
         "Нужен индекс аккаунта Lighter: подтверди вход кошельком в меню профиля",
@@ -967,6 +991,7 @@ export default function App() {
               <div className="relative">
                 {signedIn || address ? (
                   <button
+                    ref={walletMenuTriggerRef}
                     onClick={() => setWalletMenuOpen((v) => !v)}
                     aria-expanded={walletMenuOpen}
                     aria-controls="wallet-menu"
@@ -1013,7 +1038,7 @@ export default function App() {
                   <>
                     <div
                       className="fixed inset-0 z-40"
-                      onClick={() => setWalletMenuOpen(false)}
+                      onClick={() => closeWalletMenu(true)}
                     />
                     <div
                       id="wallet-menu"
@@ -1120,7 +1145,7 @@ export default function App() {
                         <button
                           onClick={() => {
                             disconnect();
-                            setWalletMenuOpen(false);
+                            closeWalletMenu(true);
                           }}
                           className="btn-secondary"
                         >
@@ -1340,8 +1365,8 @@ export default function App() {
             </span>
             {backendChecked && !backend && (
               <>
-                <span className="sr-only">
-                  {" "}Копи-трейд, Predict, агент и обзор рынка хранят состояние в базе Wake.
+                <span className="min-w-0 flex-1 break-words">
+                  Копи-трейд, Predict, агент и обзор рынка хранят состояние в базе Wake.
                   {backendReason ? ` Причина: ${errorText(backendReason, 200)}` : ""}
                 </span>
                 <button
@@ -1663,8 +1688,8 @@ export default function App() {
                 onKeyDown={handleMarketKeys}
               >
                 {filteredMarkets.length === 0 && (
-                  <p className="picker-empty">
-                    Ничего не найдено
+                  <p className={dataError ? "picker-empty text-negative" : "picker-empty"}>
+                    {dataError ? `Рынки не загрузились: ${dataError}` : "Ничего не найдено"}
                   </p>
                 )}
                 <div className="window-spacer" style={{ height: pickerWindow.padTop }} />

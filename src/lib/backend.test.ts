@@ -126,6 +126,16 @@ describe('backendJson', () => {
     await expect(expectError(() => backendJson('/x'))).resolves.toContain('рынок уже резолвлен')
   })
 
+  it('surfaces the server retry delay on 429', async () => {
+    fetchMock.mockResolvedValue({
+      ok: false,
+      status: 429,
+      headers: new Headers({ 'Retry-After': '7' }),
+      text: () => Promise.resolve('{"error":{"code":"RATE_LIMITED","message":"Слишком много запросов"}}'),
+    })
+    await expect(expectError(() => backendJson('/leaders'))).resolves.toContain('Повторите через 7 с')
+  })
+
   it('falls back to the status code when the error body is empty', async () => {
     fetchMock.mockResolvedValue({ ok: false, status: 502, text: () => Promise.resolve('') })
     await expect(expectError(() => backendJson('/x'))).resolves.toContain('Бэкенд Wake 502')
@@ -164,6 +174,17 @@ describe('backendJson', () => {
     await expect(probeBackend()).resolves.toEqual(health)
     expect(fetchMock.mock.calls[0][0]).toBe(`${BACKEND_URL}/health`)
     expect(fetchMock.mock.calls[1][0]).toBe(`${BACKEND_URL}/ready`)
+  })
+
+  it('uses one deadline for health and readiness', async () => {
+    fetchMock
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ status: 'ok', network: 'mainnet', dry_run: true }) })
+      .mockResolvedValueOnce({ ok: true, json: () => Promise.resolve({ status: 'ready' }) })
+    await probeBackend()
+    const healthSignal = (fetchMock.mock.calls[0][1] as RequestInit).signal
+    const readySignal = (fetchMock.mock.calls[1][1] as RequestInit).signal
+    expect(healthSignal).toBeInstanceOf(AbortSignal)
+    expect(readySignal).toBe(healthSignal)
   })
 
   // Причина обязана доходить до баннера: «недоступен» про сервис, который отвечает

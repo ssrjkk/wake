@@ -100,7 +100,12 @@ export async function backendJson<T>(path: string, init?: RequestInit, timeoutMs
   if (!res.ok) {
     // Текст ошибки от бэкенда говорящий (409 «рынок уже резолвлен», 400 «недостаточно
     // shares»), поэтому он идёт в сообщение, а не голый код состояния.
-    throw new Error(backendMessage(await readText(res), res.status, path));
+    const message = backendMessage(await readText(res), res.status, path);
+    const retryAfter = Number(res.headers?.get?.("Retry-After"));
+    if (res.status === 429 && Number.isFinite(retryAfter) && retryAfter > 0) {
+      throw new Error(`${message}. Повторите через ${Math.ceil(retryAfter)} с.`);
+    }
+    throw new Error(message);
   }
   try {
     return (await res.json()) as T;
@@ -143,13 +148,14 @@ export type BackendReady = { status: string; checks?: Record<string, string> };
 const PROBE_TIMEOUT_MS = 10_000;
 
 export async function probeBackend(): Promise<BackendHealth> {
-  const health = await backendJson<BackendHealth>("/health", undefined, PROBE_TIMEOUT_MS);
+  const signal = AbortSignal.timeout(PROBE_TIMEOUT_MS);
+  const health = await backendJson<BackendHealth>("/health", { signal }, PROBE_TIMEOUT_MS);
   // /ready читается напрямую, а не через backendJson: его отказ — штатный ответ
   // (503 с перечнем проверок), а не ошибка транспорта, и перечень нужен баннеру,
   // чтобы назвать причину, а не утверждать «недоступен» про отвечающий сервис.
   let res: Response;
   try {
-    res = await fetch(`${BACKEND_URL}/ready`, { signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) });
+    res = await fetch(`${BACKEND_URL}/ready`, { signal });
   } catch (e) {
     // Без этого ветвления таймаут долетал до интерфейса как "signal timed out".
     throw new Error(transportMessage(e, PROBE_TIMEOUT_MS), { cause: e });

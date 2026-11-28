@@ -180,6 +180,15 @@ class TestDatabaseUrl(unittest.TestCase):
         with self.assertRaises(ValidationError):
             build(wake_database_url="sqlite:///wake.db")
 
+    def test_invalid_url_error_does_not_expose_credentials(self):
+        secret = "do-not-print-this-password"
+        with self.assertRaises(ValidationError) as ctx:
+            build(wake_database_url=f"mysql://wake:{secret}@db.example/wake")
+        message = str(ctx.exception)
+        self.assertIn("WAKE_DATABASE_URL", message)
+        self.assertNotIn(secret, message)
+        self.assertNotIn("wake:do-not-print", message)
+
 
 class TestLogLevel(unittest.TestCase):
     def test_typo_is_refused_instead_of_degrading_to_info(self):
