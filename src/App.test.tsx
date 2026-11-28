@@ -12,6 +12,7 @@
 // врал бы. Замеры делает e2e на живом chromium.
 import { StrictMode } from "react";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -27,6 +28,7 @@ import { config } from "./wagmi";
 import { BACKEND_URL, LIGHTER_NETWORK } from "./lib/config";
 import { setNetwork as setLighterNetwork } from "./lib/lighter";
 import { setNetwork as setArcusNetwork } from "./lib/arcus";
+import { saveSession } from "./lib/session";
 import { TABS } from "./lib/tabs";
 
 // Один рынок вместо пустого списка: «нет данных» и «данные есть, но панелей не
@@ -72,9 +74,10 @@ function networkOf(url: string): "mainnet" | "testnet" {
   return url.includes("testnet") ? "testnet" : "mainnet";
 }
 
-type Mode = "ready" | "backend-down";
+type Mode = "ready" | "backend-down" | "markets-down";
 
 let mode: Mode = "ready";
+let backendNetwork: "mainnet" | "testnet" = "mainnet";
 let calls: string[] = [];
 
 // Один ответ на один адрес. Всё, чего приложение не просит, сюда не попадает:
@@ -87,13 +90,16 @@ function respond(url: string): Response {
     });
   if (url.endsWith("/health")) {
     if (mode === "backend-down") throw new TypeError("fetch failed");
-    return json({ status: "ok", network: "mainnet", dry_run: true });
+    return json({ status: "ok", network: backendNetwork, dry_run: true });
   }
   if (url.endsWith("/ready")) {
     if (mode === "backend-down") throw new TypeError("fetch failed");
     return json({ status: "ready", checks: { postgres: "ok", redis: "ok" } });
   }
-  if (url.includes("/api/v1/orderBooks")) return json({ order_books: MARKETS_BY_NETWORK[networkOf(url)] });
+  if (url.includes("/api/v1/orderBooks")) {
+    if (mode === "markets-down") throw new TypeError("Lighter unavailable");
+    return json({ order_books: MARKETS_BY_NETWORK[networkOf(url)] });
+  }
   if (url.includes("/api/v1/candles")) {
     const close = CLOSE_BY_NETWORK[`${networkOf(url)}:${new URL(url).searchParams.get("market_id")}`];
     // Рынка без записи в таблице в ответе нет вовсе: пустой ряд — это «свечей
@@ -181,6 +187,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   mode = "ready";
+  backendNetwork = "mainnet";
   calls = [];
   /* Сети библиотек — глобальное состояние модуля, и переключатель в шапке его
      меняет по-настоящему. Без возврата к написанному в конфиге умолчанию каждый
@@ -313,9 +320,28 @@ describe("App", () => {
     mount();
     const notice = await screen.findByText(/Бэкенд Wake не готов/);
     expect(notice).toBeVisible();
+    const status = screen.getByRole("region", { name: "Состояние бэкенда" });
+    expect(status).toHaveTextContent(/fetch failed/);
+    expect(status.querySelector(".sr-only")).toBeNull();
     // Разделы, которым база не нужна, обязаны остаться доступны: Терминал и
     // Funding читают публичный API Lighter напрямую.
     expect(tab("Терминал")).toBeEnabled();
+  });
+
+  it("Escape закрывает меню кошелька и возвращает фокус на кнопку", async () => {
+    saveSession(
+      { user_id: "0xabc", token: "wk1.test.token", expires_at: Math.floor(Date.now() / 1000) + 600, lighter_account_index: 1 },
+      { label: "user-a", via: "wallet" },
+    );
+    mount();
+    await act(async () => {});
+    const trigger = screen.getByRole("button", { name: /user-a/ });
+    fireEvent.click(trigger);
+    const signOut = screen.getByRole("button", { name: "Выйти" });
+    signOut.focus();
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("button", { name: "Выйти" })).toBeNull();
+    expect(trigger).toHaveFocus();
   });
 
   it("каждая вкладка указывает на единственную панель", async () => {
@@ -381,6 +407,25 @@ describe("переключение сети", () => {
     expect(marketRow(container, "BTC")?.textContent).not.toContain("12.34");
     expect(marketRow(container, "OURA")).toBeUndefined();
   });
+
+  it("не публикует лидера, пока сеть сайта расходится с бэкендом", async () => {
+    backendNetwork = "testnet";
+    saveSession(
+      { user_id: "0xabc", token: "wk1.test.token", expires_at: Math.floor(Date.now() / 1000) + 600, lighter_account_index: 1 },
+      { label: "user-a", via: "wallet" },
+    );
+    mount();
+    await screen.findByText(/Сети расходятся/);
+    fireEvent.click(tab("Терминал"));
+    await expectSelected("Терминал");
+    fireEvent.click(screen.getByRole("button", { name: "Публиковать мои сделки" }));
+    await screen.findByText(/Операция отменена/);
+    const leaderWrites = vi.mocked(global.fetch).mock.calls.filter(([input, init]) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      return url.endsWith("/leaders") && init?.method === "POST";
+    });
+    expect(leaderWrites).toHaveLength(0);
+  });
 });
 
 /* Рынок, снятый с торгов, из книги не исчезает: у 26 из 246 книг mainnet
@@ -405,6 +450,17 @@ describe("снятый с торгов рынок", () => {
     const search = await screen.findByLabelText("Поиск рынка");
     fireEvent.change(search, { target: { value: "HANMI" } });
     expect(await screen.findByText("Ничего не найдено")).toBeVisible();
+  });
+
+  it("не выдаёт ошибку загрузки рынков за пустой результат", async () => {
+    mode = "markets-down";
+    mount();
+    await expectSelected(TABS[0].label);
+    fireEvent.click(tab("Терминал"));
+    await expectSelected("Терминал");
+    fireEvent.click(screen.getByRole("button", { name: "Выбрать рынок" }));
+    expect(await screen.findByText(/Рынки не загрузились: Lighter unavailable/)).toBeVisible();
+    expect(screen.queryByText("Ничего не найдено")).toBeNull();
   });
 
   it("по ссылке ?asset= не открывает кнопку ордера", async () => {

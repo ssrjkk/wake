@@ -5,7 +5,7 @@ Trading terminal for [Lighter](https://lighter.xyz) (zk perp DEX): a React web a
 Default configuration is **mainnet** with `WAKE_DRY_RUN=true`: real market data from the real network, and no order ever leaves the process until you turn dry-run off yourself.
 
 Live frontend: https://wake-7k6.pages.dev  
-Backend: https://wake-backend-production-3483.up.railway.app — as measured on 2026-11-23 both `/health` and `/ready` answer `404 {"status":"error","code":404,"message":"Application not found"}`: the Railway service is deleted, so the deployed URL serves nothing until it is redeployed. When it is up, its state is one `curl` away rather than a paragraph: `/health` says whether the process answers, `/ready` names the missing dependency (`database`, `redis`). The division of panels follows that answer: market data works without the Wake backend, sign-in, copy trading and Predict do not. [docs/RAILWAY_DEPLOY.md](docs/RAILWAY_DEPLOY.md) is the path from a deleted or not-ready service to a ready one.
+Backend: https://wake-backend-production-3483.up.railway.app — as measured on 2026-11-27 both `/health` and `/ready` answer `404 {"status":"error","code":404,"message":"Application not found"}`: the Railway service is deleted, so the deployed URL serves nothing until it is redeployed. When it is up, its state is one `curl` away rather than a paragraph: `/health` says whether the process answers, `/ready` names the missing dependency (`database`, `redis`). The division of panels follows that answer: market data works without the Wake backend, sign-in, copy trading and Predict do not. [docs/RAILWAY_DEPLOY.md](docs/RAILWAY_DEPLOY.md) is the path from a deleted or not-ready service to a ready one.
 
 ## Contact
 
@@ -65,7 +65,7 @@ Inside the Mini App the page also configures its own window (`src/lib/telegram.t
 
 ```bash
 npm install
-cp .env.example .env    # optional: the defaults are mainnet + localhost services
+cp .env.example .env    # local dev: mainnet + backend on localhost:8000
 npm run dev             # http://localhost:5173
 ```
 
@@ -82,7 +82,7 @@ alembic upgrade head      # schema comes from migrations, never from the app
 uvicorn app:app --reload --port 8000
 ```
 
-The API documentation is off by default: this app answers with `Content-Security-Policy: default-src 'self'`, and Swagger UI loads a CDN script plus an inline tag, so `/docs` would render an empty page. Set `WAKE_ENABLE_DOCS=true` to get `/docs`, `/redoc` and the machine-readable schema at `/openapi.json`. Endpoints that need credentials declare them there — `HTTPBearer` for the session token, `APIKeyHeader` for `X-Curator-Token` — so the operator surface is findable without reading the source. The path count is not quoted here on purpose: it changes with every router, and a doc that restates it is wrong within a week. Run it from `backend/` — `config.py` reads `.env` relative to the working directory, so starting from the repo root silently runs with a different configuration.
+The API documentation is off by default: this app answers with `Content-Security-Policy: default-src 'self'`, and Swagger UI loads a CDN script plus an inline tag, so `/docs` would render an empty page. Set `WAKE_ENABLE_DOCS=true` to expose `/openapi.json`; the Swagger and ReDoc routes are registered too, but their browser UIs remain blocked until their assets are self-hosted or the CSP is scoped for docs. Endpoints that need credentials declare them in the schema — `HTTPBearer` for the session token, `APIKeyHeader` for `X-Curator-Token` — so the operator surface is findable without reading the source. The path count is not quoted here on purpose: it changes with every router, and a doc that restates it is wrong within a week. Run it from `backend/` — `config.py` reads `.env` relative to the working directory, so starting from the repo root silently runs with a different configuration.
 
 ### Copy trading without a seed script
 
@@ -292,7 +292,7 @@ The interface is checked with numbers too. `theme.gate.test.ts` computes WCAG co
 
 Project `wake` → https://wake-7k6.pages.dev.
 
-- The project is **not** connected to Git and has no Cloudflare build configuration: the artifact is produced locally and uploaded with wrangler. `npx wrangler pages project list` shows `Git Provider: No`, and `builds` is null on the project.
+- The project is **not** connected to Git and has no Cloudflare build configuration: green CI publishes a `wake-frontend-<sha>` artifact that can be downloaded and uploaded with wrangler; a local `npm run build` into `dist` remains the alternative. `npx wrangler pages project list` shows `Git Provider: No`, and `builds` is null on the project.
 - Consequence worth knowing: `VITE_*` values come from the root `.env` **on the machine that builds**, because the deployment carries no environment variables of its own. They are compiled into the bundle, so changing one requires a rebuild and a redeploy. A `.env` with an empty `VITE_TELEGRAM_BOT_NAME` produces a site whose Telegram login is switched off, and the Cloudflare dashboard will not show you that — this is how a wrong bot handle reached production once.
 - Verify what actually shipped instead of trusting the build log:
 
@@ -329,6 +329,14 @@ Deploy from the repo:
 npm run build
 npm run check:headers          # dist under the real _headers, in a browser, before upload
 npm run check:lighthouse       # live scores: gate at 95, worst of three runs
+npx wrangler pages deploy dist --project-name wake
+```
+
+To deploy the exact bundle that passed CI instead of rebuilding locally, download the
+`wake-frontend-<sha>` artifact from the green run and deploy that directory:
+
+```bash
+gh run download <run-id> --repo ssrjkk/wake --name wake-frontend-<sha> --dir dist
 npx wrangler pages deploy dist --project-name wake
 ```
 
@@ -386,7 +394,7 @@ docker compose up predict-resolver
 - `X-Forwarded-For` is honoured only from `WAKE_TRUSTED_PROXY_IPS`, every occurrence of the header is read, not just the first one (repeating `X-Forwarded-For` is allowed, and the first copy is usually the line the client sent itself), and the address used is the rightmost chain element that is not itself a trusted proxy — with Cloudflare in front of Railway the plain rightmost one is the previous proxy's address. Otherwise a client could pick the IP that rate limits and audit records show for it. Peers and chain entries are compared as IP addresses, not as strings, so `::ffff:10.0.0.1`, upper-case and expanded IPv6 spellings are the same proxy as the one listed in the environment.
 - Every SQL statement goes through SQLAlchemy Core/ORM with bound parameters; there is no string-built SQL in the backend.
 - Keys are encrypted at rest (`encrypted_key_store.py`) — this is encryption, not an HSM.
-- `/health` and `/ready` need no token; everything else that reads or writes state does. Errors are one JSON shape — `{error: {code, message}}` — so a client can branch on `code` instead of parsing a sentence.
+- `/health` and `/ready` need no token. Public market and leader-directory reads also need no token; private user, subscription, follow, portfolio and operator state requires a session or curator credential. Errors are one JSON shape — `{error: {code, message}}` — so a client can branch on `code` instead of parsing a sentence.
 
 To use this with real funds: get an external security audit, replace the file keystore with HSM/KMS, and get legal advice for your jurisdiction. Report vulnerabilities privately through GitHub's security advisory feature rather than a public issue.
 

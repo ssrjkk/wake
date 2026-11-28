@@ -86,7 +86,7 @@ The bot registers its command menu at startup (`set_my_commands`), so nothing ha
 
 ## 3. Migrations
 
-`alembic upgrade head` creates the schema, not the application: production code has no DDL privileges, and "the tables will appear on their own" leaves you with a database whose structure drifts from the migrations. The image ships `alembic.ini` and `alembic/`, and `railway.json` overrides the image command with one that migrates before the API comes up:
+`alembic upgrade head` creates the schema, not the application: "the tables will appear on their own" leaves you with a database whose structure drifts from the migrations. The image ships `alembic.ini` and `alembic/`, and `railway.json` overrides the image command with one that migrates before the API comes up. The current Railway start command uses the same database role for migration and runtime; use a separate migration role and a runtime role without DDL privileges when that isolation is required:
 
 ```
 sh -c "alembic upgrade head && uvicorn app:app --host 0.0.0.0 --port ${PORT:-8000}"
@@ -101,6 +101,9 @@ railway run alembic heads     # expected head is the one in backend/alembic/vers
 CI runs `alembic check`, which compares the models against the migrations, so `pg_models.py` and `alembic/` cannot drift apart quietly.
 
 ## 4. Verification
+
+`railway.json` and the Docker `HEALTHCHECK` both use `/ready`, so a process without its
+database or Redis is not reported as healthy. `/health` remains the cheap liveness probe.
 
 ```bash
 curl -s https://<domain>/health
@@ -155,7 +158,7 @@ Mirror rows also carry `skipped / margin_unverified`: that follower's account va
 
 | Symptom | Cause |
 | --- | --- |
-| `/ready` → `database: fail` | `WAKE_DATABASE_URL` does not point at the attached service, or the schema was never migrated |
+| `/ready` → `database: fail` | `WAKE_DATABASE_URL` is wrong, the database is unreachable, or authentication failed; `/ready` checks connectivity, not the presence of every table |
 | `/ready` → `redis: fail` | `WAKE_REDIS_URL` missing or Redis not attached; the rate limiter then lets everything through (fail open) and wallet sign-in answers 503 |
 | Sign-in → 503 `SESSION_NOT_CONFIGURED` | `WAKE_SESSION_SECRET` is empty |
 | Sign-in → 503 `CHALLENGE_STORE_UNAVAILABLE` | Redis is unreachable, so a challenge cannot be stored — verifying a signature "on trust" is not an option |

@@ -22,6 +22,7 @@ class Settings(BaseSettings):
         env_file=".env",
         env_file_encoding="utf-8",
         extra="ignore",
+        hide_input_in_errors=True,
     )
 
     # PostgreSQL (единственная база: подписки, аллокации, рынки предсказаний,
@@ -135,7 +136,7 @@ class Settings(BaseSettings):
         if v.startswith("postgresql+asyncpg://"):
             return v
         raise ValueError(
-            f"WAKE_DATABASE_URL={v!r}: база должна быть PostgreSQL "
+            "WAKE_DATABASE_URL: база должна быть PostgreSQL "
             "(postgresql://… или postgresql+asyncpg://…)"
         )
 
