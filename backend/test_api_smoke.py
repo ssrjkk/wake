@@ -29,6 +29,7 @@ import time
 import unittest
 import uuid
 from pathlib import Path
+from unittest import mock
 from urllib.parse import urlencode
 
 # Тестовое окружение (секрет сессии, фиктивный токен бота, ведро rate limit)
@@ -2147,10 +2148,8 @@ class TestFailureResponseContract(HttpCase):
         self.assertEqual(r.headers.get("x-content-type-options"), "nosniff")
         self.assertIn("default-src 'self'", r.headers["content-security-policy"])
 
-    async def test_value_error_response_is_signed_too(self):
-        """400 на ValueError — тоже ответ, собранный вне роута, и он обязан нести
-        те же заголовки: фронт читает error.code, а без ACAO он читает не его, а
-        «Failed to fetch»."""
+    async def test_unexpected_value_error_is_500_and_reported(self):
+        """Внутренний ValueError — баг сервера, а не плохой запрос клиента."""
         import lighter_rest
 
         original = lighter_rest.get_market_overview
@@ -2158,13 +2157,15 @@ class TestFailureResponseContract(HttpCase):
             ValueError("неизвестная сеть Lighter")
         )
         self.addCleanup(setattr, lighter_rest, "get_market_overview", original)
-        r = await self.client.get(
-            "/markets/overview", headers={"Origin": self.origin()}
-        )
-        self.assertEqual(r.status_code, 400)
-        self.assertEqual(r.json()["error"]["code"], "VALIDATION_ERROR")
+        with mock.patch.object(app.sentry_sdk, "capture_exception") as capture:
+            r = await self.client.get(
+                "/markets/overview", headers={"Origin": self.origin()}
+            )
+        self.assertEqual(r.status_code, 500)
+        self.assertEqual(r.json()["error"]["code"], "INTERNAL_ERROR")
         self.assertEqual(r.headers.get("access-control-allow-origin"), self.origin())
         self.assertEqual(r.headers.get("x-content-type-options"), "nosniff")
+        capture.assert_called_once()
 
 
 class TestAuditRead(HttpCase):
