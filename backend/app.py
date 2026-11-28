@@ -214,28 +214,6 @@ async def rate_limit_middleware(request: Request, call_next):
 async def error_envelope_middleware(request: Request, call_next):
     try:
         return await call_next(request)
-    except ValueError as exc:
-        # ValueError — это и валидация границ (predict_amm, portfolio_risk,
-        # wallet_auth), и баг в коде (_int("abc")). Статус 400 остаётся, но молча
-        # превращать настоящую ошибку сервера в «плохой запрос» нельзя: без этой
-        # строки Sentry и логи разбора видели бы только 400 от клиента там, где
-        # падал наш собственный код.
-        logger.warning(
-            "ValueError на %s %s: %s",
-            request.method,
-            request.url.path,
-            exc,
-            exc_info=True,
-        )
-        return JSONResponse(
-            status_code=400,
-            content={
-                "error": {
-                    "code": "VALIDATION_ERROR",
-                    "message": "Некорректные данные запроса",
-                }
-            },
-        )
     except Exception as exc:
         logger.exception("Unhandled exception: %s", exc)
         # Дальше по стеку exception уже не уйдёт, а именно выход наружу ловила
