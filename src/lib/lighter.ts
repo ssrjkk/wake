@@ -371,6 +371,13 @@ type RawAccount = {
   positions?: RawPosition[];
 };
 
+export class AccountNotFoundError extends Error {
+  constructor() {
+    super("Аккаунт не найден");
+    this.name = "AccountNotFoundError";
+  }
+}
+
 export async function getAccountByL1Address(address: string): Promise<LighterAccount> {
   const res = await timedFetch(`${BASE_URL()}/account?by=l1_address&value=${address}`);
   if (!res.ok) throw new Error(`Lighter API ${res.status}`);
@@ -391,7 +398,7 @@ export async function getAccountByIndex(index: number): Promise<LighterAccount> 
 // carry position "0.0000" — they are kept as-is (size 0); callers filter on size.
 function mapAccount(accounts: RawAccount[]): LighterAccount {
   const account = accounts[0];
-  if (!account) throw new Error("Аккаунт не найден");
+  if (!account) throw new AccountNotFoundError();
   const positions: LighterPosition[] = (account.positions ?? []).map((p) => ({
     marketId: p.market_id,
     symbol: p.symbol,

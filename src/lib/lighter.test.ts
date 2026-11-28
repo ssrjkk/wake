@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { BACKEND_URL, SIGNING_SERVICE_URL } from './config'
 import { jsonBody } from '../test/request'
-import { setNetwork, getNetwork, getOrderBooks, getCandles, getTicker, getRecentTrades, getAccountByL1Address, getMarketOverview, listOwnFollows, createFollow, setFollowPaused, deleteFollow, getMirrorLog, registerLeader, getMyLeader, setLeaderActive, openInterestUsd, toBaseUnits, toPriceTicks, randomClientOrderIndex, placeOrderViaSigningService, getSignerHealth, SignerNetworkMismatch, depthLevels, getOrderBookDepth, depthSpread, type OrderBook, type SignerHealth } from './lighter'
+import { setNetwork, getNetwork, getOrderBooks, getCandles, getTicker, getRecentTrades, getAccountByL1Address, AccountNotFoundError, getMarketOverview, listOwnFollows, createFollow, setFollowPaused, deleteFollow, getMirrorLog, registerLeader, getMyLeader, setLeaderActive, openInterestUsd, toBaseUnits, toPriceTicks, randomClientOrderIndex, placeOrderViaSigningService, getSignerHealth, SignerNetworkMismatch, depthLevels, getOrderBookDepth, depthSpread, type OrderBook, type SignerHealth } from './lighter'
 
 describe('открытый интерес в долларах', () => {
   // Живой /orderBooks (mainnet, 2026-10-24) отдаёт open_interest_usd СТРОКОЙ
@@ -400,7 +400,7 @@ describe('lighter', () => {
         json: () => Promise.resolve({})
       })
 
-      await expect(getAccountByL1Address('0xabc')).rejects.toThrow('Аккаунт не найден')
+      await expect(getAccountByL1Address('0xabc')).rejects.toBeInstanceOf(AccountNotFoundError)
     })
 
     it('throws on error', async () => {

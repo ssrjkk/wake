@@ -24,6 +24,7 @@ interface PortfolioProps {
   unfollow: (followId: string) => void;
   signedIn: boolean;
   lighterAccountIndex: number | null;
+  accountLookupError: string | null;
   hasWallet: boolean;
   markets: OrderBook[];
 }
@@ -61,7 +62,7 @@ function statusChip(status: string): string {
   return `chip ${STATUS_CHIP[status as MirrorLogRow["status"]] ?? UNKNOWN_CHIP}`.trim();
 }
 
-export default function Portfolio({ following, followsError, setTab, togglePause, unfollow, signedIn, lighterAccountIndex, hasWallet, markets }: PortfolioProps) {
+export default function Portfolio({ following, followsError, setTab, togglePause, unfollow, signedIn, lighterAccountIndex, accountLookupError, hasWallet, markets }: PortfolioProps) {
   const [account, setAccount] = useState<LighterAccount | null>(null);
   const [accountError, setAccountError] = useState<string | null>(null);
   const [mirrorLog, setMirrorLog] = useState<MirrorLogRow[] | null>(null);
@@ -238,6 +239,10 @@ export default function Portfolio({ following, followsError, setTab, togglePause
             <p className="muted">
               Вход через Telegram даёт подписки и журнал, но сам счёт на Lighter привязан к адресу. Подключи кошелёк в шапке.
             </p>
+          </div>
+        ) : accountLookupError ? (
+          <div className="notice notice-warn">
+            Не удалось проверить аккаунт Lighter: <span className="num">{accountLookupError}</span>
           </div>
         ) : lighterAccountIndex == null ? (
           <div className="empty-state">

@@ -31,6 +31,7 @@ import {
 import {
   getOrderBooks,
   getAccountByL1Address,
+  AccountNotFoundError,
   isTradeable,
   listOwnFollows,
   createFollow,
@@ -166,6 +167,7 @@ export default function App() {
   const [accountResult, setAccountResult] = useState<{
     key: string;
     account: LighterAccount | null;
+    error: string | null;
   } | null>(null);
 
   const [asset, setAsset] = useState<string>(entry.asset);
@@ -204,11 +206,15 @@ export default function App() {
   const [walletBusy, setWalletBusy] = useState(false);
   const [leaderId, setLeaderId] = useState<string | null>(null);
   const [leaderFeeBps, setLeaderFeeBps] = useState(8);
+  const [leaderError, setLeaderError] = useState<string | null>(null);
   const [subscription, setSubscription] = useState<Subscription | null>(null);
+  const [subscriptionError, setSubscriptionError] = useState<string | null>(null);
 
   const accountKey = `${network}:${address ?? ""}`;
   const lighterAccount =
     accountResult?.key === accountKey ? accountResult.account : null;
+  const accountLookupError =
+    accountResult?.key === accountKey ? accountResult.error : null;
   const lighterChecked = !!address && accountResult?.key === accountKey;
   const userId = session?.userId ?? null;
   const signedIn = session !== null;
@@ -296,12 +302,14 @@ export default function App() {
     getMyLeader()
       .then((row) => {
         if (!live) return;
+        setLeaderError(null);
         setLeaderId(row ? row.id : null);
         setIsCopyable(!!row && row.active);
         if (row) setLeaderFeeBps(row.fee_bps);
       })
-      .catch(() => {
+      .catch((e) => {
         if (!live) return;
+        setLeaderError(errorText(e));
         setIsCopyable(false);
         setLeaderId(null);
         setLeaderFeeBps(8);
@@ -333,10 +341,16 @@ export default function App() {
     let live = true;
     getAccountByL1Address(address)
       .then((account) => {
-        if (live) setAccountResult({ key: accountKey, account });
+        if (live) setAccountResult({ key: accountKey, account, error: null });
       })
-      .catch(() => {
-        if (live) setAccountResult({ key: accountKey, account: null });
+      .catch((e) => {
+        if (live) {
+          setAccountResult({
+            key: accountKey,
+            account: null,
+            error: e instanceof AccountNotFoundError ? null : errorText(e),
+          });
+        }
       });
     return () => {
       live = false;
@@ -559,8 +573,10 @@ export default function App() {
     setFollowing([]);
     setFollowsError(null);
     setSubscription(null);
+    setSubscriptionError(null);
     setLeaderId(null);
     setLeaderFeeBps(8);
+    setLeaderError(null);
     setIsCopyable(false);
     setCopyModal(null);
     setConnectPickerOpen(false);
@@ -701,9 +717,11 @@ export default function App() {
       setFollowing([]);
       setFollowsError(null);
       setSubscription(null);
+      setSubscriptionError(null);
       setIsCopyable(false);
       setLeaderId(null);
       setLeaderFeeBps(8);
+      setLeaderError(null);
     }
     window.addEventListener(SIGNED_OUT_EVENT, onSignedOut);
     return () => window.removeEventListener(SIGNED_OUT_EVENT, onSignedOut);
@@ -718,9 +736,11 @@ export default function App() {
     setFollowing([]);
     setFollowsError(null);
     setSubscription(null);
+    setSubscriptionError(null);
     setIsCopyable(false);
     setLeaderId(null);
     setLeaderFeeBps(8);
+    setLeaderError(null);
     closeWalletMenu();
   }
 
@@ -842,6 +862,7 @@ export default function App() {
         leaderFeeBps,
       );
       setLeaderId(id);
+      setLeaderError(null);
       setIsCopyable(true);
       setToast(
         `Публикация включена: индекс Lighter #${session.lighterAccountIndex}, комиссия ${(leaderFeeBps / 100).toFixed(2)}% за сделку`,
@@ -864,10 +885,16 @@ export default function App() {
     let live = true;
     backendJson<Subscription>("/subscription")
       .then((data) => {
-        if (live) setSubscription(data);
+        if (live) {
+          setSubscriptionError(null);
+          setSubscription(data);
+        }
       })
-      .catch(() => {
-        if (live) setSubscription(null);
+      .catch((e) => {
+        if (live) {
+          setSubscription(null);
+          setSubscriptionError(errorText(e));
+        }
       });
     return () => {
       live = false;
@@ -887,6 +914,7 @@ export default function App() {
         method: "POST",
       });
       setSubscription(sub);
+      setSubscriptionError(null);
       setToast(trialToast(sub));
     } catch (e) {
       setToast(`Бэкенд не отвечает: ${errorText(e)}`);
@@ -1069,9 +1097,11 @@ export default function App() {
                           ? "Кошелёк не подключён — позиции Lighter по адресу не видны, подключи его в этом меню."
                           : !lighterChecked
                             ? "Проверяю аккаунт на Lighter…"
-                            : lighterAccountIndex != null
-                              ? `Lighter account index: ${lighterAccountIndex}`
-                              : "Аккаунт на Lighter не найден — зарегистрируйся на app.lighter.xyz"}
+                            : accountLookupError
+                              ? `Не удалось проверить аккаунт Lighter: ${accountLookupError}`
+                              : lighterAccountIndex != null
+                                ? `Lighter account index: ${lighterAccountIndex}`
+                                : "Аккаунт на Lighter не найден — зарегистрируйся на app.lighter.xyz"}
                       </div>
                       <div className="text-xs text-[color:var(--text-muted)] mb-4 font-mono">
                         {session
@@ -1498,6 +1528,7 @@ export default function App() {
                     unfollow={unfollow}
                     signedIn={signedIn}
                     lighterAccountIndex={lighterAccountIndex}
+                    accountLookupError={accountLookupError}
                     hasWallet={!!address}
                     markets={markets}
                   />
@@ -1523,6 +1554,7 @@ export default function App() {
                     isCopyable={isCopyable}
                     setTab={setTab}
                     leaderId={leaderId}
+                    leaderError={leaderError}
                     leaderFeeBps={leaderFeeBps}
                     setLeaderFeeBps={setLeaderFeeBps}
                     lighterAccountIndex={lighterAccountIndex}
@@ -1572,6 +1604,7 @@ export default function App() {
                     key={`${userId}:${network}:${asset}`}
                     signedIn={signedIn}
                     subscription={subscription}
+                    subscriptionError={subscriptionError}
                     currentMarket={currentMarket}
                     setToast={setToast}
                     startTrial={() => void startTrial()}

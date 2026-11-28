@@ -11,12 +11,13 @@ interface EarnProps {
   isCopyable: boolean;
   setTab: (tab: Tab) => void;
   leaderId: string | null;
+  leaderError: string | null;
   leaderFeeBps: number;
   setLeaderFeeBps: (feeBps: number) => void;
   lighterAccountIndex: number | null;
 }
 
-export default function Earn({ isCopyable, setTab, leaderId, leaderFeeBps, setLeaderFeeBps, lighterAccountIndex }: EarnProps) {
+export default function Earn({ isCopyable, setTab, leaderId, leaderError, leaderFeeBps, setLeaderFeeBps, lighterAccountIndex }: EarnProps) {
   const [leader, setLeader] = useState<Leader | null>(null);
   const [follows, setFollows] = useState<LeaderFollowRow[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -84,6 +85,18 @@ export default function Earn({ isCopyable, setTab, leaderId, leaderFeeBps, setLe
     } finally {
       setFeeSaving(false);
     }
+  }
+
+  if (leaderError) {
+    return (
+      <div className="empty-state">
+        <p className="panel-lead">Не удалось прочитать состояние публикации</p>
+        <p className="muted">Бэкенд Wake не вернул запись лидера: {leaderError}</p>
+        <button className="link-action" onClick={() => setTab("terminal")}>
+          Проверить в Терминале <ChevronRight size={16} aria-hidden="true" />
+        </button>
+      </div>
+    );
   }
 
   if (!isCopyable) {

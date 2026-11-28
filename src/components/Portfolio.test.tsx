@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import Portfolio from "./Portfolio";
 import type { MirrorLogRow } from "../lib/lighter";
@@ -44,7 +44,7 @@ const follow: Following = {
   paused: false,
 };
 
-function mount(rows: MirrorLogRow[]) {
+function mount(rows: MirrorLogRow[], accountLookupError: string | null = null) {
   const respond = vi.fn((input: RequestInfo | URL) => {
     const url =
       typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
@@ -70,6 +70,7 @@ function mount(rows: MirrorLogRow[]) {
       unfollow={() => {}}
       signedIn
       lighterAccountIndex={null}
+      accountLookupError={accountLookupError}
       hasWallet
       markets={[]}
     />
@@ -137,5 +138,15 @@ describe("журнал копи-движка", () => {
     // Подтверждённое исполнение целого ордера тоже называется числом: на «sent»
     // числа нет, и по одному только хэшу эти строки не развести.
     await waitFor(() => expect(screen.getByText(/исполнено 0\.0100/)).toBeTruthy());
+  });
+});
+
+describe("состояние счёта Lighter", () => {
+  it("не выдаёт ошибку поиска аккаунта за отсутствие аккаунта", async () => {
+    mount([], "Lighter API 503");
+    await act(async () => {});
+    expect(screen.getByText(/Не удалось проверить аккаунт Lighter/)).toBeTruthy();
+    expect(screen.getByText("Lighter API 503")).toBeTruthy();
+    expect(screen.queryByText("Аккаунт на Lighter не найден")).toBeNull();
   });
 });
