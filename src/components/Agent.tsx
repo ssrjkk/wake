@@ -9,6 +9,7 @@ import type { Subscription } from "./types";
 interface AgentProps {
   signedIn: boolean;
   subscription: Subscription | null;
+  subscriptionError: string | null;
   currentMarket: OrderBook | undefined;
   setToast: (toast: string | null) => void;
   startTrial: () => void;
@@ -73,7 +74,7 @@ const EXECUTION_CHIP: Record<string, string> = {
   unknown: "chip-warn",
 };
 
-export default function Agent({ signedIn, subscription, currentMarket, setToast, startTrial }: AgentProps) {
+export default function Agent({ signedIn, subscription, subscriptionError, currentMarket, setToast, startTrial }: AgentProps) {
   const [resolution, setResolution] = useState<Resolution>("1h");
   const [candles, setCandles] = useState<Candle[] | null>(null);
   const [candlesError, setCandlesError] = useState<string | null>(null);
@@ -178,7 +179,11 @@ export default function Agent({ signedIn, subscription, currentMarket, setToast,
           </p>
         </div>
 
-      {!subscription?.has_ai_agent ? (
+      {subscriptionError ? (
+        <div className="notice notice-warn">
+          Не удалось прочитать подписку: <span className="num">{subscriptionError}</span>
+        </div>
+      ) : !subscription?.has_ai_agent ? (
         <div className="empty-state">
           <span className="empty-mark">
             <Zap size={24} aria-hidden="true" />
