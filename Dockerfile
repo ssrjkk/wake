@@ -9,7 +9,7 @@
 # версии в таблице». Равенство держит код:
 # backend/test_deployment_manifest.py::TestVersionsMatch
 # ·test_dockerfile_interpreter_is_the_one_ci_tests_on
-FROM python:3.12-slim AS builder
+FROM python:3.15-slim AS builder
 
 WORKDIR /build
 
@@ -23,7 +23,7 @@ RUN pip install --no-cache-dir --prefix=/install -r requirements.txt
 # ── Stage 2: runtime ─────────────────────────────────────────────────────────
 # Минимальный образ: только runtime-зависимости, непривилегированный пользователь,
 # код скопирован поверх уже установленных пакетов из builder.
-FROM python:3.12-slim AS runtime
+FROM python:3.15-slim AS runtime
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends libpq5 curl && \
